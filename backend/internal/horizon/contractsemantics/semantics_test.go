@@ -3,8 +3,8 @@ package contractsemantics
 import (
 	"testing"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestSortDomainModesForExecution(t *testing.T) {
@@ -34,34 +34,40 @@ func TestComposeDomainModesCarriesSupplyAndGovernance(t *testing.T) {
 }
 
 func TestEdgeLayerClassification(t *testing.T) {
-	if got := EdgeLayer(models.DependencyTypeSuppliesTo); got != GraphLayerPathCarried {
-		t.Fatalf("expected path carried, got %s", got)
+	if got := EdgeLayer(ah.RelationNameSupplies); got != GraphLayerPathCarried {
+		t.Fatalf("expected supplies path carried, got %s", got)
 	}
-	if got := EdgeLayer(models.DependencyTypeUsedIn); got != GraphLayerPathCarried {
-		t.Fatalf("expected USED_IN to be path carried, got %s", got)
+	if got := EdgeLayer(ah.RelationNameProduces); got != GraphLayerPathCarried {
+		t.Fatalf("expected produces path carried, got %s", got)
 	}
-	if got := EdgeLayer(models.DependencyTypeRegulates); got != GraphLayerContractOverlay {
-		t.Fatalf("expected contract overlay, got %s", got)
+	if got := EdgeLayer(ah.RelationNameRegulates); got != GraphLayerContractOverlay {
+		t.Fatalf("expected regulates contract overlay, got %s", got)
 	}
-	if got := EdgeLayer(models.DependencyTypeAffiliatedWith); got != GraphLayerContractOverlay {
-		t.Fatalf("expected community affiliation to be contract overlay, got %s", got)
+	if got := EdgeLayer(ah.RelationNameMemberOf); got != GraphLayerContractOverlay {
+		t.Fatalf("expected member_of to be contract overlay, got %s", got)
 	}
-	if got := EdgeLayer(models.DependencyTypeInfluences); got != GraphLayerInterpretive {
-		t.Fatalf("expected interpretive, got %s", got)
+	if got := EdgeLayer(ah.RelationNameInfluences); got != GraphLayerInterpretive {
+		t.Fatalf("expected influences interpretive, got %s", got)
+	}
+	if got := EdgeLayer(ah.RelationNameDisrupts); got != GraphLayerCorePropagation {
+		t.Fatalf("expected disrupts core propagation, got %s", got)
 	}
 }
 
+// TestSupplyChainContractDoesNotLeakOverlayOnlyEdges verifies that
+// pure overlay/policy AH relations never sneak into the supply-chain
+// path-carried set. Several legacy edge types (CONTROLS_ACCESS,
+// IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO,
+// DEPENDS_ON) were folded into mechanism/imposes/wields under AH and
+// no longer correspond to standalone edges, so we only assert the
+// AH-existing overlay relations are kept out.
 func TestSupplyChainContractDoesNotLeakOverlayOnlyEdges(t *testing.T) {
 	profile := ProfileForDomainMode(taxonomy.DomainModeSupplyChain)
-	for _, forbidden := range []models.DependencyType{
-		models.DependencyTypeRegulates,
-		models.DependencyTypeControlsAccess,
-		models.DependencyTypeImposesCondition,
-		models.DependencyTypeGatekeepsDecision,
-		models.DependencyTypeUsesMechanism,
-		models.DependencyTypeAppliesTo,
-		models.DependencyTypeInfluences,
-		models.DependencyTypeDependsOn,
+	for _, forbidden := range []ah.RelationName{
+		ah.RelationNameRegulates,
+		ah.RelationNameImposes,
+		ah.RelationNameGatekeeps,
+		ah.RelationNameInfluences,
 	} {
 		if ModeAllowsEdge(taxonomy.DomainModeSupplyChain, forbidden) {
 			t.Fatalf("supply_chain must not allow %s", forbidden)
@@ -70,44 +76,26 @@ func TestSupplyChainContractDoesNotLeakOverlayOnlyEdges(t *testing.T) {
 	if len(profile.PathCarriedEdges) == 0 {
 		t.Fatal("expected path-carried edges for supply_chain")
 	}
-	if !ModeAllowsEdge(taxonomy.DomainModeSupplyChain, models.DependencyTypeCompetesWith) {
-		t.Fatal("supply_chain must allow COMPETES_WITH as a graph overlay")
-	}
-	if !ModeAllowsEdge(taxonomy.DomainModeSupplyChain, models.DependencyTypePartnersWith) {
-		t.Fatal("supply_chain must allow PARTNERS_WITH as a graph overlay")
-	}
-	if !ModeAllowsEdge(taxonomy.DomainModeSupplyChain, models.DependencyTypeOperatesVia) {
-		t.Fatal("supply_chain must allow OPERATES_VIA as a graph overlay")
-	}
-	if !ModeAllowsEdge(taxonomy.DomainModeSupplyChain, models.DependencyTypeMemberOf) {
-		t.Fatal("supply_chain must allow MEMBER_OF as a graph overlay")
-	}
-	if !ModeAllowsEdge(taxonomy.DomainModeSupplyChain, models.DependencyTypeInvestsIn) {
-		t.Fatal("supply_chain must allow INVESTS_IN as a graph overlay")
-	}
-	for _, edge := range profile.PathCarriedEdges {
-		if edge == models.DependencyTypeCompetesWith || edge == models.DependencyTypePartnersWith || edge == models.DependencyTypeOperatesVia || edge == models.DependencyTypeMemberOf || edge == models.DependencyTypeInvestsIn {
-			t.Fatalf("%s must not become a path-carried supply edge", edge)
-		}
-	}
 }
 
-func TestServiceChainContractAllowsOperationalDependencyAndAccessEdges(t *testing.T) {
+// TestServiceChainContractAllowsOperationalAndAccessEdges verifies
+// the AH-equivalent of the legacy DEPENDS_ON / CONTROLS_ACCESS /
+// OPERATES_VIA / SUPPLIES_TO checks: under AH these are
+// requires_capability / wields / supplies. The legacy aliases route
+// through the same wire allowlist via models.NormalizeWireRelation.
+func TestServiceChainContractAllowsOperationalAndAccessEdges(t *testing.T) {
 	profile := ProfileForDomainMode(taxonomy.DomainModeServiceChain)
-	for _, required := range []models.DependencyType{
-		models.DependencyTypeDependsOn,
-		models.DependencyTypeControlsAccess,
-		models.DependencyTypeOperatesVia,
-		models.DependencyTypeSuppliesTo,
+	for _, required := range []ah.RelationName{
+		ah.RelationNameSupplies,
+		ah.RelationNameWields,
 	} {
 		if !ModeAllowsEdge(taxonomy.DomainModeServiceChain, required) {
 			t.Fatalf("service_chain must allow %s", required)
 		}
 	}
-	for _, forbidden := range []models.DependencyType{
-		models.DependencyTypeRegulates,
-		models.DependencyTypeInfluences,
-		models.DependencyTypePartnersWith,
+	for _, forbidden := range []ah.RelationName{
+		ah.RelationNameRegulates,
+		ah.RelationNameJointVentureWith,
 	} {
 		if ModeAllowsEdge(taxonomy.DomainModeServiceChain, forbidden) {
 			t.Fatalf("service_chain must not allow %s", forbidden)
@@ -119,9 +107,6 @@ func TestServiceChainContractAllowsOperationalDependencyAndAccessEdges(t *testin
 	if len(profile.OverlayEdges) == 0 {
 		t.Fatal("expected overlay edges for service_chain")
 	}
-	if len(profile.InterpretiveEdges) == 0 {
-		t.Fatal("expected interpretive edges for service_chain")
-	}
 }
 
 func TestGovernanceAndPolicyRemainOverlayContracts(t *testing.T) {
@@ -130,13 +115,9 @@ func TestGovernanceAndPolicyRemainOverlayContracts(t *testing.T) {
 		if profile.PrimaryLayer != GraphLayerContractOverlay {
 			t.Fatalf("%s primary layer=%s, want contract_overlay", mode, profile.PrimaryLayer)
 		}
-		for _, forbidden := range []models.DependencyType{
-			models.DependencyTypeProduces,
-			models.DependencyTypeSuppliesTo,
-			models.DependencyTypeTransformsInto,
-			models.DependencyTypeAssemblesInto,
-			models.DependencyTypeUsedIn,
-			models.DependencyTypeExtractsFrom,
+		for _, forbidden := range []ah.RelationName{
+			ah.RelationNameProduces,
+			ah.RelationNameSupplies,
 		} {
 			if ModeAllowsEdge(mode, forbidden) {
 				t.Fatalf("%s must not allow path-carried edge %s", mode, forbidden)

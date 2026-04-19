@@ -1,6 +1,10 @@
 package models
 
-import "time"
+import (
+	"time"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+)
 
 const (
 	PolicyStatusClean       = "clean"
@@ -56,7 +60,12 @@ func (e *DependencyEdge) GetPolicyReason() string {
 	return reason
 }
 
-func (e *DependencyEdge) SetPolicyOriginalType(originalType DependencyType) {
+// SetPolicyOriginalType records the wire-level relation name the edge
+// carried before policy normalisation/auto-fix overwrote it. Stored as a
+// raw string so legacy UPPER_SNAKE values (recorded prior to the AH
+// taxonomy migration) round-trip without coercion; new code MUST pass an
+// ah.RelationName value.
+func (e *DependencyEdge) SetPolicyOriginalType(originalType ah.RelationName) {
 	if e == nil || originalType == "" {
 		return
 	}

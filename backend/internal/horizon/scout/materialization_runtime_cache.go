@@ -65,7 +65,7 @@ func (e *ScoutEngine) setSupplyChainJobFragmentRef(ctx context.Context, jobID st
 	payload, err := json.Marshal(supplyChainFragmentRef{
 		ID:            strings.TrimSpace(fragment.ID),
 		CanonicalPath: canonicalPath,
-		Type:          string(fragment.Type),
+		Type:          string(fragment.Class),
 		TenantID:      strings.TrimSpace(fragment.TenantID),
 	})
 	if err != nil {

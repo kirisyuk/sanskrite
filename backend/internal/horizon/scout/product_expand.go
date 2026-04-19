@@ -112,8 +112,8 @@ func (e *ScoutEngine) ExpandProductMaterials(
 	if fragment == nil {
 		return nil, fmt.Errorf("product not found: %s", productIDOrPath)
 	}
-	if fragment.Type != models.FragmentTypeProduct {
-		return nil, fmt.Errorf("fragment is not a product (type=%s)", fragment.Type)
+	if fragment.Class != FragmentTypeProduct {
+		return nil, fmt.Errorf("fragment is not a product (type=%s)", fragment.Class)
 	}
 
 	result.ProductID = fragment.ID
@@ -180,7 +180,7 @@ func (e *ScoutEngine) countUpstreamProducts(ctx context.Context, fragmentID stri
 	}
 	count := 0
 	for _, edge := range edges {
-		if models.IsProductTransitionEdgeType(edge.Type) {
+		if IsProductTransitionEdgeType(edge.Relation) {
 			count++
 		}
 	}
@@ -198,7 +198,7 @@ func (e *ScoutEngine) countDownstreamProducts(ctx context.Context, fragmentID st
 	}
 	count := 0
 	for _, edge := range edges {
-		if models.IsProductTransitionEdgeType(edge.Type) {
+		if IsProductTransitionEdgeType(edge.Relation) {
 			count++
 		}
 	}
@@ -216,7 +216,7 @@ func (e *ScoutEngine) countProducers(ctx context.Context, fragmentID string) (in
 	}
 	count := 0
 	for _, edge := range edges {
-		if edge.Type == models.DependencyTypeProduces {
+		if edge.Relation == DependencyTypeProduces {
 			count++
 		}
 	}

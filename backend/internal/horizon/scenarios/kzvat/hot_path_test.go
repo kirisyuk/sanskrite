@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -17,7 +16,7 @@ func TestSpecPathsAndEdgesAreTaxonomySafe(t *testing.T) {
 		t.Fatalf("spec must contain fragments, edges, and simulations")
 	}
 
-	paths := map[string]horizonmodels.FragmentType{}
+	paths := map[string]FragmentType{}
 	for _, fragment := range spec.Fragments {
 		if err := taxonomy.ValidateCanonicalPath(fragment.CanonicalPath); err != nil {
 			t.Fatalf("invalid canonical path %q: %v", fragment.CanonicalPath, err)
@@ -48,17 +47,17 @@ func TestSpecPathsAndEdgesAreTaxonomySafe(t *testing.T) {
 		}
 		if edge.SourcePath == "/decision/taxation/raise-vat-to-16pct-kazakhstan-2026" &&
 			edge.TargetPath == "/mechanism/regulatory/vat-rate-increase" &&
-			edge.Type == horizonmodels.DependencyTypeUsesMechanism {
+			edge.Type == DependencyTypeUsesMechanism {
 			foundDecisionMechanism = true
 		}
 		if edge.SourcePath == "/program/kz/vat-reform-2026" &&
 			edge.TargetPath == "/market/kz/consumer/retail" &&
-			edge.Type == horizonmodels.DependencyTypeImposesCondition {
+			edge.Type == DependencyTypeImposesCondition {
 			foundProgramRetail = true
 		}
 		if edge.SourcePath == "/community/kz/trade/bazaar-traders" &&
 			edge.TargetPath == "/market/kz/consumer/retail" &&
-			edge.Type == horizonmodels.DependencyTypeParticipatesIn {
+			edge.Type == DependencyTypeParticipatesIn {
 			foundCommunityRetail = true
 		}
 	}

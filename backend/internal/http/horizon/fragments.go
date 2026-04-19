@@ -19,12 +19,14 @@ import (
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type geoObjectResponseItem struct {
 	ID              string              `json:"id"`
 	CanonicalPath   string              `json:"canonicalPath"`
-	Type            models.FragmentType `json:"type"`
+	Class           ah.FragmentClass    `json:"class"`
+	Subtype         string              `json:"subtype,omitempty"`
 	FacilityKind    string              `json:"facilityKind,omitempty"`
 	Label           string              `json:"label,omitempty"`
 	Description     string              `json:"description,omitempty"`
@@ -59,7 +61,7 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 		return geoObjectResponseItem{}, false
 	}
 	facilityKind := ""
-	if f.Type == models.FragmentTypeFacility || strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.CanonicalPath)), "/fac/") {
+	if (f.Class == ah.FragmentClassSite && !f.IsLegacySupplyLink()) || strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.CanonicalPath)), "/fac/") {
 		kind := taxonomy.NormalizeFacilityKind(strings.TrimSpace(f.Identifiers["facilityKind"]))
 		if kind == taxonomy.FacilityKindUnknown {
 			kind = taxonomy.InferFacilityKind(
@@ -109,7 +111,7 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 	conflictLinked := false
 	threatClass := ""
 	var lastMatchedAt *time.Time
-	if f.Type == models.FragmentTypeAffectedZone {
+	if f.Class == ah.FragmentClassGeo && f.Subtype == "affected_zone" {
 		zoneType = strings.TrimSpace(asString(f.Qualifiers["zoneType"]))
 		zoneSubType = strings.TrimSpace(asString(f.Qualifiers["zoneSubType"]))
 		geoPrecision = strings.TrimSpace(asString(f.Qualifiers["geoPrecision"]))
@@ -121,7 +123,8 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 	return geoObjectResponseItem{
 		ID:              f.ID,
 		CanonicalPath:   f.CanonicalPath,
-		Type:            f.Type,
+		Class:           f.Class,
+		Subtype:         f.Subtype,
 		FacilityKind:    facilityKind,
 		Label:           label,
 		Description:     strings.TrimSpace(f.Description),
@@ -200,7 +203,11 @@ func parseGeoObjectFilter(
 			if part == "" {
 				continue
 			}
-			filter.Types = append(filter.Types, models.FragmentType(strings.ToUpper(part)))
+			if class, _, ok := models.FragmentClassFromLegacyType(part); ok {
+				filter.Types = append(filter.Types, class)
+			} else if class, ok := ah.NormalizeFragmentClass(strings.ToLower(part)); ok {
+				filter.Types = append(filter.Types, class)
+			}
 		}
 	}
 	if raw := strings.TrimSpace(createdAfter); raw != "" {
@@ -273,7 +280,7 @@ func (h *HorizonHandlers) geoObjectsForCanonicalPaths(
 			if len(filter.Types) > 0 {
 				match := false
 				for _, ft := range filter.Types {
-					if ft == fragment.Type {
+					if ft == fragment.Class {
 						match = true
 						break
 					}
@@ -348,7 +355,7 @@ func readZoneActivitySnapshot(f *models.HorizonFragment, now time.Time) (float64
 }
 
 func fallbackSignalLandingZoneActivitySnapshot(f *models.HorizonFragment, now time.Time) (float64, *time.Time) {
-	if f == nil || f.Type != models.FragmentTypeAffectedZone {
+	if f == nil || !(f.Class == ah.FragmentClassGeo && f.Subtype == "affected_zone") {
 		return 0, nil
 	}
 	if !fragmentQualifierBoolValue(f.Qualifiers, "signalLandingGenerated") {
@@ -665,7 +672,7 @@ func (h *HorizonHandlers) listGeoObjectsForLens(
 				for _, p := range paths {
 					ft := scout.InferFragmentTypeFromCanonicalPath(p)
 					if ft == "" {
-						ft = models.FragmentTypeOrganization
+						ft = ah.FragmentClassOrg
 					}
 					if rr, rerr := resolver.Resolve(ctx, p, ft); rerr == nil && rr != nil && strings.TrimSpace(rr.CanonicalPath) != "" {
 						resolved = append(resolved, strings.TrimSpace(rr.CanonicalPath))
@@ -721,7 +728,7 @@ func (h *HorizonHandlers) listGeoObjectsForLens(
 			if len(filter.Types) > 0 {
 				match := false
 				for _, ft := range filter.Types {
-					if ft == f.Type {
+					if ft == f.Class {
 						match = true
 						break
 					}

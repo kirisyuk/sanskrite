@@ -585,7 +585,7 @@ func (e *PropagationEngine) propagateHotPath(
 					Kind: "propagation",
 					Context: map[string]interface{}{
 						"metricName":     it.metricName,
-						"relationType":   string(edge.Type),
+						"relationType":   string(edge.Relation),
 						"currentDepth":   it.hops,
 						"isCriticalPath": isCriticalPath,
 						"delta":          it.d,

@@ -3,21 +3,20 @@ package scout
 import (
 	"strings"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // coerceCanonicalPathForType best-effort fixes obvious namespace/type mismatches.
 // It is intentionally conservative and currently targets the most harmful cases:
 // ORGANIZATION<->/product and PRODUCT<->/org.
-func coerceCanonicalPathForType(path string, fragType models.FragmentType, fallbackName string) (string, bool) {
+func coerceCanonicalPathForType(path string, fragType FragmentType, fallbackName string) (string, bool) {
 	cp := strings.TrimSpace(path)
 	if cp == "" || fragType == "" {
 		return cp, false
 	}
 
 	switch fragType {
-	case models.FragmentTypeOrganization:
+	case FragmentTypeOrganization:
 		// Organizations may live under /org/... or /gov/... .
 		if strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/") {
 			return cp, false
@@ -32,7 +31,7 @@ func coerceCanonicalPathForType(path string, fragType models.FragmentType, fallb
 		fixed := taxonomy.JoinPath("org", "na", slug)
 		return fixed, fixed != cp
 
-	case models.FragmentTypeProduct:
+	case FragmentTypeProduct:
 		if strings.HasPrefix(cp, "/product/") {
 			return cp, false
 		}

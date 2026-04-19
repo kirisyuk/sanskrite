@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -17,7 +16,7 @@ func TestSpecPathsAndEdgesAreTaxonomySafe(t *testing.T) {
 		t.Fatalf("spec must contain fragments, edges, and simulations")
 	}
 
-	paths := map[string]horizonmodels.FragmentType{}
+	paths := map[string]FragmentType{}
 	for _, fragment := range spec.Fragments {
 		if err := taxonomy.ValidateCanonicalPath(fragment.CanonicalPath); err != nil {
 			t.Fatalf("invalid canonical path %q: %v", fragment.CanonicalPath, err)
@@ -49,22 +48,22 @@ func TestSpecPathsAndEdgesAreTaxonomySafe(t *testing.T) {
 		}
 		if edge.SourcePath == "/decision/taxation/raise-dubai-corporate-income-tax-to-10pct" &&
 			edge.TargetPath == "/mechanism/regulatory/corporate-income-tax-rate-increase" &&
-			edge.Type == horizonmodels.DependencyTypeUsesMechanism {
+			edge.Type == DependencyTypeUsesMechanism {
 			foundDecisionMechanism = true
 		}
 		if edge.SourcePath == "/mechanism/regulatory/corporate-income-tax-rate-increase" &&
 			edge.TargetPath == "/loc/ae/01/dubai" &&
-			edge.Type == horizonmodels.DependencyTypeInGeoScope {
+			edge.Type == DependencyTypeInGeoScope {
 			foundGeoScope = true
 		}
 		if edge.SourcePath == "/community/ae/industry-association/dubai-family-business-network" &&
 			edge.TargetPath == "/media/linkedin/dubai-business-founders" &&
-			edge.Type == horizonmodels.DependencyTypeOperatesVia {
+			edge.Type == DependencyTypeOperatesVia {
 			foundCommunityMedia = true
 		}
 		if edge.SourcePath == "/community/ae/industry-association/dubai-family-business-network" &&
 			edge.TargetPath == "/market/ae/capital/foreign-direct-investment" &&
-			edge.Type == horizonmodels.DependencyTypeAffects {
+			edge.Type == DependencyTypeAffects {
 			foundCommunityCapital = true
 		}
 	}

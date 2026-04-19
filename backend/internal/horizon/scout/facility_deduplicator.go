@@ -55,7 +55,7 @@ func (d *FacilityDeduplicator) DeduplicateFacility(ctx context.Context, fragment
 	if d == nil || d.fragmentsRepo == nil {
 		return fragment, nil
 	}
-	if fragment == nil || fragment.Type != models.FragmentTypeFacility {
+	if fragment == nil || fragment.Class != FragmentTypeFacility {
 		return fragment, nil
 	}
 	atomic.AddInt64(&d.calls, 1)
@@ -71,7 +71,7 @@ func (d *FacilityDeduplicator) DeduplicateFacility(ctx context.Context, fragment
 			}
 		}
 		// Alternative path (alias)
-		if existing, err := d.fragmentsRepo.FindByAlternativePath(ctx, cp); err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID && existing.Type == models.FragmentTypeFacility {
+		if existing, err := d.fragmentsRepo.FindByAlternativePath(ctx, cp); err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID && existing.Class == FragmentTypeFacility {
 			atomic.AddInt64(&d.hitAltPath, 1)
 			fmt.Printf("[FacilityDeduplicator] Found by alt path: %s -> %s\n", cp, existing.CanonicalPath)
 			return existing, nil
@@ -93,7 +93,7 @@ func (d *FacilityDeduplicator) DeduplicateFacility(ctx context.Context, fragment
 	// Tier 2: Exact label or shortName match (filter by same geo)
 	labelEN := strings.TrimSpace(fragment.Labels["en"])
 	if labelEN != "" {
-		cands, err := d.fragmentsRepo.FindByLabel(ctx, "en", labelEN, models.FragmentTypeFacility)
+		cands, err := d.fragmentsRepo.FindByLabel(ctx, "en", labelEN, FragmentTypeFacility)
 		if err == nil {
 			for _, c := range cands {
 				if c == nil || c.ID == fragment.ID {
@@ -109,7 +109,7 @@ func (d *FacilityDeduplicator) DeduplicateFacility(ctx context.Context, fragment
 	}
 	shortName := strings.TrimSpace(fragment.Identifiers["shortName"])
 	if shortName != "" {
-		cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", shortName, models.FragmentTypeFacility)
+		cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", shortName, FragmentTypeFacility)
 		if err == nil {
 			for _, c := range cands {
 				if c == nil || c.ID == fragment.ID {
@@ -139,7 +139,7 @@ func (d *FacilityDeduplicator) DeduplicateFacility(ctx context.Context, fragment
 		cands, err := d.fragmentsRepo.ListByCanonicalPathPrefix(ctx, prefix, 200)
 		if err == nil {
 			for _, c := range cands {
-				if c == nil || c.Type != models.FragmentTypeFacility || c.ID == fragment.ID {
+				if c == nil || c.Class != FragmentTypeFacility || c.ID == fragment.ID {
 					continue
 				}
 				cLabel := strings.TrimSpace(c.Labels["en"])
@@ -170,7 +170,7 @@ func (d *FacilityDeduplicator) findGlobalPlaceholderMatch(ctx context.Context, f
 	seen := map[string]struct{}{}
 	add := func(list []*models.HorizonFragment) {
 		for _, cand := range list {
-			if cand == nil || cand.Type != models.FragmentTypeFacility {
+			if cand == nil || cand.Class != FragmentTypeFacility {
 				continue
 			}
 			id := strings.TrimSpace(cand.ID)
@@ -186,17 +186,17 @@ func (d *FacilityDeduplicator) findGlobalPlaceholderMatch(ctx context.Context, f
 	}
 
 	if labelEN := strings.TrimSpace(fragment.Labels["en"]); labelEN != "" {
-		if cands, err := d.fragmentsRepo.FindByLabel(ctx, "en", labelEN, models.FragmentTypeFacility); err == nil {
+		if cands, err := d.fragmentsRepo.FindByLabel(ctx, "en", labelEN, FragmentTypeFacility); err == nil {
 			add(cands)
 		}
 	}
 	if shortName := strings.TrimSpace(fragment.Identifiers["shortName"]); shortName != "" {
-		if cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", shortName, models.FragmentTypeFacility); err == nil {
+		if cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", shortName, FragmentTypeFacility); err == nil {
 			add(cands)
 		}
 	}
 	if slugLabel := facilitySlugHumanLabel(fragment.CanonicalPath); slugLabel != "" {
-		if cands, err := d.fragmentsRepo.FindByLabel(ctx, "en", slugLabel, models.FragmentTypeFacility); err == nil {
+		if cands, err := d.fragmentsRepo.FindByLabel(ctx, "en", slugLabel, FragmentTypeFacility); err == nil {
 			add(cands)
 		}
 	}
@@ -285,7 +285,7 @@ func facilityPathHasLowInformationSlug(path string) bool {
 }
 
 func shouldAttemptGlobalPlaceholderFacilityMatch(fragment *models.HorizonFragment) bool {
-	if fragment == nil || fragment.Type != models.FragmentTypeFacility {
+	if fragment == nil || fragment.Class != FragmentTypeFacility {
 		return false
 	}
 	cp := strings.TrimSpace(fragment.CanonicalPath)

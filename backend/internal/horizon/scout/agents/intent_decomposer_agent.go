@@ -221,7 +221,7 @@ func (a *IntentDecomposerAgent) buildPromptWithOptions(targetCanonicalPath strin
 
 	isSupplyChainMode := taxonomy.HasDomainMode(opts.DomainModes, taxonomy.DomainModeSupplyChain) ||
 		taxonomy.HasDomainMode(opts.DomainModes, taxonomy.DomainModeServiceChain)
-	relationEnum := edgesemantics.AllEdgeTypesForPrompt()
+	relationEnum := AllEdgeTypesForPrompt()
 	relationRulesBlock := generatedIntentDecomposerRelationRulesBlock(opts.DomainModes)
 	validationSuffix := validationSuffixGeneral
 	dependsOnBlock := `DEPENDS_ON FACETS (qualifiers for more granular dependency analysis):

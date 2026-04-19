@@ -4,21 +4,22 @@ import (
 	"testing"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestClassifySignalTransfer_CrossBorderEconomic(t *testing.T) {
 	from := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 		CanonicalPath: "/org/kz/ministry-of-finance",
 	}
 	to := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 		CanonicalPath: "/org/ae/mubadala",
 	}
 
 	channel, scope, spillover, fromGeo, toGeo := classifySignalTransfer(
 		horizonmodels.AxisFinancialSettlement,
-		horizonmodels.DependencyTypeDependsOn,
+		DependencyTypeDependsOn,
 		from,
 		to,
 	)
@@ -39,17 +40,18 @@ func TestClassifySignalTransfer_CrossBorderEconomic(t *testing.T) {
 
 func TestClassifySignalTransfer_DomesticRegulatory(t *testing.T) {
 	from := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 		CanonicalPath: "/gov/kz/ministry-of-finance",
 	}
 	to := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeProgram,
+		Class:         ah.FragmentClassOrg,
+		Subtype:       "program",
 		CanonicalPath: "/program/kz/vat-reform-2026",
 	}
 
 	channel, scope, spillover, _, _ := classifySignalTransfer(
 		horizonmodels.AxisLegalCompliance,
-		horizonmodels.DependencyTypeRegulates,
+		DependencyTypeRegulates,
 		from,
 		to,
 	)

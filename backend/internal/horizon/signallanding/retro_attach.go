@@ -203,7 +203,7 @@ func (s *Service) retroAttachScore(
 	resolved := []*horizonmodels.SignalMissingAnchorCandidate{}
 	fragmentTokens := retroAttachTokens(fragment)
 	fragmentCountry := retroAttachCountryScopeRef(fragment)
-	fragmentKind := strings.ToLower(strings.TrimSpace(string(fragment.Type)))
+	fragmentKind := strings.ToLower(strings.TrimSpace(string(fragment.Class)))
 
 	if fragmentCountry != "" && containsString(compactUniqueStrings(claim.CountryHints), fragmentCountry) {
 		score += 0.18
@@ -331,12 +331,11 @@ func eligibleRetroAttachFragment(fragment *horizonmodels.HorizonFragment) bool {
 	if fragment == nil || strings.TrimSpace(fragment.CanonicalPath) == "" {
 		return false
 	}
-	switch fragment.Type {
-	case horizonmodels.FragmentTypeFacility,
-		horizonmodels.FragmentTypeGeoRegion,
-		horizonmodels.FragmentTypeProduct,
-		horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeAffectedZone:
+	switch fragment.Class {
+	case FragmentTypeFacility,
+		FragmentTypeGeoRegion,
+		FragmentTypeProduct,
+		FragmentTypeOrganization:
 		return true
 	default:
 		return false

@@ -165,7 +165,7 @@ type ResolveResult struct {
 func (r *CanonicalPathResolver) Resolve(
 	ctx context.Context,
 	inputPath string,
-	fragmentType models.FragmentType,
+	fragmentType FragmentType,
 ) (*ResolveResult, error) {
 	logPrefix := "[CanonicalPathResolver]"
 
@@ -218,7 +218,7 @@ func (r *CanonicalPathResolver) Resolve(
 	}
 
 	// Step 1.5: Normalize GEO paths into canonical variable-depth /loc hierarchy.
-	if fragmentType == models.FragmentTypeGeoRegion {
+	if fragmentType == FragmentTypeGeoRegion {
 		if norm := normalizeGeoPathToStrict(result.CanonicalPath); norm != "" && norm != result.CanonicalPath {
 			atomic.AddInt64(&r.geoStrictified, 1)
 			result.NormalizationSteps = append(result.NormalizationSteps,
@@ -228,7 +228,7 @@ func (r *CanonicalPathResolver) Resolve(
 	}
 
 	// Step 1.55: GeoNames-backed GEO normalization/validation for /loc paths.
-	if fragmentType == models.FragmentTypeGeoRegion && r.geonamesClient != nil {
+	if fragmentType == FragmentTypeGeoRegion && r.geonamesClient != nil {
 		if norm, step, confPenalty := normalizeGeoPathViaGeoNames(ctx, result.CanonicalPath, r.geonamesClient); norm != "" && norm != result.CanonicalPath {
 			atomic.AddInt64(&r.geoNamesRewrites, 1)
 			result.NormalizationSteps = append(result.NormalizationSteps, step)
@@ -243,7 +243,7 @@ func (r *CanonicalPathResolver) Resolve(
 	// Handles:
 	// - flat /product/{slug} -> hierarchical taxonomy when possible
 	// - legacy/malformed product paths (e.g. /product/{x}/{y}/{slug}) -> stable canonical fallback
-	if fragmentType == models.FragmentTypeProduct {
+	if fragmentType == FragmentTypeProduct {
 		if norm := normalizeProductPathForResolve(ctx, result.CanonicalPath); norm != "" && norm != result.CanonicalPath {
 			atomic.AddInt64(&r.productTaxonomyRewrites, 1)
 			result.NormalizationSteps = append(result.NormalizationSteps,
@@ -262,7 +262,7 @@ func (r *CanonicalPathResolver) Resolve(
 	}
 
 	// Step 1.65: Mechanism and /gov/ synonym dictionaries (regulatory identity control plane).
-	if fragmentType == models.FragmentTypeMechanism && r.mechanismDictionary != nil {
+	if fragmentType == FragmentTypeMechanism && r.mechanismDictionary != nil {
 		cp := strings.TrimSpace(result.CanonicalPath)
 		if strings.HasPrefix(cp, "/mechanism/") {
 			if canonicalPath, matched, err := r.mechanismDictionary.CanonicalizeMechanismPath(ctx, cp); err == nil && matched && canonicalPath != "" && canonicalPath != cp {
@@ -308,7 +308,7 @@ func (r *CanonicalPathResolver) Resolve(
 		}
 		// Product cross-shape dedup fallback:
 		// if exact path misses, probe stable product path variants sharing the same identity slug.
-		if fragmentType == models.FragmentTypeProduct {
+		if fragmentType == FragmentTypeProduct {
 			for _, variantPath := range productCanonicalPathVariants(ctx, result.CanonicalPath) {
 				variantPath = strings.TrimSpace(variantPath)
 				if variantPath == "" || variantPath == strings.TrimSpace(result.CanonicalPath) {
@@ -318,7 +318,7 @@ func (r *CanonicalPathResolver) Resolve(
 				if verr != nil || candidate == nil || strings.TrimSpace(candidate.ID) == "" {
 					continue
 				}
-				if candidate.Type != "" && candidate.Type != models.FragmentTypeProduct {
+				if candidate.Class != "" && candidate.Class != FragmentTypeProduct {
 					continue
 				}
 				atomic.AddInt64(&r.foundExistingByPath, 1)
@@ -336,10 +336,21 @@ func (r *CanonicalPathResolver) Resolve(
 
 	// Step 2.25: For skeletal AFFECTED_ZONE inputs, reuse an existing richer sibling
 	// with the same geo + normalized identity slug inside the same condition family.
-	if result.ExistingFragment == nil && fragmentType == models.FragmentTypeAffectedZone && r.fragmentsRepo != nil {
+	//
+	// MIGRATION NOTE: legacy FragmentTypeAffectedZone collapses onto
+	// (geo, affected_zone) under AH. Detect it via the canonical-path
+	// inference (class=geo, subtype=affected_zone) instead of class-only
+	// equality which can no longer distinguish a generic geo from an
+	// affected zone.
+	resolvedCS := InferClassSubtypeFromCanonicalPath(result.CanonicalPath)
+	if result.ExistingFragment == nil &&
+		(resolvedCS.Class == FragmentTypeGeoRegion && resolvedCS.Subtype == "affected_zone") &&
+		r.fragmentsRepo != nil {
 		incoming := &models.HorizonFragment{
 			CanonicalPath: result.CanonicalPath,
-			Type:          fragmentType,
+			Class:         resolvedCS.Class,
+			Subtype:       resolvedCS.Subtype,
+			Identifiers:   map[string]string{},
 			Metadata: models.FragmentMetadata{
 				EpistemicStatus: models.EpistemicStatusLowConfidence,
 			},
@@ -373,11 +384,11 @@ func (r *CanonicalPathResolver) Resolve(
 	}
 
 	// Step 3: For organizations, try deduplication by name/Wikidata ID
-	if fragmentType == models.FragmentTypeOrganization && r.orgDeduplicator != nil {
+	if fragmentType == FragmentTypeOrganization && r.orgDeduplicator != nil {
 		// Create a minimal fragment for deduplication check
 		testFragment := &models.HorizonFragment{
 			CanonicalPath: result.CanonicalPath,
-			Type:          fragmentType,
+			Class:          fragmentType,
 		}
 
 		// Extract organization name from canonical path for deduplication
@@ -418,7 +429,7 @@ func (r *CanonicalPathResolver) Resolve(
 		if err == nil && deduplicated != nil && deduplicated.ID != "" {
 			if !isDedupReplacementCompatible(fragmentType, result.CanonicalPath, deduplicated) {
 				log.Printf("%s Org deduplication candidate rejected (incompatible): requestedType=%s requestedPath=%s candidateType=%s candidatePath=%s candidateID=%s",
-					logPrefix, fragmentType, result.CanonicalPath, deduplicated.Type, deduplicated.CanonicalPath, deduplicated.ID)
+					logPrefix, fragmentType, result.CanonicalPath, deduplicated.Class, deduplicated.CanonicalPath, deduplicated.ID)
 			} else if deduplicated.CanonicalPath != result.CanonicalPath {
 				atomic.AddInt64(&r.orgDedupHits, 1)
 				result.NormalizationSteps = append(result.NormalizationSteps,
@@ -893,7 +904,7 @@ func normalizeFlatProductPath(ctx context.Context, path string) string {
 func (r *CanonicalPathResolver) ResolveBatch(
 	ctx context.Context,
 	inputPaths []string,
-	fragmentType models.FragmentType,
+	fragmentType FragmentType,
 ) (map[string]*ResolveResult, error) {
 	results := make(map[string]*ResolveResult, len(inputPaths))
 
@@ -919,7 +930,7 @@ func (r *CanonicalPathResolver) ResolveBatch(
 func (r *CanonicalPathResolver) ResolveWithMetadata(
 	ctx context.Context,
 	inputPath string,
-	fragmentType models.FragmentType,
+	fragmentType FragmentType,
 	metadata map[string]string, // e.g., {"shortName": "Tesla", "legalName": "Tesla Inc.", "wikidataId": "Q478214"}
 ) (*ResolveResult, error) {
 	logPrefix := "[CanonicalPathResolver]"
@@ -970,7 +981,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 	}
 
 	// Step 1.2: Government body correction (org path with gov-like label).
-	if fragmentType == models.FragmentTypeOrganization {
+	if fragmentType == FragmentTypeOrganization {
 		label := strings.TrimSpace(metadata["legalName"])
 		if label == "" {
 			label = strings.TrimSpace(metadata["shortName"])
@@ -989,7 +1000,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 	}
 
 	// Step 1.25: Best-effort PRODUCT normalization to a stable shape.
-	if fragmentType == models.FragmentTypeProduct {
+	if fragmentType == FragmentTypeProduct {
 		nameHints := make([]string, 0, 3)
 		if s := strings.TrimSpace(metadata["shortName"]); s != "" {
 			nameHints = append(nameHints, s)
@@ -1014,7 +1025,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 	}
 
 	// Step 1.3: Market deduplication using tags (metadata-driven).
-	if fragmentType == models.FragmentTypeMarket && r.fragmentsRepo != nil && len(metadata) > 0 {
+	if fragmentType == FragmentTypeMarket && r.fragmentsRepo != nil && len(metadata) > 0 {
 		rawTags := parseTagMetadata(metadata["tags"])
 		normalizedTags := taxonomy.NormalizeMarketTags(rawTags)
 		if len(normalizedTags) >= 5 {
@@ -1034,7 +1045,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 							if cand == nil || cand.ID == "" {
 								continue
 							}
-							if cand.Type != models.FragmentTypeMarket && !strings.HasPrefix(strings.TrimSpace(cand.CanonicalPath), "/market/") {
+							if cand.Class != FragmentTypeMarket && !strings.HasPrefix(strings.TrimSpace(cand.CanonicalPath), "/market/") {
 								continue
 							}
 							cGeo, cSector, cVertical := parseMarketGeoSector(cand.CanonicalPath)
@@ -1075,10 +1086,10 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 	}
 
 	// Step 2: For organizations with metadata, try deduplication first (before checking by path)
-	if fragmentType == models.FragmentTypeOrganization && r.orgDeduplicator != nil && len(metadata) > 0 {
+	if fragmentType == FragmentTypeOrganization && r.orgDeduplicator != nil && len(metadata) > 0 {
 		testFragment := &models.HorizonFragment{
 			CanonicalPath: result.CanonicalPath,
-			Type:          fragmentType,
+			Class:          fragmentType,
 			Identifiers:   make(map[string]string),
 		}
 
@@ -1113,7 +1124,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 		if err == nil && deduplicated != nil && deduplicated.ID != "" {
 			if !isDedupReplacementCompatible(fragmentType, result.CanonicalPath, deduplicated) {
 				log.Printf("%s Org deduplication (with metadata) candidate rejected (incompatible): requestedType=%s requestedPath=%s candidateType=%s candidatePath=%s candidateID=%s",
-					logPrefix, fragmentType, result.CanonicalPath, deduplicated.Type, deduplicated.CanonicalPath, deduplicated.ID)
+					logPrefix, fragmentType, result.CanonicalPath, deduplicated.Class, deduplicated.CanonicalPath, deduplicated.ID)
 			} else if deduplicated.CanonicalPath != result.CanonicalPath {
 				atomic.AddInt64(&r.orgDedupHits, 1)
 				result.NormalizationSteps = append(result.NormalizationSteps,
@@ -1136,7 +1147,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 				fmt.Sprintf("found_existing_fragment: %s (id=%s)", result.CanonicalPath, existing.ID))
 			log.Printf("%s Found existing fragment: %s (id=%s)", logPrefix, result.CanonicalPath, existing.ID)
 		}
-		if result.ExistingFragment == nil && fragmentType == models.FragmentTypeProduct {
+		if result.ExistingFragment == nil && fragmentType == FragmentTypeProduct {
 			nameHints := []string{
 				strings.TrimSpace(metadata["shortName"]),
 				strings.TrimSpace(metadata["legalName"]),
@@ -1151,7 +1162,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 				if verr != nil || candidate == nil || strings.TrimSpace(candidate.ID) == "" {
 					continue
 				}
-				if candidate.Type != "" && candidate.Type != models.FragmentTypeProduct {
+				if candidate.Class != "" && candidate.Class != FragmentTypeProduct {
 					continue
 				}
 				atomic.AddInt64(&r.foundExistingByPath, 1)
@@ -1211,14 +1222,14 @@ func parseMarketGeoSector(canonicalPath string) (string, string, string) {
 
 // RecordRedirect stores a canonical path rewrite for future fast-path resolution.
 // Heuristic: warmup threshold 5 observations (see docs/horizon/scout/HEURISTICS_REGISTRY.md)
-func (r *CanonicalPathResolver) RecordRedirect(ctx context.Context, fromPath string, toPath string, fragmentType models.FragmentType, reason string) (bool, bool, bool) {
+func (r *CanonicalPathResolver) RecordRedirect(ctx context.Context, fromPath string, toPath string, fragmentType FragmentType, reason string) (bool, bool, bool) {
 	return r.recordRedirect(ctx, fromPath, toPath, fragmentType, reason, 5)
 }
 
 // RecordDeterministicRedirect stores a canonical path redirect that becomes immediately stable.
 // Use for deterministic pipeline decisions (dedup, org upgrade, scope rewrite) where the redirect
 // is authoritative and should be applied on the next Resolve() call without warmup.
-func (r *CanonicalPathResolver) RecordDeterministicRedirect(ctx context.Context, fromPath string, toPath string, fragmentType models.FragmentType, reason string) (bool, bool, bool) {
+func (r *CanonicalPathResolver) RecordDeterministicRedirect(ctx context.Context, fromPath string, toPath string, fragmentType FragmentType, reason string) (bool, bool, bool) {
 	return r.recordRedirect(ctx, fromPath, toPath, fragmentType, reason, 1)
 }
 
@@ -1240,13 +1251,13 @@ func extractMarketDomain(path string) string {
 // ValidateRedirectCompatibility checks if a redirect from sourcePath to targetPath is semantically
 // compatible for the given fragment type. For MARKET paths, cross-domain redirects (e.g. finance→technology)
 // are rejected to prevent stateful feedback loops that produce ontologically invalid outputs.
-func ValidateRedirectCompatibility(sourcePath, targetPath string, fragmentType models.FragmentType) bool {
+func ValidateRedirectCompatibility(sourcePath, targetPath string, fragmentType FragmentType) bool {
 	sourcePath = strings.TrimSpace(sourcePath)
 	targetPath = strings.TrimSpace(targetPath)
 	if sourcePath == "" || targetPath == "" {
 		return false
 	}
-	if fragmentType != models.FragmentTypeMarket {
+	if fragmentType != FragmentTypeMarket {
 		return true
 	}
 	srcDomain := extractMarketDomain(sourcePath)
@@ -1257,7 +1268,7 @@ func ValidateRedirectCompatibility(sourcePath, targetPath string, fragmentType m
 	return srcDomain == tgtDomain
 }
 
-func (r *CanonicalPathResolver) recordRedirect(ctx context.Context, fromPath string, toPath string, fragmentType models.FragmentType, reason string, warmupThreshold int) (bool, bool, bool) {
+func (r *CanonicalPathResolver) recordRedirect(ctx context.Context, fromPath string, toPath string, fragmentType FragmentType, reason string, warmupThreshold int) (bool, bool, bool) {
 	if r == nil || r.redirectsRepo == nil {
 		return false, false, false
 	}
@@ -1313,7 +1324,7 @@ func (r *CanonicalPathResolver) applyRedirects(ctx context.Context, result *Reso
 		if _, ok := seen[target]; ok {
 			break
 		}
-		ft := models.FragmentType(strings.TrimSpace(redirect.FragmentType))
+		ft := FragmentType(strings.TrimSpace(redirect.FragmentType))
 		if !ValidateRedirectCompatibility(current, target, ft) {
 			log.Printf("[CanonicalPathResolver] redirect skipped: cross-domain incompatible %s -> %s (fragmentType=%s)",
 				current, target, redirect.FragmentType)
@@ -1331,7 +1342,7 @@ func (r *CanonicalPathResolver) applyRedirects(ctx context.Context, result *Reso
 	return int64(len(steps))
 }
 
-func (r *CanonicalPathResolver) recordTelemetry(ctx context.Context, fragmentType models.FragmentType, redirectHits int64, redirectWrites bool, redirectStable bool, redirectVariability bool) {
+func (r *CanonicalPathResolver) recordTelemetry(ctx context.Context, fragmentType FragmentType, redirectHits int64, redirectWrites bool, redirectStable bool, redirectVariability bool) {
 	if r == nil || r.telemetryRepo == nil {
 		return
 	}

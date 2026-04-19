@@ -4,7 +4,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // MergeFragments is the single entry point for fragment merge operations.
@@ -209,7 +209,7 @@ func NewReverseEdgeTask(edgeID string) EnforcementTask {
 }
 
 // NewCanonicalizeEdgeTask creates an enforcement task to canonicalize an edge type.
-func NewCanonicalizeEdgeTask(edgeID string, newType models.DependencyType, shouldSwap bool) EnforcementTask {
+func NewCanonicalizeEdgeTask(edgeID string, newType ah.RelationName, shouldSwap bool) EnforcementTask {
 	return EnforcementTask{
 		Type:     TaskCanonicalizeEdge,
 		TargetID: edgeID,

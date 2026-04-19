@@ -20,7 +20,7 @@ func TestRepairGraphIntentPlanWithResolvers_RewritesProductPathFromLabel(t *test
 				{
 					TempID:            "n1",
 					Label:             "Battery Cell",
-					Type:              string(horizonmodels.FragmentTypeProduct),
+					Type:              string(FragmentTypeProduct),
 					CanonicalPathHint: "/product/component/energy/storage/battery-cell",
 				},
 			},
@@ -45,7 +45,7 @@ func TestRepairGraphIntentPlanWithResolvers_ReusesSnapshotObjectPath(t *testing.
 				NodeID:        "cp_mercedes",
 				CanonicalPath: "/org/de/mercedes-benz-group",
 				Label:         "Mercedes Benz Group",
-				Type:          string(horizonmodels.FragmentTypeOrganization),
+				Type:          string(FragmentTypeOrganization),
 			},
 		},
 	}
@@ -59,7 +59,7 @@ func TestRepairGraphIntentPlanWithResolvers_ReusesSnapshotObjectPath(t *testing.
 				{
 					TempID:            "n1",
 					Label:             "Mercedes Benz Group",
-					Type:              string(horizonmodels.FragmentTypeOrganization),
+					Type:              string(FragmentTypeOrganization),
 					CanonicalPathHint: "/org/de/mercedes-benz",
 				},
 			},
@@ -88,7 +88,8 @@ func TestRepairGraphIntentPlanWithResolvers_NormalizesMalformedDomainPath(t *tes
 				{
 					TempID:            "n1",
 					Label:             "Battery Cell Supply Dependency",
-					Type:              string(horizonmodels.FragmentTypeDomain),
+					// Legacy DOMAIN wire token (no AH FragmentClass equivalent).
+					Type: "DOMAIN",
 					CanonicalPathHint: "/domain/v1/supply-chain/geo/de/battery-cells",
 				},
 			},

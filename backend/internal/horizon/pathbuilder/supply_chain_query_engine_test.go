@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestTraceWithSnapshot_ExactProductChain(t *testing.T) {
@@ -199,8 +200,10 @@ func testSupplyLinkFragment(id string, canonicalPath string, supplierRef string,
 	return &models.HorizonFragment{
 		ID:            id,
 		TenantID:      "global",
-		Type:          models.FragmentTypeSupplyLink,
+		Class:         ah.FragmentClassSite,
+		Subtype:       "supply_link",
 		CanonicalPath: canonicalPath,
+		Identifiers:   map[string]string{"legacy_supply_link": "true"},
 		SupplierRef:   stringPtr(supplierRef),
 		ProductRef:    stringPtr(productRef),
 		CustomerRef:   stringPtr(customerRef),

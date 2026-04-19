@@ -5,7 +5,6 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -48,9 +47,9 @@ func (p *CriticPipelineRunner) Validate(ctx context.Context, input CriticValidat
 	// Strategic overlay: only for DECISION_POINT/MECHANISM entities or entities with strategic relations.
 	// Skip for MARKET/GEO_REGION/ORG to avoid false "Rejected" when Critic expects strategic schema but Scout produced different type.
 	if hasStrategic && input.Fragment != nil && p.agent != nil {
-		ft := input.Fragment.Type
+		ft := input.Fragment.Class
 		cp := strings.ToLower(strings.TrimSpace(input.Fragment.CanonicalPath))
-		isStrategicEntity := ft == models.FragmentTypeDecisionPoint || ft == models.FragmentTypeMechanism ||
+		isStrategicEntity := ft == FragmentTypeDecisionPoint || ft == FragmentTypeMechanism ||
 			strings.HasPrefix(cp, "/decision/") || strings.HasPrefix(cp, "/mechanism/")
 		if !isStrategicEntity {
 			isStrategicEntity = hasStrategicRelations(input.Relations)
@@ -180,8 +179,8 @@ func mergeValidationResults(a, b *ValidationResult) *ValidationResult {
 // hasStrategicRelations returns true if any relation type maps to SemanticGroupStrategic.
 func hasStrategicRelations(relations []DiscoveredRelation) bool {
 	for _, r := range relations {
-		dt := models.DependencyType(strings.ToUpper(strings.TrimSpace(r.RelationType)))
-		if models.SemanticGroupForEdgeType(dt) == models.SemanticGroupStrategic {
+		dt := DependencyType(strings.ToUpper(strings.TrimSpace(r.RelationType)))
+		if SemanticGroupForEdgeType(dt) == SemanticGroupStrategic {
 			return true
 		}
 	}

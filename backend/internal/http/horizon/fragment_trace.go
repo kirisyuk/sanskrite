@@ -530,11 +530,11 @@ func fragmentTraceDisplayName(fragment *horizonmodels.HorizonFragment) string {
 	return strings.TrimSpace(parts[len(parts)-1])
 }
 
-func relatedFragmentType(fragment *horizonmodels.HorizonFragment) horizonmodels.FragmentType {
+func relatedFragmentType(fragment *horizonmodels.HorizonFragment) FragmentType {
 	if fragment == nil {
 		return ""
 	}
-	return fragment.Type
+	return fragment.Class
 }
 
 func relatedCanonicalPath(fragment *horizonmodels.HorizonFragment) string {
@@ -674,7 +674,7 @@ func (h *HorizonHandlers) collectFragmentTraceSupplyChains(ctx context.Context, 
 				appendArtifact(artifact, false, "node_overlap", []string{cp}, 1.0)
 			}
 		}
-		if frag.Type == horizonmodels.FragmentTypeAffectedZone {
+		if horizonmodels.ClassSubtypeAffectedZone.MatchesFragment(frag) {
 			if items, err := h.materializedArtifactsRepo.FindByAffectedZoneRefsAny(ctx, tenantID, []string{cp}, horizonmodels.MaterializedKindSupplyChainPath, 50); err == nil {
 				for _, artifact := range items {
 					appendArtifact(artifact, false, "affected_zone_overlap", []string{cp}, 0.9)

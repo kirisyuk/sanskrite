@@ -109,7 +109,7 @@ func (b *GeoHierarchyBuilder) EnsureAndLinkGeoHierarchy(
 		label = strings.ReplaceAll(label, "-", " ")
 		f := &models.HorizonFragment{
 			CanonicalPath: parentPath,
-			Type:          models.FragmentTypeGeoRegion,
+			Class:          FragmentTypeGeoRegion,
 			Labels: map[string]string{
 				"en": strings.TrimSpace(label),
 			},
@@ -157,14 +157,14 @@ func (b *GeoHierarchyBuilder) EnsureAndLinkGeoHierarchy(
 		}
 
 		// Skip if edge already exists.
-		if _, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", childID, parentID, models.DependencyTypeLocatedIn); err == nil {
+		if _, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", childID, parentID, DependencyTypeLocatedIn); err == nil {
 			// already linked
 		} else if errors.Is(err, repo.ErrEdgeNotFound) {
 			edge := &models.DependencyEdge{
 				TenantID:         "global",
 				SourceFragmentID: childID,
 				TargetFragmentID: parentID,
-				Type:             models.DependencyTypeLocatedIn,
+				Relation:             DependencyTypeLocatedIn,
 				Properties: models.EdgeProperties{
 					Criticality:   0.6,
 					Amplification: 1.0,

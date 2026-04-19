@@ -14,7 +14,7 @@ func TestScorePathFamiliesDetectsCrossBorderEnergySupplyChain(t *testing.T) {
 	trace := []SignalPropagationTraceEvent{
 		{
 			Outcome:      "propagated",
-			EdgeType:     string(horizonmodels.DependencyTypeSuppliesTo),
+			EdgeType:     string(DependencyTypeSuppliesTo),
 			Channel:      "economic",
 			Scope:        "cross_border",
 			Spillover:    "cross_border_economic",
@@ -25,7 +25,7 @@ func TestScorePathFamiliesDetectsCrossBorderEnergySupplyChain(t *testing.T) {
 		},
 		{
 			Outcome:      "propagated",
-			EdgeType:     string(horizonmodels.DependencyTypeDependsOn),
+			EdgeType:     string(DependencyTypeDependsOn),
 			Channel:      "operational",
 			Scope:        "cross_border",
 			Spillover:    "cross_border_economic",
@@ -63,7 +63,7 @@ func TestScorePathFamiliesDetectsCrossBorderEnergySupplyChain(t *testing.T) {
 func TestClassifyPathFamiliesDetectsChokepointLogistics(t *testing.T) {
 	ev := SignalPropagationTraceEvent{
 		Outcome:   "propagated",
-		EdgeType:  string(horizonmodels.DependencyTypeOperatesIn),
+		EdgeType:  string(DependencyTypeOperatesIn),
 		Channel:   "geopolitical",
 		Scope:     "cross_border",
 		Spillover: "cross_border_operational",

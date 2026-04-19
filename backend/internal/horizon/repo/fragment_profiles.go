@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 var ErrFragmentProfileNotFound = errors.New("fragment profile not found")
@@ -209,7 +210,7 @@ func (r *FragmentProfilesRepository) ListByFragmentID(ctx context.Context, fragm
 }
 
 // ListStale retrieves profiles older than the given time, for refresh scheduling.
-func (r *FragmentProfilesRepository) ListStale(ctx context.Context, olderThan time.Time, fragmentType models.FragmentType, limit int) ([]*models.FragmentProfile, error) {
+func (r *FragmentProfilesRepository) ListStale(ctx context.Context, olderThan time.Time, fragmentType ah.FragmentClass, limit int) ([]*models.FragmentProfile, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -222,7 +223,7 @@ func (r *FragmentProfilesRepository) ListStale(ctx context.Context, olderThan ti
 
 	if fragmentType != "" {
 		q = r.col.
-			Where("fragmentType", "==", string(fragmentType)).
+			Where("fragmentClass", "==", string(fragmentType)).
 			Where("status", "==", string(models.ProfileStatusActive)).
 			Where("capturedAt", "<", olderThan).
 			OrderBy("capturedAt", firestore.Asc).
@@ -319,8 +320,8 @@ func (r *FragmentProfilesRepository) DeleteByFragmentID(ctx context.Context, fra
 }
 
 // CountByType counts profiles by fragment type.
-func (r *FragmentProfilesRepository) CountByType(ctx context.Context, fragmentType models.FragmentType) (int, error) {
-	q := r.col.Where("fragmentType", "==", string(fragmentType))
+func (r *FragmentProfilesRepository) CountByType(ctx context.Context, fragmentType ah.FragmentClass) (int, error) {
+	q := r.col.Where("fragmentClass", "==", string(fragmentType))
 	if fragmentType == "" {
 		q = r.col.Query
 	}
@@ -356,9 +357,9 @@ func (r *FragmentProfilesRepository) ExistsForFragment(ctx context.Context, frag
 
 // GetLatestCapturedAt returns the most recent capturedAt for a fragment type.
 // Useful for scheduler to determine when last refresh happened.
-func (r *FragmentProfilesRepository) GetLatestCapturedAt(ctx context.Context, fragmentType models.FragmentType) (*time.Time, error) {
+func (r *FragmentProfilesRepository) GetLatestCapturedAt(ctx context.Context, fragmentType ah.FragmentClass) (*time.Time, error) {
 	q := r.col.
-		Where("fragmentType", "==", string(fragmentType)).
+		Where("fragmentClass", "==", string(fragmentType)).
 		Where("status", "==", string(models.ProfileStatusActive)).
 		OrderBy("capturedAt", firestore.Desc).
 		Limit(1)
@@ -416,9 +417,9 @@ func (r *FragmentProfileRefreshPoliciesRepository) Get(ctx context.Context, id s
 }
 
 // GetByType retrieves the policy for a fragment type.
-func (r *FragmentProfileRefreshPoliciesRepository) GetByType(ctx context.Context, fragmentType models.FragmentType) (*models.FragmentProfileRefreshPolicy, error) {
+func (r *FragmentProfileRefreshPoliciesRepository) GetByType(ctx context.Context, fragmentType ah.FragmentClass) (*models.FragmentProfileRefreshPolicy, error) {
 	docs, err := r.col.
-		Where("fragmentType", "==", string(fragmentType)).
+		Where("fragmentClass", "==", string(fragmentType)).
 		Where("enabled", "==", true).
 		Limit(1).
 		Documents(ctx).GetAll()
@@ -429,7 +430,7 @@ func (r *FragmentProfileRefreshPoliciesRepository) GetByType(ctx context.Context
 		// Return default policy
 		defaults := models.DefaultRefreshPolicies()
 		for _, p := range defaults {
-			if p.FragmentType == fragmentType {
+			if p.FragmentClass == fragmentType {
 				return &p, nil
 			}
 		}

@@ -87,11 +87,11 @@ func (e *PolicyExecutor) Execute(ctx context.Context, input PolicyInput) (Policy
 		fields["edge_id"] = input.Edge.ID
 		fields["source_id"] = input.Edge.SourceFragmentID
 		fields["target_id"] = input.Edge.TargetFragmentID
-		fields["relation_type"] = input.Edge.Type
+		fields["relation_type"] = input.Edge.Relation
 	}
 	if input.Fragment != nil {
 		fields["fragment_id"] = input.Fragment.ID
-		fields["source_type"] = input.Fragment.Type
+		fields["source_type"] = input.Fragment.Class
 		fields["origin_mode"] = input.Fragment.Provenance.OriginMode
 		fields["tenant_id"] = input.Fragment.TenantID
 	}

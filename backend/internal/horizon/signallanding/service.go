@@ -16,6 +16,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/zonegeo"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 var nonAlphaNumeric = regexp.MustCompile(`[^a-z0-9]+`)
@@ -458,7 +459,7 @@ func (s *Service) expandAffectedZonesFromHits(ctx context.Context, tenantID stri
 				continue
 			}
 			for _, frag := range matches {
-				if frag == nil || frag.Type != horizonmodels.FragmentTypeAffectedZone {
+				if frag == nil || !frag.IsLegacyAffectedZone() {
 					continue
 				}
 				cp := strings.TrimSpace(frag.CanonicalPath)
@@ -557,7 +558,8 @@ func (s *Service) ensureAffectedZoneForAnchor(ctx context.Context, session *hori
 	zoneLabel := affectedZoneDisplayLabel(anchorLabel, conditionType)
 	if zone == nil {
 		zone = &horizonmodels.HorizonFragment{
-			Type:          horizonmodels.FragmentTypeAffectedZone,
+			Class:         ah.FragmentClassGeo,
+			Subtype:       "affected_zone",
 			CanonicalPath: zonePath,
 			Labels: map[string]string{
 				"en": zoneLabel,
@@ -618,8 +620,9 @@ func (s *Service) mergeSignalLandingZone(
 		return false
 	}
 	changed := false
-	if zone.Type != horizonmodels.FragmentTypeAffectedZone {
-		zone.Type = horizonmodels.FragmentTypeAffectedZone
+	if !zone.IsLegacyAffectedZone() {
+		zone.Class = ah.FragmentClassGeo
+		zone.Subtype = "affected_zone"
 		changed = true
 	}
 	if zone.Labels == nil {
@@ -686,7 +689,7 @@ func (s *Service) mergeSignalLandingZone(
 }
 
 func (s *Service) BackfillAffectedZoneCoordinates(ctx context.Context, zone *horizonmodels.HorizonFragment) (bool, error) {
-	if s == nil || zone == nil || zone.Type != horizonmodels.FragmentTypeAffectedZone {
+	if s == nil || zone == nil || !zone.IsLegacyAffectedZone() {
 		return false, nil
 	}
 	if zone.Coordinates != nil && horizonmodels.IsRealGeoCoordinate(zone.Coordinates.Lat, zone.Coordinates.Lon) {
@@ -757,7 +760,7 @@ func (s *Service) ensureAffectedZoneEdges(ctx context.Context, zone, anchor *hor
 	_, _ = s.edgesRepo.Create(ctx, &horizonmodels.DependencyEdge{
 		SourceFragmentID: strings.TrimSpace(zone.ID),
 		TargetFragmentID: strings.TrimSpace(anchor.ID),
-		Type:             horizonmodels.DependencyTypeAffects,
+		Relation:         DependencyTypeAffects,
 		Qualifiers:       qualifiers,
 		Properties: horizonmodels.EdgeProperties{
 			Criticality: 0.72,
@@ -775,7 +778,7 @@ func (s *Service) ensureAffectedZoneEdges(ctx context.Context, zone, anchor *hor
 			_, _ = s.edgesRepo.Create(ctx, &horizonmodels.DependencyEdge{
 				SourceFragmentID: strings.TrimSpace(zone.ID),
 				TargetFragmentID: strings.TrimSpace(parentFrag.ID),
-				Type:             horizonmodels.DependencyTypeLocatedIn,
+				Relation:         DependencyTypeLocatedIn,
 				Qualifiers: map[string]interface{}{
 					"source":                 "signal_landing",
 					"signalLandingGenerated": true,

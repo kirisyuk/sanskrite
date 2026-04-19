@@ -3,20 +3,25 @@ package scout
 import (
 	"testing"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 func TestNormalizeFragmentTypeHardcoded_ExtendedCoverage(t *testing.T) {
+	// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeDomain /
+	// FragmentTypeSphere / FragmentTypeSupplyLink folded onto their
+	// parent AH classes (evidence/evidence/site). The hardcoded
+	// normalizer now returns just the parent class — subtype hints
+	// (domain / sphere / supply_link) are recovered separately by
+	// callers that need them via models.NormalizeFragmentClassName.
 	tests := []struct {
 		in   string
-		want models.FragmentType
+		want FragmentType
 	}{
-		{in: "GOV", want: models.FragmentTypeOrganization},
-		{in: "DOMAIN", want: models.FragmentTypeDomain},
-		{in: "SPHERE", want: models.FragmentTypeSphere},
-		{in: "MECHANISM", want: models.FragmentTypeMechanism},
-		{in: "SUPPLYLINK", want: models.FragmentTypeSupplyLink},
-		{in: "NETWORK", want: models.FragmentTypeCommunity},
+		{in: "GOV", want: FragmentTypeOrganization},
+		{in: "DOMAIN", want: FragmentTypeEvent},
+		{in: "SPHERE", want: FragmentTypeEvent},
+		{in: "MECHANISM", want: FragmentTypeMechanism},
+		{in: "SUPPLYLINK", want: FragmentTypeFacility},
+		{in: "NETWORK", want: FragmentTypeCommunity},
 	}
 
 	for _, tt := range tests {
@@ -32,7 +37,7 @@ func TestNormalizeFragmentTypeHardcoded_UnknownNeverEmpty(t *testing.T) {
 	if got == "" {
 		t.Fatalf("normalizeFragmentTypeHardcoded must not return empty")
 	}
-	if got != models.FragmentTypeOrganization {
+	if got != FragmentTypeOrganization {
 		t.Fatalf("unknown token should fall back to ORGANIZATION, got %q", got)
 	}
 }

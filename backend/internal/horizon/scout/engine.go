@@ -14,7 +14,6 @@ import (
 	"encoding/hex"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/lensresearch"
@@ -36,6 +35,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	redis "github.com/redis/go-redis/v9"
 )
 
@@ -130,11 +130,11 @@ func revalidateFragmentGeo(ctx context.Context, fragment *models.HorizonFragment
 	if fragment == nil || geocodingClient == nil {
 		return
 	}
-	if fragment.Type == models.FragmentTypeFacility {
+	if fragment.Class == FragmentTypeFacility {
 		_, _ = RevalidateFacilityGeo(ctx, fragment, geocodingClient)
 		return
 	}
-	if fragment.Type == models.FragmentTypeOrganization {
+	if fragment.Class == FragmentTypeOrganization {
 		_, _ = RevalidateOrgGeo(ctx, fragment, geocodingClient)
 	}
 }
@@ -575,7 +575,7 @@ func missingInfoLimitForFragment(fragment *models.HorizonFragment) int {
 		return defaultMissingInfoLimit
 	}
 	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
-	if fragment.Type == models.FragmentTypePerson || strings.HasPrefix(cp, "/person/") {
+	if fragment.Class == FragmentTypePerson || strings.HasPrefix(cp, "/person/") {
 		return personMissingInfoLimit
 	}
 	return defaultMissingInfoLimit
@@ -991,12 +991,19 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 		if normalized == "" {
 			continue
 		}
-		dt := models.DependencyType(normalized)
+		// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+		// `normalized` is the UPPER_SNAKE wire form preserved on the
+		// outgoing relation (downstream consumers + tests pin on the
+		// legacy wire token). For every contract decision we route
+		// through the scout vocabulary instead, so the AH RelationName
+		// constants in legacy_aliases.go (snake_case) participate in the
+		// switch / scaffold / market predicates.
+		scoutRel := normalizeToScoutRelation(normalized)
 		// Supply-chain + MARKET source strictness:
 		// MARKET anchor may only emit market-structure relations.
 		// This blocks noisy operational edges like MARKET->PRODUCT SUPPLIES_TO or MARKET->GEO OPERATES_IN.
 		if sourceIsMarket && sourceIsSupplyChainMode {
-			if IsMarketRelationType(dt) {
+			if IsMarketRelationType(scoutRel) {
 				rel.RelationType = normalized
 				out = append(out, rel)
 			} else {
@@ -1004,13 +1011,13 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 			}
 			continue
 		}
-		if sourceIsSupplyChainMode && allowSupplyChainOverlayRelationByPath(sourcePath, strings.TrimSpace(rel.SourceCanonicalPath), strings.TrimSpace(rel.TargetCanonicalPath), dt) {
+		if sourceIsSupplyChainMode && allowSupplyChainOverlayRelationByPath(sourcePath, strings.TrimSpace(rel.SourceCanonicalPath), strings.TrimSpace(rel.TargetCanonicalPath), scoutRel) {
 			srcPath := strings.TrimSpace(rel.SourceCanonicalPath)
 			if srcPath == "" {
 				srcPath = sourcePath
 			}
 			dstPath := strings.TrimSpace(rel.TargetCanonicalPath)
-			if allowSupplyChainOverlayByPath(srcPath, dstPath, dt) {
+			if allowSupplyChainOverlayByPath(srcPath, dstPath, scoutRel) {
 				rel.RelationType = normalized
 				out = append(out, rel)
 				continue
@@ -1018,17 +1025,17 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 			dropped = append(dropped, normalized)
 			continue
 		}
-		if AllowlistContains(allowlist, dt) {
+		if AllowlistContains(allowlist, scoutRel) {
 			rel.RelationType = normalized
 			out = append(out, rel)
 			continue
 		}
-		if sourceIsDomain && IsDomainScaffoldRelationType(dt) {
+		if sourceIsDomain && IsDomainScaffoldRelationType(scoutRel) {
 			rel.RelationType = normalized
 			out = append(out, rel)
 			continue
 		}
-		if sourceIsMarket && (IsDomainScaffoldRelationType(dt) || IsMarketRelationType(dt)) {
+		if sourceIsMarket && (IsDomainScaffoldRelationType(scoutRel) || IsMarketRelationType(scoutRel)) {
 			rel.RelationType = normalized
 			out = append(out, rel)
 			continue
@@ -1038,7 +1045,7 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 	return out, dropped
 }
 
-func allowSupplyChainOverlayRelationByPath(defaultSourcePath, explicitSourcePath, targetPath string, relationType models.DependencyType) bool {
+func allowSupplyChainOverlayRelationByPath(defaultSourcePath, explicitSourcePath, targetPath string, relationType DependencyType) bool {
 	srcPath := strings.TrimSpace(explicitSourcePath)
 	if srcPath == "" {
 		srcPath = strings.TrimSpace(defaultSourcePath)
@@ -1046,13 +1053,18 @@ func allowSupplyChainOverlayRelationByPath(defaultSourcePath, explicitSourcePath
 	return allowSupplyChainOverlayByPath(srcPath, strings.TrimSpace(targetPath), relationType)
 }
 
-func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType models.DependencyType) bool {
+func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType DependencyType) bool {
 	sourcePath = strings.TrimSpace(sourcePath)
 	targetPath = strings.TrimSpace(targetPath)
 	if sourcePath == "" || targetPath == "" {
 		return false
 	}
-	relationType = models.DependencyType(strings.TrimSpace(taxonomy.NormalizeRelationType(string(relationType))))
+	// MIGRATION NOTE (AH taxonomy): the switch below dispatches on scout
+	// DependencyType constants (snake_case AH RelationName when an AH
+	// home exists, snake_case legacy literal otherwise); we MUST normalize
+	// in the same vocabulary, not via taxonomy.NormalizeRelationType
+	// (which uppercases everything to the wire form).
+	relationType = normalizeToScoutRelation(string(relationType))
 	sourceIsController := strings.HasPrefix(sourcePath, "/org/") || strings.HasPrefix(sourcePath, "/gov/")
 	targetIsOperational := strings.HasPrefix(targetPath, "/org/") || strings.HasPrefix(targetPath, "/fac/") || strings.HasPrefix(targetPath, "/deposit/")
 	targetIsManaged := targetIsOperational || strings.HasPrefix(targetPath, "/program/")
@@ -1159,42 +1171,42 @@ func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType m
 		strings.HasPrefix(targetPath, "/geo/") ||
 		strings.HasPrefix(targetPath, "/region/")
 	switch relationType {
-	case models.DependencyTypeOwns, models.DependencyTypeControls:
+	case DependencyTypeOwns, DependencyTypeControls:
 		return sourceIsController && targetIsOperational
-	case models.DependencyTypeManages:
+	case DependencyTypeManages:
 		return sourceIsController && targetIsManaged
-	case models.DependencyTypeCompetesWith:
+	case DependencyTypeCompetesWith:
 		return sourceIsCompetitiveActor && targetIsCompetitiveActor
-	case models.DependencyTypePartnersWith:
+	case DependencyTypePartnersWith:
 		return sourceIsPartnerActor && targetIsPartnerActor
-	case models.DependencyTypeOperatesVia:
+	case DependencyTypeOperatesVia:
 		return sourceOperatesViaChannel && targetOperatesViaChannel
-	case models.DependencyTypeMemberOf:
+	case DependencyTypeMemberOf:
 		return sourceIsMemberActor && targetIsMembershipContainer
-	case models.DependencyTypeInvestsIn:
+	case DependencyTypeInvestsIn:
 		return sourceIsInvestor && targetIsInvestable
-	case models.DependencyTypeInfluences:
+	case DependencyTypeInfluences:
 		return sourceIsInfluence && targetIsInfluence
-	case models.DependencyTypeGatekeepsDecision:
+	case DependencyTypeGatekeepsDecision:
 		return sourceIsDecisionGatekeeper && strings.HasPrefix(targetPath, "/decision/")
-	case models.DependencyTypeUsesMechanism:
+	case DependencyTypeUsesMechanism:
 		return sourceUsesMechanism && targetIsMechanism
-	case models.DependencyTypeRegulates:
+	case DependencyTypeRegulates:
 		return sourceIsController && targetIsPolicyEntity
-	case models.DependencyTypeControlsAccess:
+	case DependencyTypeControlsAccess:
 		return sourceUsesMechanism && targetIsPolicyEntity
-	case models.DependencyTypeImposesCondition:
+	case DependencyTypeImposesCondition:
 		return sourceIsConditionImposer && targetIsPolicyEntity
-	case models.DependencyTypeInGeoScope:
+	case DependencyTypeInGeoScope:
 		return sourceIsGeoScopeOwner && targetIsGeoScope
-	case models.DependencyTypeAdministers:
+	case DependencyTypeAdministers:
 		targetIsAdministered := targetIsOperational || strings.HasPrefix(targetPath, "/program/") || strings.HasPrefix(targetPath, "/gov/")
 		return sourceIsController && targetIsAdministered
-	case models.DependencyTypeSubsidiaryOf:
+	case DependencyTypeSubsidiaryOf:
 		sourceIsSubsidiary := strings.HasPrefix(sourcePath, "/org/") || strings.HasPrefix(sourcePath, "/gov/")
 		targetIsParent := strings.HasPrefix(targetPath, "/org/") || strings.HasPrefix(targetPath, "/gov/")
 		return sourceIsSubsidiary && targetIsParent
-	case models.DependencyTypeAffects:
+	case DependencyTypeAffects:
 		return sourceIsImpact && targetIsAffected
 	default:
 		return false
@@ -1228,9 +1240,23 @@ func buildSeedSupplyChain(frag *models.HorizonFragment) *agents.SupplyChain {
 	if name == "" {
 		name = deriveNameFromPath(cp)
 	}
-	nodeType := string(frag.Type)
+	// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml +
+	// AGENTS.md):
+	// agents.SupplyChainNode.Type is part of the LLM-facing supply-chain
+	// agent contract; pre-migration prompts pinned on the UPPER_SNAKE
+	// wire form ("ORGANIZATION", "FACILITY", …). Surface the legacy
+	// inverse via models.LegacyTypeForClass so the scaffold the agent
+	// receives is stable across the migration window. Falls back to
+	// the UPPER_SNAKE class string for AH classes that have no legacy
+	// alias (e.g. /vessel-class/) and finally to "ORGANIZATION" for
+	// Empty inputs.
+	nodeType := models.LegacyTypeForClass(frag.Class, strings.TrimSpace(frag.Subtype))
 	if nodeType == "" {
-		nodeType = string(models.FragmentTypeOrganization)
+		if frag.Class != "" {
+			nodeType = strings.ToUpper(string(frag.Class))
+		} else {
+			nodeType = "ORGANIZATION"
+		}
 	}
 	return &agents.SupplyChain{
 		Nodes: []agents.SupplyChainNode{{
@@ -1255,8 +1281,18 @@ func deriveNameFromPath(cp string) string {
 	return strings.Title(last) //nolint:staticcheck
 }
 
-func supplyChainsEnabled(targetCanonicalPath string, targetType models.FragmentType, _ []string, _ []string) bool {
-	if targetType == models.FragmentTypePerson {
+func supplyChainsEnabled(targetCanonicalPath string, targetType FragmentType, _ []string, _ []string) bool {
+	// MIGRATION NOTE (AH taxonomy): callers may pass either an AH
+	// FragmentClass ("person") or a legacy wire token ("PERSON"); route
+	// through the hardcoded fragment-type normalizer so the comparison
+	// always lands on FragmentTypePerson regardless of input casing.
+	normalizedType := targetType
+	if strings.TrimSpace(string(targetType)) != "" {
+		if cls := normalizeFragmentTypeHardcoded(string(targetType)); cls != "" {
+			normalizedType = cls
+		}
+	}
+	if normalizedType == FragmentTypePerson {
 		return false
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(targetCanonicalPath)), "/person/") {
@@ -1276,13 +1312,13 @@ const (
 	facilityQualifierSemanticProcurement facilityQualifierSemantic = "procurement"
 )
 
-func mapModelFacilitySemantic(sem models.FacilitySemantic) facilityQualifierSemantic {
+func mapModelFacilitySemantic(sem FacilitySemantic) facilityQualifierSemantic {
 	switch sem {
-	case models.FacilitySemanticRoute:
+	case FacilitySemanticRoute:
 		return facilityQualifierSemanticRoute
-	case models.FacilitySemanticSupply:
+	case FacilitySemanticSupply:
 		return facilityQualifierSemanticSupply
-	case models.FacilitySemanticProcurement:
+	case FacilitySemanticProcurement:
 		return facilityQualifierSemanticProcurement
 	default:
 		return facilityQualifierSemanticNone
@@ -1352,12 +1388,12 @@ func containsProcurementHint(text string) bool {
 }
 
 func detectFacilityQualifierSemanticFromFragment(frag *models.HorizonFragment) facilityQualifierSemantic {
-	return mapModelFacilitySemantic(models.DetectFacilitySemanticFromFragment(frag))
+	return mapModelFacilitySemantic(DetectFacilitySemanticFromFragment(frag))
 }
 
-func isFacilityTarget(targetCanonicalPath string, targetType models.FragmentType, candidates ...*models.HorizonFragment) bool {
+func isFacilityTarget(targetCanonicalPath string, targetType FragmentType, candidates ...*models.HorizonFragment) bool {
 	cp := strings.TrimSpace(strings.ToLower(targetCanonicalPath))
-	if strings.HasPrefix(cp, "/fac/") || targetType == models.FragmentTypeFacility {
+	if strings.HasPrefix(cp, "/fac/") || targetType == FragmentTypeFacility {
 		return true
 	}
 	for _, c := range candidates {
@@ -1365,18 +1401,18 @@ func isFacilityTarget(targetCanonicalPath string, targetType models.FragmentType
 			continue
 		}
 		fcp := strings.TrimSpace(strings.ToLower(c.CanonicalPath))
-		if c.Type == models.FragmentTypeFacility || strings.HasPrefix(fcp, "/fac/") {
+		if c.Class == FragmentTypeFacility || strings.HasPrefix(fcp, "/fac/") {
 			return true
 		}
 	}
 	return false
 }
 
-func detectFacilityQualifierSemanticForTarget(targetCanonicalPath string, targetType models.FragmentType, candidates ...*models.HorizonFragment) facilityQualifierSemantic {
+func detectFacilityQualifierSemanticForTarget(targetCanonicalPath string, targetType FragmentType, candidates ...*models.HorizonFragment) facilityQualifierSemantic {
 	if !isFacilityTarget(targetCanonicalPath, targetType, candidates...) {
 		return facilityQualifierSemanticNone
 	}
-	if sem := mapModelFacilitySemantic(models.DetectFacilitySemantic(targetCanonicalPath, nil, nil, nil)); sem != facilityQualifierSemanticNone {
+	if sem := mapModelFacilitySemantic(DetectFacilitySemantic(targetCanonicalPath, nil, nil, nil)); sem != facilityQualifierSemanticNone {
 		return sem
 	}
 	for _, c := range candidates {
@@ -1387,7 +1423,7 @@ func detectFacilityQualifierSemanticForTarget(targetCanonicalPath string, target
 	return facilityQualifierSemanticNone
 }
 
-func shouldSkipSameFacilityQualifierRecursion(sourceFragment *models.HorizonFragment, targetCanonicalPath string, targetType models.FragmentType, candidates ...*models.HorizonFragment) bool {
+func shouldSkipSameFacilityQualifierRecursion(sourceFragment *models.HorizonFragment, targetCanonicalPath string, targetType FragmentType, candidates ...*models.HorizonFragment) bool {
 	sourceKind := detectFacilityQualifierSemanticFromFragment(sourceFragment)
 	if sourceKind == facilityQualifierSemanticNone {
 		return false
@@ -1397,7 +1433,7 @@ func shouldSkipSameFacilityQualifierRecursion(sourceFragment *models.HorizonFrag
 }
 
 func detectFacilityQualifierSemanticFromPath(path string) facilityQualifierSemantic {
-	return mapModelFacilitySemantic(models.DetectFacilitySemantic(path, nil, nil, nil))
+	return mapModelFacilitySemantic(DetectFacilitySemantic(path, nil, nil, nil))
 }
 
 func resolveFacilityQualifierSemantic(sourceFragment *models.HorizonFragment, fallbackTargetPath string) facilityQualifierSemantic {
@@ -1433,9 +1469,9 @@ func firstObjectQualifierRaw(frag *models.HorizonFragment) string {
 	return ""
 }
 
-func inferObjectQualifierForFragment(frag *models.HorizonFragment, fallbackTargetPath string) models.ObjectQualifier {
+func inferObjectQualifierForFragment(frag *models.HorizonFragment, fallbackTargetPath string) ObjectQualifier {
 	if frag == nil {
-		return models.ObjectQualifierNone
+		return ObjectQualifierNone
 	}
 	cp := strings.TrimSpace(strings.ToLower(frag.CanonicalPath))
 	if cp == "" {
@@ -1443,62 +1479,62 @@ func inferObjectQualifierForFragment(frag *models.HorizonFragment, fallbackTarge
 	}
 	switch {
 	case strings.HasPrefix(cp, "/fac/"):
-		switch detectFacilityQualifierSemanticForTarget(cp, models.FragmentTypeFacility, frag) {
+		switch detectFacilityQualifierSemanticForTarget(cp, FragmentTypeFacility, frag) {
 		case facilityQualifierSemanticRoute:
-			return models.ObjectQualifierRoute
+			return ObjectQualifierRoute
 		case facilityQualifierSemanticSupply:
-			return models.ObjectQualifierSupply
+			return ObjectQualifierSupply
 		case facilityQualifierSemanticProcurement:
-			return models.ObjectQualifierProcurement
+			return ObjectQualifierProcurement
 		}
 	case strings.HasPrefix(cp, "/gov/"):
 		if containsProcurementHint(cp) {
-			return models.ObjectQualifierProcurer
+			return ObjectQualifierProcurer
 		}
 		if strings.Contains(cp, "regulator") || strings.Contains(cp, "authority") || strings.Contains(cp, "commission") {
-			return models.ObjectQualifierRegulator
+			return ObjectQualifierRegulator
 		}
 	case strings.HasPrefix(cp, "/org/"):
 		if strings.Contains(cp, "holding") {
-			return models.ObjectQualifierHolding
+			return ObjectQualifierHolding
 		}
 		if strings.Contains(cp, "distribution") || strings.Contains(cp, "distributor") {
-			return models.ObjectQualifierDistributor
+			return ObjectQualifierDistributor
 		}
 	case strings.HasPrefix(cp, "/market/"):
 		if strings.Contains(cp, "regulated") {
-			return models.ObjectQualifierRegulated
+			return ObjectQualifierRegulated
 		}
 	case strings.HasPrefix(cp, "/deposit/"):
 		if strings.Contains(cp, "greenfield") {
-			return models.ObjectQualifierGreenfield
+			return ObjectQualifierGreenfield
 		}
 		if strings.Contains(cp, "brownfield") {
-			return models.ObjectQualifierBrownfield
+			return ObjectQualifierBrownfield
 		}
 	}
-	return models.ObjectQualifierNone
+	return ObjectQualifierNone
 }
 
-func normalizeAndSetFragmentObjectQualifier(frag *models.HorizonFragment, fallbackTargetPath string) models.ObjectQualifier {
+func normalizeAndSetFragmentObjectQualifier(frag *models.HorizonFragment, fallbackTargetPath string) ObjectQualifier {
 	if frag == nil {
-		return models.ObjectQualifierNone
+		return ObjectQualifierNone
 	}
 	raw := firstObjectQualifierRaw(frag)
-	q := models.NormalizeObjectQualifier(raw)
-	if q == models.ObjectQualifierNone {
+	q := NormalizeObjectQualifier(raw)
+	if q == ObjectQualifierNone {
 		q = inferObjectQualifierForFragment(frag, fallbackTargetPath)
 	}
-	if !models.IsAllowedObjectQualifierForType(frag.Type, frag.CanonicalPath, q) {
+	if !IsAllowedObjectQualifierForType(frag.Class, frag.CanonicalPath, q) {
 		q = inferObjectQualifierForFragment(frag, fallbackTargetPath)
-		if !models.IsAllowedObjectQualifierForType(frag.Type, frag.CanonicalPath, q) {
-			q = models.ObjectQualifierNone
+		if !IsAllowedObjectQualifierForType(frag.Class, frag.CanonicalPath, q) {
+			q = ObjectQualifierNone
 		}
 	}
 	if frag.Identifiers == nil {
 		frag.Identifiers = map[string]string{}
 	}
-	if q == models.ObjectQualifierNone {
+	if q == ObjectQualifierNone {
 		delete(frag.Identifiers, "objectQualifier")
 		return q
 	}
@@ -1506,12 +1542,12 @@ func normalizeAndSetFragmentObjectQualifier(frag *models.HorizonFragment, fallba
 	return q
 }
 
-func parseRelationTargetType(raw string) models.FragmentType {
+func parseRelationTargetType(raw string) FragmentType {
 	raw = strings.TrimSpace(strings.ToUpper(raw))
 	if raw == "" {
 		return ""
 	}
-	return models.FragmentType(raw)
+	return FragmentType(raw)
 }
 
 func (e *ScoutEngine) sanitizeRelationsByDirectionPolicy(
@@ -1523,11 +1559,11 @@ func (e *ScoutEngine) sanitizeRelationsByDirectionPolicy(
 		return nil, 0, 0
 	}
 	sourcePath := ""
-	sourceType := models.FragmentType("")
+	sourceType := FragmentType("")
 	sourceLabel := ""
 	if sourceFragment != nil {
 		sourcePath = strings.TrimSpace(sourceFragment.CanonicalPath)
-		sourceType = sourceFragment.Type
+		sourceType = sourceFragment.Class
 		if sourceFragment.Labels != nil {
 			sourceLabel = strings.TrimSpace(sourceFragment.Labels["en"])
 		}
@@ -1548,10 +1584,10 @@ func (e *ScoutEngine) sanitizeRelationsByDirectionPolicy(
 			dropped++
 			continue
 		}
-		edgeType := models.DependencyType(normalizedType)
+		edgeType := DependencyType(normalizedType)
 
 		currSourcePath := strings.TrimSpace(rel.SourceCanonicalPath)
-		currSourceType := models.FragmentType("")
+		currSourceType := FragmentType("")
 		if e != nil {
 			currSourceType = e.normalizeFragmentType(ctx, strings.TrimSpace(rel.SourceType))
 		}
@@ -1577,7 +1613,12 @@ func (e *ScoutEngine) sanitizeRelationsByDirectionPolicy(
 			continue
 		}
 
-		valid, shouldReverse, _ := edgesemantics.ValidateEdgeDirection(edgeType, currSourceType, targetType)
+		// MIGRATION NOTE (AH taxonomy): scout's ValidateEdgeDirection
+		// consults the scout-side overlay (legacy ADMINISTERS, OWNS,
+		// PRODUCES rows for site/org back-compat) before falling through
+		// to the AH SoT, so legacy edges still get a chance to reverse
+		// instead of being silently rejected here.
+		valid, shouldReverse, _ := ValidateEdgeDirection(edgeType, currSourceType, targetType)
 		if valid {
 			rel.RelationType = normalizedType
 			out = append(out, rel)
@@ -1617,11 +1658,16 @@ func targetPathHasAnyPrefix(path string, prefixes ...string) bool {
 	return false
 }
 
-func isFacilityQualifierBusinessTargetType(kind facilityQualifierSemantic, targetPath string, targetType models.FragmentType) bool {
+func isFacilityQualifierBusinessTargetType(kind facilityQualifierSemantic, targetPath string, targetType FragmentType) bool {
 	if kind == facilityQualifierSemanticNone {
 		return true
 	}
-	if targetType == models.FragmentTypePerson || targetType == models.FragmentTypeCommunity || targetType == models.FragmentTypeMediaChannel || targetType == models.FragmentTypeEvent {
+	// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeMediaChannel folds onto
+	// (org, media_channel) and FragmentTypeDomain onto (evidence, domain).
+	// Class-only callers can no longer distinguish these; we rely on the path
+	// prefix check below to gate /media/ and /domain/ subtypes out of the
+	// business-target whitelist.
+	if targetType == FragmentTypePerson || targetType == FragmentTypeCommunity || targetType == FragmentTypeEvent {
 		return false
 	}
 	if targetPathHasAnyPrefix(targetPath, "/person/", "/community/", "/media/", "/event/", "/sphere/", "/domain/", "/decision/", "/mechanism/") {
@@ -1629,14 +1675,14 @@ func isFacilityQualifierBusinessTargetType(kind facilityQualifierSemantic, targe
 	}
 
 	// Keep qualifier lanes business-first: geo + flow + actors/products/markets.
-	if targetType == models.FragmentTypeOrganization ||
-		targetType == models.FragmentTypeFacility ||
-		targetType == models.FragmentTypeProduct ||
-		targetType == models.FragmentTypeGeoRegion ||
-		targetType == models.FragmentTypeMarket ||
-		targetType == models.FragmentTypeDeposit ||
-		targetType == models.FragmentTypeProgram ||
-		targetType == models.FragmentTypeDomain ||
+	// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeDeposit and
+	// FragmentTypeProgram fold onto (site, deposit) and (org, program); they
+	// are caught by the FragmentTypeFacility / FragmentTypeOrganization arms.
+	if targetType == FragmentTypeOrganization ||
+		targetType == FragmentTypeFacility ||
+		targetType == FragmentTypeProduct ||
+		targetType == FragmentTypeGeoRegion ||
+		targetType == FragmentTypeMarket ||
 		targetType == "" {
 		return true
 	}
@@ -1657,35 +1703,35 @@ func isFacilityQualifierAllowedRelationType(kind facilityQualifierSemantic, relT
 	switch kind {
 	case facilityQualifierSemanticRoute:
 		switch rt {
-		case string(models.DependencyTypeDependsOn),
-			string(models.DependencyTypeSuppliesTo),
-			string(models.DependencyTypeLocatedIn),
-			string(models.DependencyTypeOperatesIn),
-			string(models.DependencyTypeProduces),
-			string(models.DependencyTypeTransformsInto),
-			string(models.DependencyTypeExtractsFrom),
-			string(models.DependencyTypeParticipatesIn),
-			string(models.DependencyTypeRegulates),
-			string(models.DependencyTypeControlsAccess),
-			string(models.DependencyTypeImposesCondition):
+		case string(DependencyTypeDependsOn),
+			string(DependencyTypeSuppliesTo),
+			string(DependencyTypeLocatedIn),
+			string(DependencyTypeOperatesIn),
+			string(DependencyTypeProduces),
+			string(DependencyTypeTransformsInto),
+			string(DependencyTypeExtractsFrom),
+			string(DependencyTypeParticipatesIn),
+			string(DependencyTypeRegulates),
+			string(DependencyTypeControlsAccess),
+			string(DependencyTypeImposesCondition):
 			return true
 		default:
 			return false
 		}
 	case facilityQualifierSemanticSupply, facilityQualifierSemanticProcurement:
 		switch rt {
-		case string(models.DependencyTypeDependsOn),
-			string(models.DependencyTypeSuppliesTo),
-			string(models.DependencyTypeProduces),
-			string(models.DependencyTypeTransformsInto),
-			string(models.DependencyTypeExtractsFrom),
-			string(models.DependencyTypeLocatedIn),
-			string(models.DependencyTypeOperatesIn),
-			string(models.DependencyTypeParticipatesIn),
-			string(models.DependencyTypePartnersWith),
-			string(models.DependencyTypeRegulates),
-			string(models.DependencyTypeControlsAccess),
-			string(models.DependencyTypeImposesCondition):
+		case string(DependencyTypeDependsOn),
+			string(DependencyTypeSuppliesTo),
+			string(DependencyTypeProduces),
+			string(DependencyTypeTransformsInto),
+			string(DependencyTypeExtractsFrom),
+			string(DependencyTypeLocatedIn),
+			string(DependencyTypeOperatesIn),
+			string(DependencyTypeParticipatesIn),
+			string(DependencyTypePartnersWith),
+			string(DependencyTypeRegulates),
+			string(DependencyTypeControlsAccess),
+			string(DependencyTypeImposesCondition):
 			return true
 		default:
 			return false
@@ -1695,7 +1741,7 @@ func isFacilityQualifierAllowedRelationType(kind facilityQualifierSemantic, relT
 	}
 }
 
-func isFacilityQualifierBusinessRelation(kind facilityQualifierSemantic, relType string, targetPath string, targetType models.FragmentType) bool {
+func isFacilityQualifierBusinessRelation(kind facilityQualifierSemantic, relType string, targetPath string, targetType FragmentType) bool {
 	if !isFacilityQualifierBusinessTargetType(kind, targetPath, targetType) {
 		return false
 	}
@@ -1770,11 +1816,11 @@ func filterMissingInfoByFragmentRelevance(fragment *models.HorizonFragment, in [
 	}
 
 	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
-	isPerson := fragment.Type == models.FragmentTypePerson || strings.HasPrefix(cp, "/person/")
-	isMarket := fragment.Type == models.FragmentTypeMarket || strings.HasPrefix(cp, "/market/")
-	isFacility := fragment.Type == models.FragmentTypeFacility || strings.HasPrefix(cp, "/fac/")
-	isDeposit := fragment.Type == models.FragmentTypeDeposit || strings.HasPrefix(cp, "/deposit/")
-	isCommunity := fragment.Type == models.FragmentTypeCommunity || strings.HasPrefix(cp, "/community/")
+	isPerson := fragment.Class == FragmentTypePerson || strings.HasPrefix(cp, "/person/")
+	isMarket := fragment.Class == FragmentTypeMarket || strings.HasPrefix(cp, "/market/")
+	isFacility := fragment.Class == FragmentTypeFacility || strings.HasPrefix(cp, "/fac/")
+	isDeposit := fragment.IsLegacyDeposit() || strings.HasPrefix(cp, "/deposit/")
+	isCommunity := fragment.Class == FragmentTypeCommunity || strings.HasPrefix(cp, "/community/")
 
 	personOnlyTokens := []string{
 		"spouse", "children", "parents", "siblings", "relative", "close associates", "family",
@@ -1841,7 +1887,7 @@ func isRouteFacilityFragment(frag *models.HorizonFragment) bool {
 		return false
 	}
 	cp := strings.TrimSpace(strings.ToLower(frag.CanonicalPath))
-	if frag.Type != models.FragmentTypeFacility && !strings.HasPrefix(cp, "/fac/") {
+	if frag.Class != FragmentTypeFacility && !strings.HasPrefix(cp, "/fac/") {
 		return false
 	}
 	if frag.Qualifiers != nil {
@@ -1939,7 +1985,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 	now := time.Now().UTC()
 	dimensionFragmentIDsToPropagate := map[string]struct{}{}
 
-	ensureFragment := func(canonicalPath string, ftype models.FragmentType, label string, entityPath string) (*models.HorizonFragment, error) {
+	ensureFragment := func(canonicalPath string, ftype FragmentType, label string, entityPath string) (*models.HorizonFragment, error) {
 		canonicalPath = strings.TrimSpace(canonicalPath)
 		if canonicalPath == "" || canonicalPath == "/" {
 			return nil, fmt.Errorf("empty canonicalPath")
@@ -1956,7 +2002,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		ex, err := e.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
 		if err == nil && ex != nil && ex.ID != "" {
 			// Keep GEO dimension labels human-readable even for existing taxonomy stubs.
-			if ftype == models.FragmentTypeGeoRegion {
+			if ftype == FragmentTypeGeoRegion {
 				if ex.Labels == nil {
 					ex.Labels = map[string]string{}
 				}
@@ -1969,6 +2015,12 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 			}
 			return ex, nil
 		}
+		// MIGRATION NOTE (AH taxonomy): legacy FragmentTypes that fold onto a
+		// shared parent class (PROGRAM/MEDIA → org, DEPOSIT/SUPPLY_LINK → site,
+		// AFFECTED_ZONE → geo, DOMAIN/SPHERE → evidence) need to carry a
+		// Subtype on the fragment for downstream IsLegacy* predicates to work.
+		// Derive subtype from the canonical path prefix.
+		csHint := InferClassSubtypeFromCanonicalPath(canonicalPath)
 		frag := &models.HorizonFragment{
 			TenantID:      "global",
 			Version:       1,
@@ -1979,7 +2031,8 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 			Labels:        map[string]string{"en": strings.TrimSpace(label)},
 			Status:        "active",
 			CanonicalPath: canonicalPath,
-			Type:          ftype,
+			Class:         ftype,
+			Subtype:       csHint.Subtype,
 			EntityPath:    entityPath,
 			State:         map[string]models.MetricValue{},
 			Provenance:    models.Provenance{Method: "taxonomy_dimension_seed", SourceIDs: []string{}, SourceRefs: []models.SourceRef{}},
@@ -2103,7 +2156,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		if sourceID == "" || targetID == "" || sourceID == targetID {
 			return
 		}
-		edgeType := models.DependencyTypeInfluences
+		edgeType := DependencyTypeInfluences
 		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceID, targetID, edgeType); err == nil {
 			return
 		}
@@ -2111,7 +2164,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 			TenantID:         "global",
 			SourceFragmentID: sourceID,
 			TargetFragmentID: targetID,
-			Type:             edgeType,
+			Relation:         edgeType,
 			Properties: models.EdgeProperties{
 				Criticality: func(x float64) float64 {
 					if x < 0 {
@@ -2156,7 +2209,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 				if sp == "" {
 					continue
 				}
-				sfrag, err := ensureFragment(sp, models.FragmentTypeSphere, sp, "/Influence/Sphere")
+				sfrag, err := ensureFragment(sp, ah.FragmentClassEvidence, sp, "/Influence/Sphere")
 				if err != nil || sfrag == nil {
 					if err != nil {
 						fmt.Printf("[ScoutEngine] Failed to ensure sphere fragment %s: %v\n", sp, err)
@@ -2179,7 +2232,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		if f.LocationPath != nil {
 			lp := strings.TrimSpace(*f.LocationPath)
 			if lp != "" {
-				gfrag, err := ensureFragment(lp, models.FragmentTypeGeoRegion, "", "/Geo/Region")
+				gfrag, err := ensureFragment(lp, FragmentTypeGeoRegion, "", "/Geo/Region")
 				if err == nil && gfrag != nil {
 					ensureInfluenceEdge(gfrag.ID, target.ID, f.Confidence, map[string]interface{}{"dimension": "geo", "path": lp, "factId": f.ID})
 					// Metric updates are optional; geo linkage should exist even without metrics.
@@ -2394,19 +2447,19 @@ func (e *ScoutEngine) bestEffortMergeLensResearchObjects(ctx context.Context, le
 // isScopeEligibleEntityType returns true for entity types that should be auto-added
 // to the lens scope when discovered by the pipeline. Excludes small/auxiliary types
 // (SPHERE, TRACK, EVENT, SUPPLY_LINK) to keep the scope meaningful.
-func isScopeEligibleEntityType(ft models.FragmentType) bool {
+func isScopeEligibleEntityType(ft FragmentType) bool {
+	// Legacy DEPOSIT/PROGRAM fold onto site/org under AH and are therefore covered
+	// by FragmentTypeFacility / FragmentTypeOrganization.
 	switch ft {
-	case models.FragmentTypeOrganization,
-		models.FragmentTypeFacility,
-		models.FragmentTypeProduct,
-		models.FragmentTypeGeoRegion,
-		models.FragmentTypeDeposit,
-		models.FragmentTypeCommunity,
-		models.FragmentTypeMarket,
-		models.FragmentTypePerson,
-		models.FragmentTypeProgram,
-		models.FragmentTypeDecisionPoint,
-		models.FragmentTypeMechanism:
+	case FragmentTypeOrganization,
+		FragmentTypeFacility,
+		FragmentTypeProduct,
+		FragmentTypeGeoRegion,
+		FragmentTypeCommunity,
+		FragmentTypeMarket,
+		FragmentTypePerson,
+		FragmentTypeDecisionPoint,
+		FragmentTypeMechanism:
 		return true
 	default:
 		return false
@@ -2532,7 +2585,7 @@ func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, 
 			}
 			ft := InferFragmentTypeFromCanonicalPath(p)
 			if ft == "" {
-				ft = models.FragmentTypeOrganization
+				ft = FragmentTypeOrganization
 			}
 			if resolved, rerr := e.canonicalPathResolver.Resolve(ctx, p, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 				cp := strings.TrimSpace(resolved.CanonicalPath)
@@ -3237,7 +3290,7 @@ func (e *ScoutEngine) persistLensArtifactsFromJobState(ctx context.Context, job 
 			lensID,
 			strings.TrimSpace(f.ID),
 			strings.TrimSpace(f.CanonicalPath),
-			string(f.Type),
+			string(f.Class),
 			strings.TrimSpace(job.ID),
 			displayLabel,
 		)
@@ -3302,7 +3355,7 @@ func (e *ScoutEngine) persistLensArtifactsFromJobState(ctx context.Context, job 
 			tenantID,
 			lensID,
 			strings.TrimSpace(ed.ID),
-			string(ed.Type),
+			string(ed.Relation),
 			srcPath,
 			tgtPath,
 			strings.TrimSpace(ed.SourceFragmentID),
@@ -4123,12 +4176,12 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		stubType := InferFragmentTypeFromCanonicalPath(effectiveCanonicalPath)
 		if stubType == "" {
-			stubType = models.FragmentTypeOrganization
+			stubType = FragmentTypeOrganization
 		}
 		stub := &models.HorizonFragment{
 			CanonicalPath: effectiveCanonicalPath,
 			TenantID:      tenantID,
-			Type:          stubType,
+			Class:         stubType,
 			Labels:        map[string]string{"en": slugToLabel(effectiveCanonicalPath)},
 			Metadata: models.FragmentMetadata{
 				EpistemicStatus: models.EpistemicStatusLowConfidence,
@@ -4586,39 +4639,47 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			}(),
 		})
 
-		// Choose a sensible default type from canonicalPath prefix (no LLM needed for this deterministic mapping).
-		defaultType := models.FragmentTypeOrganization
+		// Choose a sensible default (Class, Subtype) from canonicalPath prefix
+		// (no LLM needed for this deterministic mapping).
+		// Legacy DOMAIN/PROGRAM/MEDIA_CHANNEL fold onto canonical (evidence,
+		// domain_legacy) / (org, program) / (org, media_channel) under AH.
+		defaultType := FragmentTypeOrganization
+		defaultSubtype := ""
 		switch {
 		case strings.HasPrefix(job.TargetCanonicalPath, "/domain/"):
-			defaultType = models.FragmentTypeDomain
+			defaultType = ah.FragmentClassEvidence
+			defaultSubtype = "domain_legacy"
 		case strings.HasPrefix(job.TargetCanonicalPath, "/product/"):
-			defaultType = models.FragmentTypeProduct
+			defaultType = FragmentTypeProduct
 		case strings.HasPrefix(job.TargetCanonicalPath, "/program/"):
-			defaultType = models.FragmentTypeProgram
+			defaultType = ah.FragmentClassOrg
+			defaultSubtype = "program"
 		case strings.HasPrefix(job.TargetCanonicalPath, "/market/"):
-			defaultType = models.FragmentTypeMarket
+			defaultType = FragmentTypeMarket
 		case strings.HasPrefix(job.TargetCanonicalPath, "/fac/"):
-			defaultType = models.FragmentTypeFacility
+			defaultType = FragmentTypeFacility
 		case strings.HasPrefix(job.TargetCanonicalPath, "/loc/") || strings.HasPrefix(job.TargetCanonicalPath, "/region/"):
-			defaultType = models.FragmentTypeGeoRegion
+			defaultType = FragmentTypeGeoRegion
 		case strings.HasPrefix(job.TargetCanonicalPath, "/event/"):
-			defaultType = models.FragmentTypeEvent
+			defaultType = FragmentTypeEvent
 		case strings.HasPrefix(job.TargetCanonicalPath, "/gov/"):
 			// Government bodies are modeled as ORGANIZATION fragments, but use /gov/{iso2}/{slug} paths to avoid collisions.
-			defaultType = models.FragmentTypeOrganization
+			defaultType = FragmentTypeOrganization
 		case strings.HasPrefix(job.TargetCanonicalPath, "/org/"):
-			defaultType = models.FragmentTypeOrganization
+			defaultType = FragmentTypeOrganization
 		case strings.HasPrefix(job.TargetCanonicalPath, "/person/"):
-			defaultType = models.FragmentTypePerson
+			defaultType = FragmentTypePerson
 		case strings.HasPrefix(job.TargetCanonicalPath, "/media/"):
-			defaultType = models.FragmentTypeMediaChannel
+			defaultType = ah.FragmentClassOrg
+			defaultSubtype = "media_channel"
 		}
 
 		// Создаем базовый фрагмент
 		extractedFragment = &models.HorizonFragment{
 			CanonicalPath: job.TargetCanonicalPath,
 			TenantID:      tenantID,
-			Type:          defaultType,
+			Class:         defaultType,
+			Subtype:       defaultSubtype,
 			State:         make(map[string]models.MetricValue),
 			Governance: models.Governance{
 				Owner:  "SYSTEM",
@@ -4643,7 +4704,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 
 		// Synthetic seed: use entity_semantics.MissingInfoRules (EvaluateModeSeed) as single source of truth.
-		key := entity_semantics.ResolveByPath(job.TargetCanonicalPath, defaultType, "")
+		key := entity_semantics.ResolveByPath(job.TargetCanonicalPath, defaultType, "", "")
 		def := entity_semantics.GetDefinition(key)
 		rules := make([]entity_semantics.MissingInfoRule, 0)
 		if def != nil && len(def.MissingInfoRules) > 0 {
@@ -4729,7 +4790,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			// Pass fragment so domain/market-anchor exceptions apply (FocusesOn, DEPENDS_ON, HAS_MARKET_SEGMENT, etc.).
 			scoutResult.Relations = filterDiscoveredRelationsByDomainModesWithDomainAnchor(&scoutResult.Fragment, scoutResult.Relations, domainModesForScout)
 			scoutResult.Relations = filterDiscoveredRelationsByFacilityQualifier(scoutResult.Relations, &scoutResult.Fragment, job.TargetCanonicalPath)
-			if !supplyChainsEnabled(job.TargetCanonicalPath, scoutResult.Fragment.Type, domainModesForScout, specialties) {
+			if !supplyChainsEnabled(job.TargetCanonicalPath, scoutResult.Fragment.Class, domainModesForScout, specialties) {
 				scoutResult.SupplyChains = nil
 			}
 		}
@@ -4855,7 +4916,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		validationResult.MissingInfo = limitMissingInfoQuestions(validationResult.MissingInfo, missingInfoLimitForFragment(extractedFragment))
 		// Fallback: when critic returned empty MissingInfo but we have extracted fragment, evaluate rules directly.
 		if len(validationResult.MissingInfo) == 0 && extractedFragment != nil {
-			key := entity_semantics.ResolveByPath(job.TargetCanonicalPath, extractedFragment.Type, extractedFragment.CommunityType)
+			key := entity_semantics.ResolveByPath(job.TargetCanonicalPath, extractedFragment.Class, extractedFragment.Subtype, extractedFragment.CommunityType)
 			def := entity_semantics.GetDefinition(key)
 			if def != nil && len(def.MissingInfoRules) > 0 {
 				rules := append([]entity_semantics.MissingInfoRule(nil), def.MissingInfoRules...)
@@ -4889,7 +4950,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	// - Critic can reliably require/check them
 	// - later systems can aggregate/query them consistently
 	// - they are not "lost" due to inconsistent key naming.
-	if extractedFragment != nil && (extractedFragment.Type == models.FragmentTypeMarket || strings.HasPrefix(strings.TrimSpace(extractedFragment.CanonicalPath), "/market/")) {
+	if extractedFragment != nil && (extractedFragment.Class == FragmentTypeMarket || strings.HasPrefix(strings.TrimSpace(extractedFragment.CanonicalPath), "/market/")) {
 		normalizeMarketMetricKeys(extractedFragment)
 	}
 
@@ -5133,7 +5194,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 						if normalized == "" {
 							continue
 						}
-						if AllowlistContains(allowlist, models.DependencyType(normalized)) {
+						if AllowlistContains(allowlist, DependencyType(normalized)) {
 							r.RelationType = normalized
 							filtered = append(filtered, r)
 						}
@@ -5142,9 +5203,9 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 					// Supply chains are gated separately via supplyChainsEnabled().
 				}
 			}
-			fragTypeForSupplyChain := models.FragmentType("")
+			fragTypeForSupplyChain := FragmentType("")
 			if extractedFragment != nil {
-				fragTypeForSupplyChain = extractedFragment.Type
+				fragTypeForSupplyChain = extractedFragment.Class
 			}
 			if !supplyChainsEnabled(job.TargetCanonicalPath, fragTypeForSupplyChain, domainModesForScout, specialties) {
 				newSupplyChains = nil
@@ -5444,7 +5505,7 @@ SKIP_RESEARCH:
 			}
 		}
 
-		requiredMetricPaths := agents.RequiredMetricPathsForType(extractedFragment.Type, requested)
+		requiredMetricPaths := agents.RequiredMetricPathsForType(extractedFragment.Class, requested)
 		refreshReasons := evaluateMetricsRefreshContractReasons(extractedFragment, requiredMetricPaths, time.Now().UTC())
 		// Additional freshness heuristic: if existing fragment has sufficient metrics
 		// that were verified recently and research didn't produce new data, skip.
@@ -5685,11 +5746,11 @@ SKIP_METRICS:
 		revalidateFragmentGeo(ctx, extractedFragment, e.geocodingClient)
 
 		// Market deduplication via canonical path resolver (tag-based).
-		if e.canonicalPathResolver != nil && extractedFragment.Type == models.FragmentTypeMarket && len(extractedFragment.Tags) > 0 {
+		if e.canonicalPathResolver != nil && extractedFragment.Class == FragmentTypeMarket && len(extractedFragment.Tags) > 0 {
 			meta := map[string]string{
 				"tags": strings.Join(extractedFragment.Tags, ","),
 			}
-			if resolved, rerr := e.canonicalPathResolver.ResolveWithMetadata(ctx, extractedFragment.CanonicalPath, extractedFragment.Type, meta); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+			if resolved, rerr := e.canonicalPathResolver.ResolveWithMetadata(ctx, extractedFragment.CanonicalPath, extractedFragment.Class, meta); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 				if !canonicalPathsEquivalentForRetarget(strings.TrimSpace(resolved.CanonicalPath), strings.TrimSpace(extractedFragment.CanonicalPath)) {
 					old := strings.TrimSpace(extractedFragment.CanonicalPath)
 					extractedFragment.CanonicalPath = strings.TrimSpace(resolved.CanonicalPath)
@@ -5789,7 +5850,7 @@ SKIP_METRICS:
 					seen[t] = true
 					existingFragment.Tags = append(existingFragment.Tags, t)
 				}
-				if existingFragment.Type == models.FragmentTypeMarket {
+				if existingFragment.Class == FragmentTypeMarket {
 					existingFragment.Tags = taxonomy.NormalizeMarketTags(existingFragment.Tags)
 				}
 			}
@@ -6553,7 +6614,8 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 			sfrag = &models.HorizonFragment{
 				TenantID:      "global",
 				CanonicalPath: sp,
-				Type:          models.FragmentTypeSphere,
+				Class:         ah.FragmentClassEvidence,
+				Subtype:       "sphere",
 				Status:        "active",
 				Labels:        map[string]string{"en": sp},
 				EntityPath:    "/Influence/Sphere",
@@ -6607,7 +6669,7 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 			target.IndexPaths = models.MergeIndexPaths(target, []string{sp})
 		}
 
-		edgeType := models.DependencyTypeInfluences
+		edgeType := DependencyTypeInfluences
 		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sfrag.ID, target.ID, edgeType); err == nil {
 			continue
 		}
@@ -6616,7 +6678,7 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 			TenantID:         "global",
 			SourceFragmentID: sfrag.ID,
 			TargetFragmentID: target.ID,
-			Type:             edgeType,
+			Relation:         edgeType,
 			Properties: models.EdgeProperties{
 				Criticality:   0.6,
 				Amplification: 1.0,
@@ -6671,7 +6733,7 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 				"targetCanonicalPath": targetPath,
 				"sourceLabel":         sourceLabel,
 				"targetLabel":         targetLabel,
-				"type":                string(edge.Type),
+				"type":                string(edge.Relation),
 				"properties":          edge.Properties,
 				"qualifiers":          edge.Qualifiers,
 			})
@@ -7005,7 +7067,7 @@ func (e *ScoutEngine) enrichFragmentHierarchy(ctx context.Context, fragment *mod
 	}
 
 	// Auto-create geo hierarchy for GEO_REGION fragments
-	if fragment.Type == models.FragmentTypeGeoRegion && e.geoHierarchyBuilder != nil {
+	if fragment.Class == FragmentTypeGeoRegion && e.geoHierarchyBuilder != nil {
 		if strings.HasPrefix(fragment.CanonicalPath, "/loc/") {
 			if err := e.geoHierarchyBuilder.EnsureAndLinkGeoHierarchy(ctx, fragment.ID, fragment.CanonicalPath, "scout_job", jobID); err != nil {
 				fmt.Printf("[ScoutEngine] Warning: failed to build geo hierarchy for %s: %v\n", fragment.CanonicalPath, err)
@@ -7014,27 +7076,27 @@ func (e *ScoutEngine) enrichFragmentHierarchy(ctx context.Context, fragment *mod
 	}
 
 	// Auto-create org hierarchy for ORGANIZATION fragments (infer parent from name)
-	if fragment.Type == models.FragmentTypeOrganization && e.orgHierarchyBuilder != nil {
+	if fragment.Class == FragmentTypeOrganization && e.orgHierarchyBuilder != nil {
 		if err := e.orgHierarchyBuilder.EnsureOrgHierarchy(ctx, fragment.ID, fragment, "scout_job", jobID); err != nil {
 			fmt.Printf("[ScoutEngine] Warning: failed to build org hierarchy for %s: %v\n", fragment.CanonicalPath, err)
 		}
 	}
 
 	// Auto-create product hierarchy for PRODUCT fragments (build value chain from Wikidata)
-	if fragment.Type == models.FragmentTypeProduct && e.productHierarchyBuilder != nil {
+	if fragment.Class == FragmentTypeProduct && e.productHierarchyBuilder != nil {
 		if err := e.productHierarchyBuilder.EnsureProductHierarchy(ctx, fragment.ID, fragment, "scout_job", jobID); err != nil {
 			fmt.Printf("[ScoutEngine] Warning: failed to build product hierarchy for %s: %v\n", fragment.CanonicalPath, err)
 		}
 	}
 
 	// Auto-create market hierarchy for MARKET fragments (segment-first when possible; heuristic fallback)
-	if fragment.Type == models.FragmentTypeMarket && e.marketHierarchyBuilder != nil {
+	if fragment.Class == FragmentTypeMarket && e.marketHierarchyBuilder != nil {
 		if err := e.marketHierarchyBuilder.EnsureMarketHierarchy(ctx, fragment.ID, fragment, "scout_job", jobID); err != nil {
 			fmt.Printf("[ScoutEngine] Warning: failed to build market hierarchy for %s: %v\n", fragment.CanonicalPath, err)
 		}
 	}
 	// Auto-create geo market parent for regional MARKET fragments: /market/{geo}/X -> /market/global/X
-	if fragment.Type == models.FragmentTypeMarket && e.marketGeoHierarchy != nil {
+	if fragment.Class == FragmentTypeMarket && e.marketGeoHierarchy != nil {
 		if err := e.marketGeoHierarchy.EnsureMarketGeoHierarchy(ctx, fragment.ID, fragment, "scout_job", jobID); err != nil {
 			fmt.Printf("[ScoutEngine] Warning: failed to build market geo hierarchy for %s: %v\n", fragment.CanonicalPath, err)
 		}
@@ -7068,7 +7130,7 @@ func (e *ScoutEngine) enrichFragmentHierarchy(ctx context.Context, fragment *mod
 		if fragment.GeoFeatureType != "" {
 			qualifiers["geoFeatureType"] = fragment.GeoFeatureType
 		}
-		if inferred := InferSpherePaths(fragment.CanonicalPath, fragment.Type, fragment.GovType, qualifiers); len(inferred) > 0 {
+		if inferred := InferSpherePaths(fragment.CanonicalPath, fragment.Class, fragment.GovType, qualifiers); len(inferred) > 0 {
 			fragment.SpherePaths = inferred
 		}
 	}
@@ -7080,7 +7142,7 @@ func (e *ScoutEngine) enrichFragmentHierarchy(ctx context.Context, fragment *mod
 		if parentPath == "" && fragment.ParentMarketPath != "" {
 			parentPath = fragment.ParentMarketPath
 		}
-		if h := InferResolutionHint(fragment.Type, fragment.GovType, fragment.CanonicalPath, parentPath); h != "" {
+		if h := InferResolutionHint(fragment.Class, fragment.GovType, fragment.CanonicalPath, parentPath); h != "" {
 			fragment.ResolutionHint = h
 		}
 	}
@@ -7108,7 +7170,7 @@ func (e *ScoutEngine) enrichFragmentParallel(ctx context.Context, frag *models.H
 	}()
 	go func() {
 		defer wg.Done()
-		if henrich.OpenCorporatesEnabled() && e.openCorporatesClient != nil && frag.Type == models.FragmentTypeOrganization {
+		if henrich.OpenCorporatesEnabled() && e.openCorporatesClient != nil && frag.Class == FragmentTypeOrganization {
 			henrich.AttachOpenCorporatesIDIfMissing(ctx, e.openCorporatesClient, frag)
 		}
 	}()
@@ -7463,7 +7525,7 @@ func (e *ScoutEngine) runPolicyCheck(_ context.Context, job *models.ScoutingJob)
 			targetPath := ""
 			if strings.TrimSpace(v.EdgeID) != "" && e.edgesRepo != nil {
 				if edge, err := e.edgesRepo.Get(policyCtx, strings.TrimSpace(v.EdgeID)); err == nil && edge != nil {
-					edgeType = string(edge.Type)
+					edgeType = string(edge.Relation)
 					sourcePath, _ = resolveFrag(edge.SourceFragmentID)
 					targetPath, _ = resolveFrag(edge.TargetFragmentID)
 				}

@@ -2,632 +2,157 @@ package edgesemantics
 
 import (
 	"fmt"
+	"sort"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
-// EdgeDirectionRule defines valid source and target fragment types for an edge type.
+// EdgeDirectionRule defines valid source and target fragment classes for a relation.
+//
+// Sourced from the AgentHorde taxonomy SoT (ah.RelationEndpointKinds +
+// ah.RelationEndpointBlacklist). Hand-maintenance of this table is intentionally
+// removed: every change MUST happen in agents/shared/agenthorde_common/.../taxonomy.py
+// and propagate via `go generate ./internal/taxonomy/ah/...` (see docs/taxonomy/CODEGEN.md).
 type EdgeDirectionRule struct {
-	ValidSourceTypes []models.FragmentType
-	ValidTargetTypes []models.FragmentType
-	Description      string
+	ValidSourceClasses []ah.FragmentClass
+	ValidTargetClasses []ah.FragmentClass
+	// Pairs is the canonical (from, to) catalog used by validators that need
+	// per-pair semantics (e.g. supplies physical_leg vs commercial); populated
+	// directly from ah.RelationEndpointKinds.
+	Pairs []ah.EndpointKindRow
+	// Blacklist enumerates explicitly forbidden (from, to) pairs that overlap
+	// the positive rows; mirrors ah.RelationEndpointBlacklist.
+	Blacklist []ah.EndpointPair
+	// Description is a short human-readable summary used in prompt scaffolding.
+	Description string
 }
 
-// EdgeDirectionPolicies is the single source of truth for edge direction semantics.
-var EdgeDirectionPolicies = map[models.DependencyType]EdgeDirectionRule{
-	models.DependencyTypeRegulates: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-			models.FragmentTypeGeoRegion,
-			models.FragmentTypeMarket,
-		},
-		Description: "Regulator (org) regulates regulated entity",
-	},
-	models.DependencyTypeOwns: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-			models.FragmentTypeCommunity,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-			models.FragmentTypeDeposit,
-			models.FragmentTypeMediaChannel,
-			models.FragmentTypeCommunity,
-		},
-		Description: "Owner owns asset/subsidiary",
-	},
-	models.DependencyTypeControls: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-			models.FragmentTypeCommunity,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-		},
-		Description: "Controller controls entity (non-equity or indirect control)",
-	},
-	models.DependencyTypeManages: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProgram,
-		},
-		Description: "Manager manages entity (formal authority, not ownership)",
-	},
-	models.DependencyTypeEmployedBy: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Person is employed by organization",
-	},
-	models.DependencyTypeBoardMemberOf: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Person is board member of organization",
-	},
-	models.DependencyTypeWorksFor: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Person works for organization (legacy)",
-	},
-	models.DependencyTypeKeyPerson: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Person is key person of organization",
-	},
-	models.DependencyTypeHasKeyPerson: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Legacy alias; normalize to KEY_PERSON (person -> org)",
-	},
-	models.DependencyTypeFounded: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypePerson,
-			models.FragmentTypeOrganization,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeProgram,
-			models.FragmentTypeCommunity,
-		},
-		Description: "Founder (person/org) founded organization/program/community",
-	},
-	models.DependencyTypeInvestsIn: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeProgram,
-			models.FragmentTypeProduct,
-		},
-		Description: "Investor invests in investee",
-	},
-	models.DependencyTypePartnersWith: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-		},
-		Description: "Partners collaborate (symmetric)",
-	},
-	models.DependencyTypeCompetesWith: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-		},
-		Description: "Competitors compete in the same arena (symmetric)",
-	},
-	models.DependencyTypeProduces: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeDeposit,
-		},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
-		Description:      "Producer produces product",
-	},
-	models.DependencyTypeLocatedIn: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeFacility,
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-			models.FragmentTypeProduct,
-			models.FragmentTypeProgram,
-			models.FragmentTypeGeoRegion,
-			models.FragmentTypeDeposit,
-			models.FragmentTypeCommunity,
-			models.FragmentTypeAffectedZone,
-		},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeGeoRegion},
-		Description:      "Entity is located within region",
-	},
-	models.DependencyTypeOperatesIn: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeGeoRegion,
-			models.FragmentTypeFacility,
-			models.FragmentTypeDeposit,
-		},
-		Description: "Organization operates in location",
-	},
-	models.DependencyTypeSuppliesTo: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-		},
-		Description: "Supplier/product supplies to customer",
-	},
-	models.DependencyTypeDependsOn: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeDomain,
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-			models.FragmentTypeProgram,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-			models.FragmentTypeCommunity,
-			models.FragmentTypeMediaChannel,
-			models.FragmentTypeDeposit,
-			models.FragmentTypeMarket,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeDomain,
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-			models.FragmentTypeMarket,
-			models.FragmentTypeProgram,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-			models.FragmentTypeGeoRegion,
-			models.FragmentTypeMediaChannel,
-			models.FragmentTypeCommunity,
-			models.FragmentTypeDeposit,
-		},
-		Description: "Dependent entity depends on dependency",
-	},
-	models.DependencyTypeTransformsInto: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeProduct},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
-		Description:      "Product transforms into downstream product",
-	},
-	models.DependencyTypeAssemblesInto: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeProduct},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
-		Description:      "Component/subassembly product assembles into downstream product",
-	},
-	models.DependencyTypeUsedIn: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeProduct},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeProduct},
-		Description:      "Operational input product is used in downstream product without being transformed into it or assembled into it",
-	},
-	models.DependencyTypeExtractsFrom: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeFacility},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeDeposit},
-		Description:      "Facility extracts from deposit",
-	},
-	models.DependencyTypeAssures: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProgram,
-		},
-		Description: "Assurer provides independent assurance to entity. Qualifier assurance_type: audit | certification | regulatory | inspection",
-	},
-	models.DependencyTypeAuditedBy: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProgram,
-		},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Entity is audited by an external audit firm (legacy; prefer ASSURES for new data)",
-	},
-	models.DependencyTypeInfluences: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-			models.FragmentTypeGeoRegion,
-			models.FragmentTypeAffectedZone,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-			models.FragmentTypeProgram,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeGeoRegion,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-			models.FragmentTypeProgram,
-			models.FragmentTypeMarket,
-			models.FragmentTypeSphere,
-			models.FragmentTypeEvent,
-		},
-		Description: "Source entity influences target entity (political/economic influence); zone influences event",
-	},
-	models.DependencyTypeRelativeOf: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypePerson},
-		Description:      "Person is relative of person (symmetric)",
-	},
-	models.DependencyTypeRelatedTo: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypePerson},
-		Description:      "Person is related to person (symmetric)",
-	},
-	models.DependencyTypeAssociatedWith: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypePerson,
-			models.FragmentTypeCommunity,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypePerson,
-			models.FragmentTypeCommunity,
-		},
-		Description: "Canonical associative link (symmetric)",
-	},
-	models.DependencyTypeParticipatesIn: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeCommunity,
-			models.FragmentTypeProgram,
-			models.FragmentTypePerson,
-		},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
-		Description:      "Entity participates in market",
-	},
-	models.DependencyTypeTradedIn: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeProduct},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
-		Description:      "Product is traded or price-discovered in market",
-	},
-	models.DependencyTypeDominates: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeCommunity,
-		},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
-		Description:      "Entity dominates market (leader)",
-	},
-	models.DependencyTypeHasMarketSegment: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeMarket},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
-		Description:      "Market has sub-market (hierarchy)",
-	},
-	models.DependencyTypeHasSubmarket: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeMarket},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMarket},
-		Description:      "Legacy alias of HAS_MARKET_SEGMENT",
-	},
-	models.DependencyTypeHasSubgroup: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeCommunity},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeCommunity},
-		Description:      "Community has sub-group (hierarchy)",
-	},
-	models.DependencyTypeAdministers: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeGeoRegion,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeProgram,
-			models.FragmentTypeGeoRegion,
-			models.FragmentTypeFacility,
-			models.FragmentTypeDeposit,
-		},
-		Description: "Government body administers subordinate body, facility, or deposit (hierarchy)",
-	},
-	models.DependencyTypeOperatesVia: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeCommunity,
-			models.FragmentTypeOrganization,
-		},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMediaChannel},
-		Description:      "Entity operates via media channel",
-	},
-	models.DependencyTypeMemberOf: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypePerson},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeCommunity},
-		Description:      "Person is member of community",
-	},
-	models.DependencyTypeAffiliatedWith: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeCommunity,
-			models.FragmentTypePerson,
-		},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Entity is affiliated with organization",
-	},
-	models.DependencyTypeRenamedTo: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Organization renamed to organization (corporate transition)",
-	},
-	models.DependencyTypeRebrandedTo: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Organization rebranded to organization (corporate transition)",
-	},
-	models.DependencyTypeLegalSuccessorOf: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Organization is legal successor of organization",
-	},
-	models.DependencyTypeMergedInto: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Organization merged into organization",
-	},
-	models.DependencyTypeSpunOffFrom: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Organization spun off from organization",
-	},
-	models.DependencyTypeAcquiredBy: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Organization acquired by organization",
-	},
-	models.DependencyTypeCorporateTransition: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		Description:      "Canonical corporate transition relation",
-	},
-	models.DependencyTypeSubsidiaryOf: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeOrganization},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-			models.FragmentTypeCommunity,
-		},
-		Description: "Inverse ownership relation: subsidiary/entity is owned by parent/owner",
-	},
-	models.DependencyTypeFocusesOn: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeDomain,
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-			models.FragmentTypeMarket,
-			models.FragmentTypeProduct,
-			models.FragmentTypeProgram,
-			models.FragmentTypeFacility,
-			models.FragmentTypeGeoRegion,
-			models.FragmentTypeAffectedZone,
-			models.FragmentTypeCommunity,
-			models.FragmentTypeMediaChannel,
-			models.FragmentTypeDeposit,
-		},
-		Description: "Domain focuses on an entity/domain/zone",
-	},
-	models.DependencyTypeInvolvesActor: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-			models.FragmentTypeCommunity,
-		},
-		Description: "Domain involves principal actor",
-	},
-	models.DependencyTypeInGeoScope: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeDomain,
-			models.FragmentTypeDecisionPoint,
-			models.FragmentTypeMechanism,
-			models.FragmentTypeOrganization,
-			models.FragmentTypeProgram,
-			models.FragmentTypeMarket,
-		},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeGeoRegion},
-		Description:      "Domain or policy source is in geo scope",
-	},
-	models.DependencyTypeAbout: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeDomain,
-			models.FragmentTypeOrganization,
-			models.FragmentTypePerson,
-			models.FragmentTypeMarket,
-			models.FragmentTypeProduct,
-			models.FragmentTypeProgram,
-			models.FragmentTypeFacility,
-			models.FragmentTypeGeoRegion,
-			models.FragmentTypeCommunity,
-			models.FragmentTypeMediaChannel,
-			models.FragmentTypeDeposit,
-		},
-		Description: "Domain describes subject entities",
-	},
-	models.DependencyTypeRelatedDomain: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeDomain},
-		Description:      "Related domains (symmetric)",
-	},
-	models.DependencyTypeDomainRelation: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeDomain},
-		Description:      "Canonical domain-to-domain relation (symmetric)",
-	},
-	models.DependencyTypeBroadensTo: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeDomain},
-		Description:      "Domain broadens to another domain",
-	},
-	models.DependencyTypeNarrowsTo: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeDomain},
-		Description:      "Domain narrows to another domain",
-	},
-	models.DependencyTypeAffects: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeDomain,
-			models.FragmentTypeAffectedZone,
-			models.FragmentTypeMechanism,
-			models.FragmentTypeOrganization,
-			models.FragmentTypeProgram,
-			models.FragmentTypeCommunity,
-			models.FragmentTypeMarket,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeDomain,
-			models.FragmentTypeFacility,
-			models.FragmentTypeOrganization,
-			models.FragmentTypeGeoRegion,
-			models.FragmentTypeProduct,
-			models.FragmentTypeProgram,
-			models.FragmentTypeCommunity,
-			models.FragmentTypeMediaChannel,
-			models.FragmentTypeMarket,
-		},
-		Description: "Domain, affected zone, or policy source affects downstream entities",
-	},
-	models.DependencyTypeTriggeredBy: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeAffectedZone},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeEvent},
-		Description:      "AFFECTED_ZONE was triggered by EVENT (e.g. earthquake zone by earthquake event)",
-	},
-	models.DependencyTypeSurfaces: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeDomain},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeDecisionPoint,
-			models.FragmentTypeMechanism,
-		},
-		Description: "Domain surfaces strategic entities",
-	},
-	models.DependencyTypeControlsAccess: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeDecisionPoint,
-			models.FragmentTypeOrganization,
-			models.FragmentTypeCommunity,
-			models.FragmentTypeProgram,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-			models.FragmentTypeMarket,
-			models.FragmentTypeProgram,
-			models.FragmentTypeCommunity,
-		},
-		Description: "Strategic gatekeeping relation",
-	},
-	models.DependencyTypeImposesCondition: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeMechanism,
-			models.FragmentTypeOrganization,
-			models.FragmentTypeDecisionPoint,
-			models.FragmentTypeCommunity,
-			models.FragmentTypeProgram,
-		},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-			models.FragmentTypeMarket,
-			models.FragmentTypeProgram,
-			models.FragmentTypeCommunity,
-		},
-		Description: "Imposes compliance/cost constraints",
-	},
-	models.DependencyTypeGatekeepsDecision: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeCommunity,
-			models.FragmentTypePerson,
-			models.FragmentTypeProgram,
-		},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeDecisionPoint},
-		Description:      "Actor gatekeeps a strategic decision",
-	},
-	models.DependencyTypeUsesMechanism: {
-		ValidSourceTypes: []models.FragmentType{
-			models.FragmentTypeDecisionPoint,
-			models.FragmentTypeOrganization,
-			models.FragmentTypeCommunity,
-			models.FragmentTypeProgram,
-		},
-		ValidTargetTypes: []models.FragmentType{models.FragmentTypeMechanism},
-		Description:      "Agent uses control mechanism",
-	},
-	models.DependencyTypeAppliesTo: {
-		ValidSourceTypes: []models.FragmentType{models.FragmentTypeMechanism},
-		ValidTargetTypes: []models.FragmentType{
-			models.FragmentTypeOrganization,
-			models.FragmentTypeFacility,
-			models.FragmentTypeProduct,
-			models.FragmentTypeMarket,
-			models.FragmentTypeCommunity,
-			models.FragmentTypeProgram,
-		},
-		Description: "Mechanism applies to entity",
-	},
+// EdgeDirectionPolicies is the runtime view of the AH endpoint catalog, keyed by
+// canonical RelationName. Populated at init() from ah.RelationEndpointKinds.
+//
+// Relations without rows in the AH catalog (e.g. open-ended influences with
+// attribute-driven semantics) still appear here with empty pair lists; callers
+// MUST treat empty Pairs as "no closed catalog" and fall back to looser checks.
+var EdgeDirectionPolicies = map[ah.RelationName]EdgeDirectionRule{}
+
+func init() {
+	for _, rel := range ah.RelationNames {
+		rows := ah.EndpointKindRowsFor(rel)
+		rule := EdgeDirectionRule{
+			Pairs:       rows,
+			Blacklist:   ah.RelationEndpointBlacklist[rel],
+			Description: relationDescription(rel),
+		}
+		seenSrc := make(map[ah.FragmentClass]struct{}, len(rows))
+		seenDst := make(map[ah.FragmentClass]struct{}, len(rows))
+		for _, r := range rows {
+			if _, ok := seenSrc[r.From]; !ok {
+				seenSrc[r.From] = struct{}{}
+				rule.ValidSourceClasses = append(rule.ValidSourceClasses, r.From)
+			}
+			if _, ok := seenDst[r.To]; !ok {
+				seenDst[r.To] = struct{}{}
+				rule.ValidTargetClasses = append(rule.ValidTargetClasses, r.To)
+			}
+		}
+		sort.Slice(rule.ValidSourceClasses, func(i, j int) bool {
+			return rule.ValidSourceClasses[i] < rule.ValidSourceClasses[j]
+		})
+		sort.Slice(rule.ValidTargetClasses, func(i, j int) bool {
+			return rule.ValidTargetClasses[i] < rule.ValidTargetClasses[j]
+		})
+		EdgeDirectionPolicies[rel] = rule
+	}
 }
 
-// ValidateEdgeDirection checks whether direction is semantically valid.
-func ValidateEdgeDirection(edgeType models.DependencyType, sourceType, targetType models.FragmentType) (bool, bool, *EdgeDirectionRule) {
-	rule, exists := EdgeDirectionPolicies[edgeType]
+// relationDescription returns a short human-readable summary for prompt scaffolding.
+// Curated for the closed AH relation set; new relations land with empty descriptions
+// and SHOULD be filled here as part of the SoT change that introduces them.
+var relationDescriptionTable = map[ah.RelationName]string{
+	ah.RelationNameAcquiredStakeFrom:  "Acquirer acquired equity stake from divestor (org -> org).",
+	ah.RelationNameAlternateTo:        "Symmetric alternative-of relation (route/site/vessel-class).",
+	ah.RelationNameAssetContribution:  "Asset-in-kind contribution between orgs.",
+	ah.RelationNameAssures:            "Independent assurance (audit/certification/regulatory) from org to org/site.",
+	ah.RelationNameBenchmarkedTo:      "Product/route/site benchmarked to a market price reference.",
+	ah.RelationNameBeneficiallyOwns:   "Beneficial ownership stake (person/org/community -> org).",
+	ah.RelationNameCharters:           "Org charters a vessel-class (commercial fleet usage).",
+	ah.RelationNameConstrainedBy:      "Route/site/vessel-class constrained by geo or another route.",
+	ah.RelationNameControlsVia:        "Non-equity control of an org by another actor.",
+	ah.RelationNameDisrupts:           "Evidence/geo disrupts site/route/org/asset (event-time semantics).",
+	ah.RelationNameDivestedTo:         "Divestor divested asset to acquirer (org -> org).",
+	ah.RelationNameEnactedVia:         "Decision enacted via a specific mechanism.",
+	ah.RelationNameExposesTo:          "Endpoint exposed to a regulatory regime.",
+	ah.RelationNameGatekeeps:          "Org gatekeeps a strategic decision point.",
+	ah.RelationNameHoldsBoardSeat:     "Director-style board representation.",
+	ah.RelationNameImposes:            "Mechanism imposes constraint on entity.",
+	ah.RelationNameIncorporatedIn:     "Org legally incorporated in geo.",
+	ah.RelationNameInfluences:         "Open-ended influence (attribute-driven kind).",
+	ah.RelationNameInvestedIn:         "Equity investment org -> org.",
+	ah.RelationNameJointVentureWith:   "Joint venture between orgs (symmetric in semantics; directed in storage).",
+	ah.RelationNameLegConnects:        "Physical supply-chain leg topology between sites/routes/regions.",
+	ah.RelationNameListedOn:           "Org listed on a market/exchange.",
+	ah.RelationNameManagedBy:          "Operational management contract (org managed by org).",
+	ah.RelationNameMemberOf:           "Person/org member of community/alliance.",
+	ah.RelationNameMergedInto:         "Org merged into successor org.",
+	ah.RelationNameMitigatedBy:        "Regime exposure mitigated by org/route/regime chain.",
+	ah.RelationNameOperates:           "Org operates a site (operator-of-record).",
+	ah.RelationNamePassesThrough:      "Route/site/vessel-class passes through corridor/region.",
+	ah.RelationNamePricedUnder:        "Product/route/site priced under a market or contract regime.",
+	ah.RelationNameProduces:           "Org produces product line (or via attributes.production_kind: extraction etc).",
+	ah.RelationNamePublishesBenchmark: "Org publishes price reference benchmark on a market.",
+	ah.RelationNameRegulates:          "Regulator (org) regulates region/market/route/site.",
+	ah.RelationNameRequiresCapability: "Product requires site capability.",
+	ah.RelationNameSpunOut:            "Org spun out subsidiary org.",
+	ah.RelationNameSubjectTo:          "Endpoint subject to a regulatory regime.",
+	ah.RelationNameSubsidiaryOf:       "Org is subsidiary of parent org.",
+	ah.RelationNameSupplies:           "Commercial / actor-to-market / trade-flow / physical-leg supply relation.",
+	ah.RelationNameTransshipsAt:       "Cargo transshipment at a hub (site/route/org -> site).",
+	ah.RelationNameWields:             "Org wields a control mechanism.",
+}
+
+func relationDescription(rel ah.RelationName) string {
+	if d, ok := relationDescriptionTable[rel]; ok {
+		return d
+	}
+	return ""
+}
+
+// ValidateEdgeDirection reports (valid, shouldReverse, rule) for the given edge.
+//
+// Behaviour:
+//   - Unknown relation: returns (false, false, &EdgeDirectionRule{Description: "unknown relation ..."}).
+//   - Open-ended relation (no rows in AH catalog): returns (true, false, &rule).
+//   - Pair listed in blacklist: returns (false, false, &rule).
+//   - Pair found among rows: returns (true, false, &rule).
+//   - Reversed pair found: returns (false, true, &rule).
+//   - Otherwise: returns (false, false, &rule).
+func ValidateEdgeDirection(rel ah.RelationName, src, dst ah.FragmentClass) (bool, bool, *EdgeDirectionRule) {
+	rule, exists := EdgeDirectionPolicies[rel]
 	if !exists {
-		return false, false, &EdgeDirectionRule{Description: fmt.Sprintf("unknown edge type %s: missing direction policy", edgeType)}
+		return false, false, &EdgeDirectionRule{
+			Description: fmt.Sprintf("unknown relation %s: missing direction policy", rel),
+		}
 	}
 
-	sourceValid := containsFragmentType(rule.ValidSourceTypes, sourceType)
-	targetValid := containsFragmentType(rule.ValidTargetTypes, targetType)
-	if sourceValid && targetValid {
+	for _, b := range rule.Blacklist {
+		if b.From == src && b.To == dst {
+			return false, false, &rule
+		}
+	}
+
+	if len(rule.Pairs) == 0 {
 		return true, false, &rule
 	}
 
-	reversedSourceValid := containsFragmentType(rule.ValidSourceTypes, targetType)
-	reversedTargetValid := containsFragmentType(rule.ValidTargetTypes, sourceType)
-	if reversedSourceValid && reversedTargetValid {
-		return false, true, &rule
-	}
-
-	return false, false, &rule
-}
-
-func containsFragmentType(types []models.FragmentType, t models.FragmentType) bool {
-	for _, vt := range types {
-		if vt == t {
-			return true
+	for _, p := range rule.Pairs {
+		if p.From == src && p.To == dst {
+			return true, false, &rule
 		}
 	}
-	return false
+	for _, p := range rule.Pairs {
+		if p.From == dst && p.To == src {
+			return false, true, &rule
+		}
+	}
+	return false, false, &rule
 }

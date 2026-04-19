@@ -15,7 +15,7 @@ func RepairSyntheticFacilityCanonicalPath(
 	fragment *models.HorizonFragment,
 	geocodingClient coreontology.GeocodingClientInterface,
 ) (string, string, bool) {
-	if fragment == nil || fragment.Type != models.FragmentTypeFacility {
+	if fragment == nil || fragment.Class != FragmentTypeFacility {
 		return "", "", false
 	}
 	if _, blocked := forbiddenPlaceholderFacilitySlug(strings.TrimSpace(fragment.CanonicalPath)); !blocked {
@@ -59,7 +59,7 @@ func RepairSyntheticFacilityCanonicalPath(
 }
 
 func RepairSyntheticOrgCanonicalPath(fragment *models.HorizonFragment) (string, string, bool) {
-	if fragment == nil || fragment.Type != models.FragmentTypeOrganization {
+	if fragment == nil || fragment.Class != FragmentTypeOrganization {
 		return "", "", false
 	}
 	cp := strings.TrimSpace(fragment.CanonicalPath)

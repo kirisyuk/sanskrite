@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	telemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetrycollector"
 	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -905,7 +904,7 @@ func (e *Engine) collectGraph(ctx context.Context, job *models.ScoutingJob, cont
 				continue
 			}
 			if len(allowedEntities) > 0 {
-				ft := string(f.Type)
+				ft := string(f.Class)
 				if ft != "DOMAIN" && ft != "SPHERE" && !containsFold(allowedEntities, ft) {
 					droppedEntities++
 					continue
@@ -935,7 +934,7 @@ func (e *Engine) collectGraph(ctx context.Context, job *models.ScoutingJob, cont
 				continue
 			}
 			if len(allowedEdges) > 0 {
-				if !edgesemantics.IsDomainScaffoldRelationType(edge.Type) && !containsFold(allowedEdges, string(edge.Type)) {
+				if !IsDomainScaffoldRelationType(edge.Relation) && !containsFold(allowedEdges, string(edge.Relation)) {
 					droppedEdges++
 					continue
 				}
@@ -1254,7 +1253,7 @@ func (e *Engine) assembleDeterministic(job *models.ScoutingJob, contract Contrac
 			EdgeID:             strings.TrimSpace(edge.ID),
 			SourceFragmentID:   strings.TrimSpace(edge.SourceFragmentID),
 			TargetFragmentID:   strings.TrimSpace(edge.TargetFragmentID),
-			RelationType:       string(edge.Type),
+			RelationType:       string(edge.Relation),
 			TopDependencyScore: topDependencyScore(edge, g),
 			Confidence:         dependencyConfidence(edge),
 			SourceRefs:         dependencySourceRefs(edge),
@@ -1334,7 +1333,7 @@ func topDependencyScore(edge *models.DependencyEdge, g graphSnapshot) float64 {
 		exposure = 0.5
 	}
 	concentration := deriveConcentration(edge)
-	substitutability := clamp01(edge.GetSubstitutability())
+	substitutability := clamp01(edgeSubstitutability(edge))
 	if substitutability == 0 {
 		substitutability = 0.5
 	}
@@ -1426,7 +1425,7 @@ func sanctionExposure(edge *models.DependencyEdge, g graphSnapshot) float64 {
 	if edge == nil {
 		return 0.5
 	}
-	if edge.Type == models.DependencyTypeRegulates || edge.Type == models.DependencyTypeControlsAccess || edge.Type == models.DependencyTypeUsesMechanism {
+	if edge.Relation == DependencyTypeRegulates || edge.Relation == DependencyTypeControlsAccess || edge.Relation == DependencyTypeUsesMechanism {
 		return 1.0
 	}
 	src := g.NodesByID[edge.SourceFragmentID]
@@ -1443,7 +1442,7 @@ func sanctionExposure(edge *models.DependencyEdge, g graphSnapshot) float64 {
 		if ed == nil {
 			continue
 		}
-		if ed.Type != models.DependencyTypeRegulates && ed.Type != models.DependencyTypeControlsAccess && ed.Type != models.DependencyTypeUsesMechanism {
+		if ed.Relation != DependencyTypeRegulates && ed.Relation != DependencyTypeControlsAccess && ed.Relation != DependencyTypeUsesMechanism {
 			continue
 		}
 		if ed.SourceFragmentID == srcID || ed.TargetFragmentID == srcID || ed.SourceFragmentID == tgtID || ed.TargetFragmentID == tgtID {
@@ -1490,7 +1489,7 @@ func fragmentCriticality(f *models.HorizonFragment, edges []*models.DependencyEd
 func buildConcentrationEvidence(g graphSnapshot) []models.ConcentrationEvidence {
 	out := make([]models.ConcentrationEvidence, 0, 8)
 	for _, f := range g.NodesByID {
-		if f == nil || f.Type != models.FragmentTypeMarket {
+		if f == nil || f.Class != FragmentTypeMarket {
 			continue
 		}
 		evidence := models.ConcentrationEvidence{
@@ -1520,7 +1519,7 @@ func buildControlExposure(g graphSnapshot) []models.ControlExposure {
 		if edge == nil {
 			continue
 		}
-		if edge.Type != models.DependencyTypeRegulates && edge.Type != models.DependencyTypeControlsAccess && edge.Type != models.DependencyTypeUsesMechanism {
+		if edge.Relation != DependencyTypeRegulates && edge.Relation != DependencyTypeControlsAccess && edge.Relation != DependencyTypeUsesMechanism {
 			continue
 		}
 		path := []string{}
@@ -1531,7 +1530,7 @@ func buildControlExposure(g graphSnapshot) []models.ControlExposure {
 			path = append(path, strings.TrimSpace(tgt.CanonicalPath))
 		}
 		out = append(out, models.ControlExposure{
-			MechanismType: strings.ToLower(string(edge.Type)),
+			MechanismType: strings.ToLower(string(edge.Relation)),
 			Severity:      severityFromEdge(edge),
 			Confidence:    dependencyConfidence(edge),
 			EdgeIDs:       []string{strings.TrimSpace(edge.ID)},
@@ -2654,7 +2653,7 @@ func (e *Engine) buildExplanatoryCandidates(contract Contract, g graphSnapshot) 
 			EdgeID:             strings.TrimSpace(edge.ID),
 			SourceFragmentID:   strings.TrimSpace(edge.SourceFragmentID),
 			TargetFragmentID:   strings.TrimSpace(edge.TargetFragmentID),
-			RelationType:       string(edge.Type),
+			RelationType:       string(edge.Relation),
 			TopDependencyScore: topDependencyScore(edge, g),
 			Confidence:         dependencyConfidence(edge),
 			SourceRefs:         dependencySourceRefs(edge),
@@ -3426,13 +3425,13 @@ func edgeByID(edges []*models.DependencyEdge, edgeID string) *models.DependencyE
 // checkSupplyChainEdgesOperational uses only supply-chain operational edge types:
 // PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM. No CONSUMES or DEPENDS_ON.
 func checkSupplyChainEdgesOperational(g graphSnapshot, facetNodes map[string][]*models.HorizonFragment) models.DomainGateCheck {
-	needed := map[models.DependencyType]struct{}{
-		models.DependencyTypeSuppliesTo:     {},
-		models.DependencyTypeProduces:       {},
-		models.DependencyTypeTransformsInto: {},
-		models.DependencyTypeAssemblesInto:  {},
-		models.DependencyTypeUsedIn:         {},
-		models.DependencyTypeExtractsFrom:   {},
+	needed := map[DependencyType]struct{}{
+		DependencyTypeSuppliesTo:     {},
+		DependencyTypeProduces:       {},
+		DependencyTypeTransformsInto: {},
+		DependencyTypeAssemblesInto:  {},
+		DependencyTypeUsedIn:         {},
+		DependencyTypeExtractsFrom:   {},
 	}
 	perFacet := map[string]bool{}
 	for facet := range facetNodes {
@@ -3450,7 +3449,7 @@ func checkSupplyChainEdgesOperational(g graphSnapshot, facetNodes map[string][]*
 		if edge == nil {
 			continue
 		}
-		if _, ok := needed[edge.Type]; !ok {
+		if _, ok := needed[edge.Relation]; !ok {
 			continue
 		}
 		if facet, ok := pathToFacet[edge.SourceFragmentID]; ok {
@@ -3480,12 +3479,12 @@ func checkSupplyChainEdgesOperational(g graphSnapshot, facetNodes map[string][]*
 // checkSupplyChainBidirectional verifies anchor nodes have both incoming (SUPPLIES_TO as target)
 // and outgoing (PRODUCES or SUPPLIES_TO as source) edges. Supply chain model: upstream = receives supplies, downstream = produces/supplies.
 func checkSupplyChainBidirectional(g graphSnapshot, facetNodes map[string][]*models.HorizonFragment) models.DomainGateCheck {
-	outgoingTypes := map[models.DependencyType]struct{}{
-		models.DependencyTypeSuppliesTo: {},
-		models.DependencyTypeProduces:   {},
+	outgoingTypes := map[DependencyType]struct{}{
+		DependencyTypeSuppliesTo: {},
+		DependencyTypeProduces:   {},
 	}
-	incomingTypes := map[models.DependencyType]struct{}{
-		models.DependencyTypeSuppliesTo: {},
+	incomingTypes := map[DependencyType]struct{}{
+		DependencyTypeSuppliesTo: {},
 	}
 	failures := []string{}
 	for _, nodes := range facetNodes {
@@ -3500,12 +3499,12 @@ func checkSupplyChainBidirectional(g graphSnapshot, facetNodes map[string][]*mod
 					continue
 				}
 				if edge.SourceFragmentID == n.ID {
-					if _, ok := outgoingTypes[edge.Type]; ok {
+					if _, ok := outgoingTypes[edge.Relation]; ok {
 						hasDownstream = true
 					}
 				}
 				if edge.TargetFragmentID == n.ID {
-					if _, ok := incomingTypes[edge.Type]; ok {
+					if _, ok := incomingTypes[edge.Relation]; ok {
 						hasUpstream = true
 					}
 				}
@@ -3561,7 +3560,7 @@ func checkRegulatoryEdges(g graphSnapshot) models.DomainGateCheck {
 		if edge == nil {
 			continue
 		}
-		if edge.Type == models.DependencyTypeRegulates || edge.Type == models.DependencyTypeControlsAccess || edge.Type == models.DependencyTypeUsesMechanism {
+		if edge.Relation == DependencyTypeRegulates || edge.Relation == DependencyTypeControlsAccess || edge.Relation == DependencyTypeUsesMechanism {
 			n++
 		}
 	}
@@ -3580,7 +3579,7 @@ func checkDecisionPoints(g graphSnapshot) models.DomainGateCheck {
 		if f == nil {
 			continue
 		}
-		if f.Type == models.FragmentTypeDecisionPoint || f.Type == models.FragmentTypeMechanism {
+		if f.Class == FragmentTypeDecisionPoint || f.Class == FragmentTypeMechanism {
 			n++
 		}
 	}
@@ -3624,7 +3623,7 @@ func checkJurisdictionCoverage(facetNodes map[string][]*models.HorizonFragment) 
 func checkMechanismSpecificity(g graphSnapshot) models.DomainGateCheck {
 	missing := []string{}
 	for _, edge := range g.Edges {
-		if edge == nil || edge.Type != models.DependencyTypeRegulates {
+		if edge == nil || edge.Relation != DependencyTypeRegulates {
 			continue
 		}
 		mechanism := ""
@@ -3691,11 +3690,11 @@ func computeMarketParticipationStats(g graphSnapshot) marketParticipationStats {
 	countByMarket := map[string]map[string]struct{}{}
 	uniqueOrgs := map[string]struct{}{}
 	for _, edge := range g.Edges {
-		if edge == nil || edge.Type != models.DependencyTypeParticipatesIn {
+		if edge == nil || edge.Relation != DependencyTypeParticipatesIn {
 			continue
 		}
 		src := g.NodesByID[edge.SourceFragmentID]
-		if src == nil || src.Type != models.FragmentTypeOrganization {
+		if src == nil || src.Class != FragmentTypeOrganization {
 			continue
 		}
 		targetID := strings.TrimSpace(edge.TargetFragmentID)
@@ -3736,7 +3735,7 @@ func computeMarketParticipationStats(g graphSnapshot) marketParticipationStats {
 func checkMarketShareData(g graphSnapshot) models.DomainGateCheck {
 	withShare := 0
 	for _, edge := range g.Edges {
-		if edge == nil || edge.Type != models.DependencyTypeParticipatesIn {
+		if edge == nil || edge.Relation != DependencyTypeParticipatesIn {
 			continue
 		}
 		if edge.Qualifiers != nil {
@@ -3763,7 +3762,7 @@ func checkGeoEdges(g graphSnapshot, minCoverage float64) models.DomainGateCheck 
 		if edge == nil {
 			continue
 		}
-		if edge.Type == models.DependencyTypeLocatedIn || edge.Type == models.DependencyTypeOperatesIn {
+		if edge.Relation == DependencyTypeLocatedIn || edge.Relation == DependencyTypeOperatesIn {
 			withGeo[edge.SourceFragmentID] = struct{}{}
 			withGeo[edge.TargetFragmentID] = struct{}{}
 		}

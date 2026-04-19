@@ -8,6 +8,7 @@ import (
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 const graphEnrichQualifierKey = "graphEnrich"
@@ -92,7 +93,7 @@ type profileAlias struct {
 }
 
 type edgeFacetProfile struct {
-	Facet    horizonmodels.DependencyFacet
+	Facet    EdgeFacet
 	Positive []weightedRule
 	Negative []weightedRule
 }
@@ -267,12 +268,12 @@ var govTypeProfiles = []weightedCandidate{
 }
 
 var edgeFacetProfiles = []edgeFacetProfile{
-	{Facet: horizonmodels.FacetLogistics, Positive: []weightedRule{{"transport_via", 1.8}, {"shipping", 1.5}, {"port", 1.3}, {"terminal", 1.0}, {"strait", 1.2}, {"canal", 1.2}, {"pipeline", 1.1}, {"freight", 1.2}, {"route", 1.0}, {"cargo", 1.0}}, Negative: []weightedRule{{"regulator", 0.9}}},
-	{Facet: horizonmodels.FacetInfrastructure, Positive: []weightedRule{{"grid", 1.5}, {"substation", 1.3}, {"pipeline", 1.3}, {"terminal", 0.8}, {"network", 1.0}, {"power", 1.1}, {"fiber", 1.0}}, Negative: []weightedRule{{"merchant", 0.8}}},
-	{Facet: horizonmodels.FacetSupply, Positive: []weightedRule{{"supplies_to", 1.8}, {"produces", 1.3}, {"extracts_from", 1.3}, {"product", 0.8}, {"feedstock", 1.1}, {"input", 0.8}}, Negative: []weightedRule{{"regulatory", 0.8}}},
-	{Facet: horizonmodels.FacetDistribution, Positive: []weightedRule{{"market", 1.2}, {"distribution", 1.4}, {"retail", 1.1}, {"channel", 1.0}, {"merchant", 1.0}}, Negative: []weightedRule{{"pipeline", 0.6}}},
-	{Facet: horizonmodels.FacetRegulatory, Positive: []weightedRule{{"regulator", 1.9}, {"/gov/", 1.7}, {"tax", 1.2}, {"license", 1.0}, {"sanction", 1.2}, {"duty", 1.0}, {"vat", 1.2}, {"compliance", 1.1}}, Negative: []weightedRule{{"container", 0.7}}},
-	{Facet: horizonmodels.FacetPayment, Positive: []weightedRule{{"payment", 2.0}, {"bank", 1.2}, {"credit", 1.1}, {"invoice", 1.1}, {"settlement", 1.3}}, Negative: []weightedRule{{"pipeline", 0.5}}},
+	{Facet: FacetLogistics, Positive: []weightedRule{{"transport_via", 1.8}, {"shipping", 1.5}, {"port", 1.3}, {"terminal", 1.0}, {"strait", 1.2}, {"canal", 1.2}, {"pipeline", 1.1}, {"freight", 1.2}, {"route", 1.0}, {"cargo", 1.0}}, Negative: []weightedRule{{"regulator", 0.9}}},
+	{Facet: FacetInfrastructure, Positive: []weightedRule{{"grid", 1.5}, {"substation", 1.3}, {"pipeline", 1.3}, {"terminal", 0.8}, {"network", 1.0}, {"power", 1.1}, {"fiber", 1.0}}, Negative: []weightedRule{{"merchant", 0.8}}},
+	{Facet: FacetSupply, Positive: []weightedRule{{"supplies", 1.8}, {"produces", 1.3}, {"product", 0.8}, {"feedstock", 1.1}, {"input", 0.8}}, Negative: []weightedRule{{"regulatory", 0.8}}},
+	{Facet: FacetDistribution, Positive: []weightedRule{{"market", 1.2}, {"distribution", 1.4}, {"retail", 1.1}, {"channel", 1.0}, {"merchant", 1.0}}, Negative: []weightedRule{{"pipeline", 0.6}}},
+	{Facet: FacetRegulatory, Positive: []weightedRule{{"regulator", 1.9}, {"/gov/", 1.7}, {"tax", 1.2}, {"license", 1.0}, {"sanction", 1.2}, {"duty", 1.0}, {"vat", 1.2}, {"compliance", 1.1}}, Negative: []weightedRule{{"container", 0.7}}},
+	{Facet: FacetPayment, Positive: []weightedRule{{"payment", 2.0}, {"bank", 1.2}, {"credit", 1.1}, {"invoice", 1.1}, {"settlement", 1.3}}, Negative: []weightedRule{{"pipeline", 0.5}}},
 }
 
 func AnalyzeFragmentHeuristics(fragment *horizonmodels.HorizonFragment) fragmentHeuristicReport {
@@ -469,7 +470,7 @@ func collectFragmentEvidence(fragment *horizonmodels.HorizonFragment) []evidence
 			fragment.Identifiers["marketVertical"],
 		)
 	}
-	if fragment.Type == horizonmodels.FragmentTypeSupplyLink {
+	if fragment.IsLegacySupplyLink() {
 		appendField("supply_refs", 1.2,
 			valueOrEmpty(fragment.SupplierRef),
 			valueOrEmpty(fragment.CustomerRef),
@@ -496,17 +497,17 @@ func collectFragmentContextEvidence(ctx FragmentContext) []evidenceField {
 			continue
 		}
 		text := fragmentText(frag)
-		switch frag.Type {
-		case horizonmodels.FragmentTypeOrganization:
+		switch {
+		case frag.Class == ah.FragmentClassOrg:
 			appendField("nearby_org", 1.2, text, frag.CanonicalPath)
-		case horizonmodels.FragmentTypeProduct:
+		case frag.Class == ah.FragmentClassProduct:
 			appendField("nearby_product", 1.25, text, frag.CanonicalPath)
-		case horizonmodels.FragmentTypeMarket:
+		case frag.Class == ah.FragmentClassMarket:
 			appendField("nearby_market", 1.0, text, frag.CanonicalPath)
-		case horizonmodels.FragmentTypeGeoRegion:
-			appendField("nearby_geo", 0.95, text, frag.CanonicalPath)
-		case horizonmodels.FragmentTypeAffectedZone:
+		case frag.Class == ah.FragmentClassGeo && frag.Subtype == "affected_zone":
 			appendField("nearby_affected_zone", 0.9, text, frag.CanonicalPath)
+		case frag.Class == ah.FragmentClassGeo:
+			appendField("nearby_geo", 0.95, text, frag.CanonicalPath)
 		default:
 			appendField("nearby_fragment", 0.8, text, frag.CanonicalPath)
 		}
@@ -515,7 +516,7 @@ func collectFragmentContextEvidence(ctx FragmentContext) []evidenceField {
 		if edge == nil {
 			return
 		}
-		appendField(prefix+"_edge_type", 0.9, string(edge.Type), string(edge.GetFacet()))
+		appendField(prefix+"_edge_type", 0.9, string(edge.Relation), string(edgeFacet(edge)))
 		if edge.Qualifiers != nil {
 			parts := make([]string, 0, len(edge.Qualifiers)*2)
 			for k, v := range edge.Qualifiers {
@@ -523,10 +524,10 @@ func collectFragmentContextEvidence(ctx FragmentContext) []evidenceField {
 			}
 			appendField(prefix+"_edge_qualifiers", 0.85, strings.Join(parts, " "))
 			appendField(prefix+"_edge_routes", 1.0,
-				strings.Join(qualifierStringSlice(edge.Qualifiers[horizonmodels.QualifierTransportVia]), " "),
-				strings.Join(qualifierStringSlice(edge.Qualifiers[horizonmodels.QualifierFlowRefs]), " "),
-				strings.Join(qualifierStringSlice(edge.Qualifiers[horizonmodels.QualifierZoneRefs]), " "),
-				strings.Join(qualifierStringSlice(edge.Qualifiers[horizonmodels.QualifierAffectedZoneRefs]), " "),
+				strings.Join(qualifierStringSlice(edge.Qualifiers[QualifierTransportVia]), " "),
+				strings.Join(qualifierStringSlice(edge.Qualifiers[QualifierFlowRefs]), " "),
+				strings.Join(qualifierStringSlice(edge.Qualifiers[QualifierZoneRefs]), " "),
+				strings.Join(qualifierStringSlice(edge.Qualifiers[QualifierAffectedZoneRefs]), " "),
 			)
 		}
 	}
@@ -560,7 +561,7 @@ func collectEdgeEvidence(edge *horizonmodels.DependencyEdge, sourcePath, targetP
 	if edge == nil {
 		return nil
 	}
-	fields := []evidenceField{{Name: "edge_type", Weight: 1.4, Text: strings.ToLower(strings.TrimSpace(string(edge.Type)))}, {Name: "source_path", Weight: 1.1, Text: strings.ToLower(strings.TrimSpace(sourcePath))}, {Name: "target_path", Weight: 1.1, Text: strings.ToLower(strings.TrimSpace(targetPath))}}
+	fields := []evidenceField{{Name: "edge_type", Weight: 1.4, Text: strings.ToLower(strings.TrimSpace(string(edge.Relation)))}, {Name: "source_path", Weight: 1.1, Text: strings.ToLower(strings.TrimSpace(sourcePath))}, {Name: "target_path", Weight: 1.1, Text: strings.ToLower(strings.TrimSpace(targetPath))}}
 	if edge.Qualifiers != nil {
 		parts := make([]string, 0, len(edge.Qualifiers)+2)
 		for k, v := range edge.Qualifiers {
@@ -871,21 +872,22 @@ func scoreEdgeFacet(fields []evidenceField, edge *horizonmodels.DependencyEdge, 
 		}
 	}
 	if len(normalizeTransportVia(edge.Qualifiers)) > 0 {
-		acc[string(horizonmodels.FacetLogistics)].score += 1.1
-		acc[string(horizonmodels.FacetLogistics)].reasons = append(acc[string(horizonmodels.FacetLogistics)].reasons, "transport-via(+1.10)")
-		acc[string(horizonmodels.FacetLogistics)].sources["structure"] = struct{}{}
+		acc[string(FacetLogistics)].score += 1.1
+		acc[string(FacetLogistics)].reasons = append(acc[string(FacetLogistics)].reasons, "transport-via(+1.10)")
+		acc[string(FacetLogistics)].sources["structure"] = struct{}{}
 	}
 	if edge != nil {
-		switch edge.Type {
-		case horizonmodels.DependencyTypeSuppliesTo, horizonmodels.DependencyTypeProduces, horizonmodels.DependencyTypeExtractsFrom:
-			acc[string(horizonmodels.FacetSupply)].score += 1.1
-			acc[string(horizonmodels.FacetSupply)].reasons = append(acc[string(horizonmodels.FacetSupply)].reasons, "edge-type-supply(+1.10)")
-			acc[string(horizonmodels.FacetSupply)].sources["structure"] = struct{}{}
-		case horizonmodels.DependencyTypeDependsOn:
+		rel := edge.Relation
+		switch {
+		case isSupplyFlowRelation(rel):
+			acc[string(FacetSupply)].score += 1.1
+			acc[string(FacetSupply)].reasons = append(acc[string(FacetSupply)].reasons, "edge-relation-supply(+1.10)")
+			acc[string(FacetSupply)].sources["structure"] = struct{}{}
+		case rel == ah.RelationNameRegulates || rel == ah.RelationNameSubjectTo:
 			if strings.Contains(sourcePath+" "+targetPath, "/gov/") {
-				acc[string(horizonmodels.FacetRegulatory)].score += 0.7
-				acc[string(horizonmodels.FacetRegulatory)].reasons = append(acc[string(horizonmodels.FacetRegulatory)].reasons, "gov-endpoint(+0.70)")
-				acc[string(horizonmodels.FacetRegulatory)].sources["structure"] = struct{}{}
+				acc[string(FacetRegulatory)].score += 0.7
+				acc[string(FacetRegulatory)].reasons = append(acc[string(FacetRegulatory)].reasons, "gov-endpoint(+0.70)")
+				acc[string(FacetRegulatory)].sources["structure"] = struct{}{}
 			}
 		}
 	}

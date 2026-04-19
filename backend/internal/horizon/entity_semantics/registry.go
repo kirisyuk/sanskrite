@@ -5,22 +5,28 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 var registry = make(map[EntityTypeKey]*EntityTypeDefinition)
 
 // ResolveByPath returns the entity type key for a canonical path.
-// Path takes precedence over fragment type (e.g. /market/ -> MARKET even when extraction returns ORGANIZATION).
-// This prevents taxonomy/extraction misclassification from yielding wrong MissingInfoRules.
-func ResolveByPath(canonicalPath string, fragmentType models.FragmentType, communityType string) EntityTypeKey {
+// Path takes precedence over (Class, Subtype) extracted from the
+// fragment, mirroring the legacy semantics: extraction may
+// misclassify, but the canonical path is authoritative.
+//
+// `class` is an ah.FragmentClass hint used only when no path prefix
+// matches. `subtype` further refines decisions for community
+// (dynasty/tribe), affected_zone, deposit, supply_link, and other
+// closed subtypes from the AH taxonomy.
+func ResolveByPath(canonicalPath string, class ah.FragmentClass, subtype string, communityType string) EntityTypeKey {
 	cp := strings.TrimSpace(strings.ToLower(canonicalPath))
 	ct := strings.TrimSpace(strings.ToLower(communityType))
-	ft := fragmentType
-	if ft == "" {
-		ft = inferFragmentTypeFromPath(cp)
+	subtype = strings.TrimSpace(strings.ToLower(subtype))
+	if class == "" {
+		class, subtype = inferFragmentClassFromPath(cp)
 	}
 
-	// Path precedence: canonical path overrides fragment type from extraction.
 	if strings.HasPrefix(cp, "/gov/") {
 		return EntityTypeGov
 	}
@@ -46,10 +52,10 @@ func ResolveByPath(canonicalPath string, fragmentType models.FragmentType, commu
 		return EntityTypeTrack
 	}
 	if strings.HasPrefix(cp, "/community/") {
-		if ct == "dynasty" || strings.Contains(cp, "/dynasty/") {
+		if ct == "dynasty" || subtype == "dynasty" || strings.Contains(cp, "/dynasty/") {
 			return EntityTypeCommunityDynasty
 		}
-		if ct == "tribe" || strings.Contains(cp, "/tribe/") {
+		if ct == "tribe" || subtype == "tribe" || strings.Contains(cp, "/tribe/") {
 			return EntityTypeCommunityTribe
 		}
 		return EntityTypeCommunity
@@ -60,114 +66,137 @@ func ResolveByPath(canonicalPath string, fragmentType models.FragmentType, commu
 	if strings.HasPrefix(cp, "/loc/") || strings.HasPrefix(cp, "/region/") || strings.HasPrefix(cp, "/geo/") {
 		return EntityTypeGeoRegion
 	}
-	if strings.HasPrefix(cp, "/decision/") || ft == models.FragmentTypeDecisionPoint {
+	if strings.HasPrefix(cp, "/decision/") || class == ah.FragmentClassDecision {
 		return EntityTypeDecisionPoint
 	}
-	if strings.HasPrefix(cp, "/mechanism/") || ft == models.FragmentTypeMechanism {
+	if strings.HasPrefix(cp, "/mechanism/") || class == ah.FragmentClassMechanism {
 		return EntityTypeMechanism
 	}
-	if strings.HasPrefix(cp, "/domain/") || ft == models.FragmentTypeDomain {
+	// Legacy /domain/ paths fold into evidence under AH; we still
+	// surface them as DOMAIN entity for prompt continuity.
+	if strings.HasPrefix(cp, "/domain/") || (class == ah.FragmentClassEvidence && subtype == "domain_legacy") {
 		return EntityTypeDomain
 	}
-	if strings.HasPrefix(cp, "/zone/") || ft == models.FragmentTypeAffectedZone {
+	if strings.HasPrefix(cp, "/zone/") || (class == ah.FragmentClassGeo && subtype == "affected_zone") {
 		return EntityTypeAffectedZone
 	}
 	if strings.HasPrefix(cp, "/org/") {
 		return EntityTypeOrganization
 	}
 
-	switch ft {
-	case models.FragmentTypeMarket:
+	switch class {
+	case ah.FragmentClassMarket:
 		return EntityTypeMarket
-	case models.FragmentTypeProduct:
+	case ah.FragmentClassProduct:
 		return EntityTypeProduct
-	case models.FragmentTypeFacility:
+	case ah.FragmentClassSite:
+		switch subtype {
+		case "deposit":
+			return EntityTypeDeposit
+		case "supply_link":
+			return EntityTypeSupplyLink
+		}
 		return EntityTypeFacility
-	case models.FragmentTypeDeposit:
-		return EntityTypeDeposit
-	case models.FragmentTypeSupplyLink:
-		return EntityTypeSupplyLink
-	case models.FragmentTypeTrack:
+	case ah.FragmentClassMobileAsset:
 		return EntityTypeTrack
-	case models.FragmentTypeProgram:
-		return EntityTypeProgram
-	case models.FragmentTypeCommunity:
-		if ct == "dynasty" || strings.Contains(cp, "/dynasty/") {
+	case ah.FragmentClassCommunity:
+		if ct == "dynasty" || subtype == "dynasty" || strings.Contains(cp, "/dynasty/") {
 			return EntityTypeCommunityDynasty
 		}
-		if ct == "tribe" || strings.Contains(cp, "/tribe/") {
+		if ct == "tribe" || subtype == "tribe" || strings.Contains(cp, "/tribe/") {
 			return EntityTypeCommunityTribe
 		}
 		return EntityTypeCommunity
-	case models.FragmentTypePerson:
+	case ah.FragmentClassPerson:
 		return EntityTypePerson
-	case models.FragmentTypeGeoRegion:
+	case ah.FragmentClassGeo:
+		if subtype == "affected_zone" {
+			return EntityTypeAffectedZone
+		}
 		return EntityTypeGeoRegion
-	case models.FragmentTypeAffectedZone:
-		return EntityTypeAffectedZone
-	case models.FragmentTypeOrganization:
+	case ah.FragmentClassOrg:
+		switch subtype {
+		case "gov":
+			return EntityTypeGov
+		case "program":
+			return EntityTypeProgram
+		}
 		return EntityTypeOrganization
+	case ah.FragmentClassDecision:
+		return EntityTypeDecisionPoint
+	case ah.FragmentClassMechanism:
+		return EntityTypeMechanism
+	case ah.FragmentClassEvidence:
+		if subtype == "domain_legacy" {
+			return EntityTypeDomain
+		}
 	}
 	return EntityTypeGeneral
 }
 
-func inferFragmentTypeFromPath(cp string) models.FragmentType {
+// inferFragmentClassFromPath returns the (Class, subtype) implied by
+// a canonical path prefix. Empty class means "unknown".
+func inferFragmentClassFromPath(cp string) (ah.FragmentClass, string) {
 	switch {
 	case strings.HasPrefix(cp, "/market/"):
-		return models.FragmentTypeMarket
+		return ah.FragmentClassMarket, ""
 	case strings.HasPrefix(cp, "/product/"):
-		return models.FragmentTypeProduct
+		return ah.FragmentClassProduct, ""
 	case strings.HasPrefix(cp, "/fac/"):
-		return models.FragmentTypeFacility
+		return ah.FragmentClassSite, ""
 	case strings.HasPrefix(cp, "/deposit/"):
-		return models.FragmentTypeDeposit
+		return ah.FragmentClassSite, "deposit"
 	case strings.HasPrefix(cp, "/supply-link/"):
-		return models.FragmentTypeSupplyLink
+		return ah.FragmentClassSite, "supply_link"
 	case strings.HasPrefix(cp, "/track/"):
-		return models.FragmentTypeTrack
-	case strings.HasPrefix(cp, "/gov/"), strings.HasPrefix(cp, "/org/"):
-		return models.FragmentTypeOrganization
+		return ah.FragmentClassMobileAsset, ""
+	case strings.HasPrefix(cp, "/gov/"):
+		return ah.FragmentClassOrg, "gov"
+	case strings.HasPrefix(cp, "/org/"):
+		return ah.FragmentClassOrg, ""
 	case strings.HasPrefix(cp, "/community/"):
-		return models.FragmentTypeCommunity
+		return ah.FragmentClassCommunity, ""
 	case strings.HasPrefix(cp, "/program/"):
-		return models.FragmentTypeProgram
+		return ah.FragmentClassOrg, "program"
 	case strings.HasPrefix(cp, "/domain/"):
-		return models.FragmentTypeDomain
+		return ah.FragmentClassEvidence, "domain_legacy"
 	case strings.HasPrefix(cp, "/decision/"):
-		return models.FragmentTypeDecisionPoint
+		return ah.FragmentClassDecision, ""
 	case strings.HasPrefix(cp, "/mechanism/"):
-		return models.FragmentTypeMechanism
+		return ah.FragmentClassMechanism, ""
 	case strings.HasPrefix(cp, "/person/"):
-		return models.FragmentTypePerson
+		return ah.FragmentClassPerson, ""
 	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/region/"), strings.HasPrefix(cp, "/geo/"):
-		return models.FragmentTypeGeoRegion
+		return ah.FragmentClassGeo, ""
 	case strings.HasPrefix(cp, "/event/"):
-		return models.FragmentTypeEvent
+		return ah.FragmentClassEvidence, "event"
 	case strings.HasPrefix(cp, "/media/"):
-		return models.FragmentTypeMediaChannel
+		return ah.FragmentClassOrg, "media_channel"
 	case strings.HasPrefix(cp, "/zone/"):
-		return models.FragmentTypeAffectedZone
+		return ah.FragmentClassGeo, "affected_zone"
 	default:
-		return ""
+		return "", ""
 	}
 }
 
 // GetDefinition returns the entity type definition for the given key.
-// Returns nil for EntityTypeGeneral or unknown keys.
 func GetDefinition(key EntityTypeKey) *EntityTypeDefinition {
 	return registry[key]
 }
 
-// GetDefinitionByPath returns the definition for the entity at the given path.
-func GetDefinitionByPath(canonicalPath string, fragmentType models.FragmentType, communityType string) *EntityTypeDefinition {
-	key := ResolveByPath(canonicalPath, fragmentType, communityType)
+// GetDefinitionByPath returns the definition for the entity at the
+// given path. `class` and `subtype` are AH hints used when path
+// prefix resolution doesn't bind.
+func GetDefinitionByPath(canonicalPath string, class ah.FragmentClass, subtype string, communityType string) *EntityTypeDefinition {
+	key := ResolveByPath(canonicalPath, class, subtype, communityType)
 	return GetDefinition(key)
 }
 
-// ProfileSectionsForType returns profile section specs for a fragment type and path.
-// Uses GOV-specific sections when path starts with /gov/.
-func ProfileSectionsForType(fragmentType models.FragmentType, canonicalPath string, communityType string) []models.ProfileSectionSpec {
-	def := GetDefinitionByPath(canonicalPath, fragmentType, communityType)
+// ProfileSectionsForType returns profile section specs for a fragment
+// class and path. Uses GOV-specific sections when path starts with
+// /gov/.
+func ProfileSectionsForType(class ah.FragmentClass, canonicalPath string, communityType string) []models.ProfileSectionSpec {
+	def := GetDefinitionByPath(canonicalPath, class, "", communityType)
 	if def == nil || len(def.ProfileSections) == 0 {
 		return defaultProfileSections()
 	}
@@ -184,17 +213,16 @@ func defaultProfileSections() []models.ProfileSectionSpec {
 	}
 }
 
-// ExtractionBlockForPath returns the type-specific extraction block (object detail).
-// Empty string if no block for this type.
-func ExtractionBlockForPath(canonicalPath string, fragmentType models.FragmentType, communityType string) string {
-	return ExtractionBlockForPathAndDomainModes(canonicalPath, fragmentType, communityType, nil)
+// ExtractionBlockForPath returns the type-specific extraction block.
+func ExtractionBlockForPath(canonicalPath string, class ah.FragmentClass, subtype string, communityType string) string {
+	return ExtractionBlockForPathAndDomainModes(canonicalPath, class, subtype, communityType, nil)
 }
 
-// ExtractionBlockForPathAndDomainModes returns the extraction block, with supply-chain-specific overrides
-// when domain modes include supply_chain. Supply chain contract: use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO,
-// USED_IN, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, HAS_MARKET_SEGMENT (no DEPENDS_ON).
-func ExtractionBlockForPathAndDomainModes(canonicalPath string, fragmentType models.FragmentType, communityType string, domainModes []string) string {
-	def := GetDefinitionByPath(canonicalPath, fragmentType, communityType)
+// ExtractionBlockForPathAndDomainModes returns the extraction block,
+// with supply-chain-specific overrides when domain modes include
+// supply_chain.
+func ExtractionBlockForPathAndDomainModes(canonicalPath string, class ah.FragmentClass, subtype string, communityType string, domainModes []string) string {
+	def := GetDefinitionByPath(canonicalPath, class, subtype, communityType)
 	if def == nil {
 		return ""
 	}
@@ -206,10 +234,9 @@ func ExtractionBlockForPathAndDomainModes(canonicalPath string, fragmentType mod
 	return def.ExtractionBlock
 }
 
-// ResearchBlockForPath returns the type-specific research block (object detail).
-// Empty string if no block for this type.
-func ResearchBlockForPath(canonicalPath string, fragmentType models.FragmentType, communityType string) string {
-	def := GetDefinitionByPath(canonicalPath, fragmentType, communityType)
+// ResearchBlockForPath returns the type-specific research block.
+func ResearchBlockForPath(canonicalPath string, class ah.FragmentClass, subtype string, communityType string) string {
+	def := GetDefinitionByPath(canonicalPath, class, subtype, communityType)
 	if def == nil {
 		return ""
 	}

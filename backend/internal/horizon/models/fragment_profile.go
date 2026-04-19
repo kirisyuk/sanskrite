@@ -4,16 +4,23 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // FragmentProfile represents a comprehensive, LLM-generated profile/dossier for a HorizonFragment.
 // This is the "snapshot" of structured information about an entity at a point in time.
 // Content is primarily sourced from LLM with Search Grounding, with graph context for identification.
 type FragmentProfile struct {
-	ID            string       `json:"id" firestore:"id"`
-	FragmentID    string       `json:"fragmentId" firestore:"fragmentId"`
-	FragmentType  FragmentType `json:"fragmentType" firestore:"fragmentType"`
-	CanonicalPath string       `json:"canonicalPath" firestore:"canonicalPath"`
+	ID         string `json:"id" firestore:"id"`
+	FragmentID string `json:"fragmentId" firestore:"fragmentId"`
+	// FragmentClass replaces the legacy `FragmentType` field. Wire shape:
+	// JSON/Firestore key `fragmentClass`. Pre-migration documents that
+	// stored `fragmentType` are migrated by migrate-cli; live readers
+	// should rely solely on FragmentClass + FragmentSubtype.
+	FragmentClass   ah.FragmentClass `json:"fragmentClass" firestore:"fragmentClass"`
+	FragmentSubtype string           `json:"fragmentSubtype,omitempty" firestore:"fragmentSubtype,omitempty"`
+	CanonicalPath   string           `json:"canonicalPath" firestore:"canonicalPath"`
 
 	// Versioning
 	Version    int       `json:"version" firestore:"version"`
@@ -211,8 +218,8 @@ const (
 
 // FragmentProfileRefreshPolicy defines how profiles of a specific type should be refreshed.
 type FragmentProfileRefreshPolicy struct {
-	ID           string       `json:"id" firestore:"id"`
-	FragmentType FragmentType `json:"fragmentType" firestore:"fragmentType"`
+	ID            string           `json:"id" firestore:"id"`
+	FragmentClass ah.FragmentClass `json:"fragmentClass" firestore:"fragmentClass"`
 	
 	// Schedule: cron expression (e.g., "0 3 * * *" for 3 AM daily)
 	Schedule string `json:"schedule" firestore:"schedule"`
@@ -240,35 +247,36 @@ type ProfileSectionSpec struct {
 	Order       int    `json:"order"`
 }
 
-// DefaultSectionsForType returns the default section specs for a fragment type.
-// Delegates to entity_semantics for unified type logic. Pass empty path/communityType for type-only resolution.
-// Callers with full fragment context should use entity_semantics.ProfileSectionsForType directly.
-func DefaultSectionsForType(fragmentType FragmentType) []ProfileSectionSpec {
-	return DefaultSectionsForTypeWithPath(fragmentType, "", "")
+// DefaultSectionsForType returns the default section specs for a fragment class.
+// Delegates to entity_semantics for unified class logic. Pass empty path/communityType for class-only resolution.
+// Callers with full fragment context should use entity_semantics.ProfileSectionsForClass directly.
+func DefaultSectionsForType(class ah.FragmentClass) []ProfileSectionSpec {
+	return DefaultSectionsForTypeWithPath(class, "", "")
 }
 
-// DefaultSectionsForTypeWithPath returns section specs with path-aware resolution (e.g. GOV vs ORGANIZATION).
-// Used by profile generator when fragment is available.
-func DefaultSectionsForTypeWithPath(fragmentType FragmentType, canonicalPath string, communityType string) []ProfileSectionSpec {
+// DefaultSectionsForTypeWithPath returns section specs with path-aware resolution
+// (e.g. /org/{geo}/gov/* vs vanilla /org/{geo}/{slug}). Used by profile generator
+// when fragment is available.
+func DefaultSectionsForTypeWithPath(class ah.FragmentClass, canonicalPath string, communityType string) []ProfileSectionSpec {
 	// Delegate to entity_semantics; avoid import cycle by using a function variable set by entity_semantics init.
 	if profileSectionsResolver != nil {
-		return profileSectionsResolver(fragmentType, canonicalPath, communityType)
+		return profileSectionsResolver(class, canonicalPath, communityType)
 	}
 	// Fallback when entity_semantics not yet loaded (tests, etc.)
-	return defaultSectionsFallback(fragmentType)
+	return defaultSectionsFallback(class)
 }
 
 // profileSectionsResolver is set by entity_semantics to avoid import cycle.
-var profileSectionsResolver func(FragmentType, string, string) []ProfileSectionSpec
+var profileSectionsResolver func(ah.FragmentClass, string, string) []ProfileSectionSpec
 
 // RegisterProfileSectionsResolver is called by entity_semantics init.
-func RegisterProfileSectionsResolver(fn func(FragmentType, string, string) []ProfileSectionSpec) {
+func RegisterProfileSectionsResolver(fn func(ah.FragmentClass, string, string) []ProfileSectionSpec) {
 	profileSectionsResolver = fn
 }
 
-func defaultSectionsFallback(fragmentType FragmentType) []ProfileSectionSpec {
-	switch fragmentType {
-	case FragmentTypeOrganization:
+func defaultSectionsFallback(class ah.FragmentClass) []ProfileSectionSpec {
+	switch class {
+	case ah.FragmentClassOrg:
 		return []ProfileSectionSpec{
 			{Key: "overview", Title: "Overview", Description: "Brief company description, industry, founding, headquarters", Required: true, Order: 1},
 			{Key: "financials", Title: "Financials", Description: "Revenue, profit, market cap, funding, key financial metrics", Required: false, Order: 2},
@@ -278,7 +286,7 @@ func defaultSectionsFallback(fragmentType FragmentType) []ProfileSectionSpec {
 			{Key: "risks", Title: "Risks & Challenges", Description: "Key risks, regulatory issues, challenges", Required: false, Order: 6},
 			{Key: "recent_developments", Title: "Recent Developments", Description: "Recent news, announcements, events", Required: false, Order: 7},
 		}
-	case FragmentTypeMarket:
+	case ah.FragmentClassMarket:
 		return []ProfileSectionSpec{
 			{Key: "overview", Title: "Overview", Description: "Market definition, scope, key characteristics", Required: true, Order: 1},
 			{Key: "size_metrics", Title: "Market Size", Description: "TAM, current size, historical growth", Required: false, Order: 2},
@@ -288,7 +296,7 @@ func defaultSectionsFallback(fragmentType FragmentType) []ProfileSectionSpec {
 			{Key: "barriers", Title: "Barriers & Risks", Description: "Entry barriers, risks, challenges", Required: false, Order: 6},
 			{Key: "regional", Title: "Regional Dynamics", Description: "Geographic breakdown, regional differences", Required: false, Order: 7},
 		}
-	case FragmentTypeProduct:
+	case ah.FragmentClassProduct:
 		return []ProfileSectionSpec{
 			{Key: "overview", Title: "Overview", Description: "Product description, category, manufacturer", Required: true, Order: 1},
 			{Key: "specifications", Title: "Specifications", Description: "Technical specs, features, variants", Required: false, Order: 2},
@@ -313,8 +321,8 @@ func DefaultRefreshPolicies() []FragmentProfileRefreshPolicy {
 	now := time.Now().UTC()
 	return []FragmentProfileRefreshPolicy{
 		{
-			ID:           "default_organization",
-			FragmentType: FragmentTypeOrganization,
+			ID:            "default_organization",
+			FragmentClass: ah.FragmentClassOrg,
 			Schedule:     "0 3 * * *", // 3 AM daily
 			TopPercent:   0.10,
 			MaxPerRun:    500,
@@ -324,8 +332,8 @@ func DefaultRefreshPolicies() []FragmentProfileRefreshPolicy {
 			UpdatedAt:    now,
 		},
 		{
-			ID:           "default_market",
-			FragmentType: FragmentTypeMarket,
+			ID:            "default_market",
+			FragmentClass: ah.FragmentClassMarket,
 			Schedule:     "0 4 * * *", // 4 AM daily
 			TopPercent:   0.10,
 			MaxPerRun:    200,
@@ -335,8 +343,8 @@ func DefaultRefreshPolicies() []FragmentProfileRefreshPolicy {
 			UpdatedAt:    now,
 		},
 		{
-			ID:           "default_product",
-			FragmentType: FragmentTypeProduct,
+			ID:            "default_product",
+			FragmentClass: ah.FragmentClassProduct,
 			Schedule:     "0 5 * * *", // 5 AM daily
 			TopPercent:   0.10,
 			MaxPerRun:    300,
@@ -357,8 +365,8 @@ func (p *FragmentProfile) Validate() error {
 	if strings.TrimSpace(p.CanonicalPath) == "" {
 		return fmt.Errorf("canonicalPath is required")
 	}
-	if p.FragmentType == "" {
-		return fmt.Errorf("fragmentType is required")
+	if p.FragmentClass == "" {
+		return fmt.Errorf("fragmentClass is required")
 	}
 	if p.Sections == nil {
 		p.Sections = make(map[string]ProfileSection)

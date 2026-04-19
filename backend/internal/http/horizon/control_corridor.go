@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // QueryControlCorridor builds an on-the-fly transitive control corridor:
@@ -287,68 +288,74 @@ func (h *HorizonHandlers) buildControlCorridor(
 	}
 
 	authorityEdgeSet := map[string]struct{}{
-		string(horizonmodels.DependencyTypeOwns):         {},
-		string(horizonmodels.DependencyTypeSubsidiaryOf): {},
+		string(DependencyTypeOwns):         {},
+		string(DependencyTypeSubsidiaryOf): {},
 		"PARENT_OF": {},
-		string(horizonmodels.DependencyTypeControls):      {},
-		string(horizonmodels.DependencyTypeManages):       {},
-		string(horizonmodels.DependencyTypeInvestsIn):     {},
-		string(horizonmodels.DependencyTypeBoardMemberOf): {},
+		string(DependencyTypeControls):      {},
+		string(DependencyTypeManages):       {},
+		string(DependencyTypeInvestsIn):     {},
+		string(DependencyTypeBoardMemberOf): {},
 		"EXECUTIVE_OF": {},
-		string(horizonmodels.DependencyTypeEmployedBy):  {},
-		string(horizonmodels.DependencyTypeFounded):     {},
-		string(horizonmodels.DependencyTypeAdministers): {},
-		string(horizonmodels.DependencyTypeAssures):     {},
-		string(horizonmodels.DependencyTypeAuditedBy):   {},
+		string(DependencyTypeEmployedBy):  {},
+		string(DependencyTypeFounded):     {},
+		string(DependencyTypeAdministers): {},
+		string(DependencyTypeAssures):     {},
+		string(DependencyTypeAuditedBy):   {},
 	}
 	executionEdgeSet := map[string]struct{}{
-		string(horizonmodels.DependencyTypeGatekeepsDecision): {},
-		string(horizonmodels.DependencyTypeUsesMechanism):     {},
-		string(horizonmodels.DependencyTypeAppliesTo):         {},
-		string(horizonmodels.DependencyTypeControlsAccess):    {},
-		string(horizonmodels.DependencyTypeImposesCondition):  {},
+		string(DependencyTypeGatekeepsDecision): {},
+		string(DependencyTypeUsesMechanism):     {},
+		string(DependencyTypeAppliesTo):         {},
+		string(DependencyTypeControlsAccess):    {},
+		string(DependencyTypeImposesCondition):  {},
 	}
 	propagationEdgeSet := map[string]struct{}{
-		string(horizonmodels.DependencyTypeInfluences): {},
-		string(horizonmodels.DependencyTypeAffects):    {},
+		string(DependencyTypeInfluences): {},
+		string(DependencyTypeAffects):    {},
 		"IMPACTS": {},
-		string(horizonmodels.DependencyTypeRegulates): {},
-		string(horizonmodels.DependencyTypeDependsOn): {},
+		string(DependencyTypeRegulates): {},
+		string(DependencyTypeDependsOn): {},
 		"REQUIRES": {},
 		"NEEDS":    {},
 		"USES":     {},
-		string(horizonmodels.DependencyTypeSuppliesTo):       {},
-		string(horizonmodels.DependencyTypeProduces):         {},
-		string(horizonmodels.DependencyTypeTransformsInto):   {},
-		string(horizonmodels.DependencyTypeAssemblesInto):    {},
-		string(horizonmodels.DependencyTypeUsedIn):           {},
-		string(horizonmodels.DependencyTypeExtractsFrom):     {},
-		string(horizonmodels.DependencyTypeParticipatesIn):   {},
-		string(horizonmodels.DependencyTypeDominates):        {},
-		string(horizonmodels.DependencyTypeHasMarketSegment): {},
-		string(horizonmodels.DependencyTypeHasSubgroup):      {},
-		string(horizonmodels.DependencyTypeOperatesVia):      {},
-		string(horizonmodels.DependencyTypeAffiliatedWith):   {},
-		string(horizonmodels.DependencyTypeMemberOf):         {},
-		string(horizonmodels.DependencyTypePartnersWith):     {},
+		string(DependencyTypeSuppliesTo):       {},
+		string(DependencyTypeProduces):         {},
+		string(DependencyTypeTransformsInto):   {},
+		string(DependencyTypeAssemblesInto):    {},
+		string(DependencyTypeUsedIn):           {},
+		string(DependencyTypeExtractsFrom):     {},
+		string(DependencyTypeParticipatesIn):   {},
+		string(DependencyTypeDominates):        {},
+		string(DependencyTypeHasMarketSegment): {},
+		string(DependencyTypeHasSubgroup):      {},
+		string(DependencyTypeOperatesVia):      {},
+		string(DependencyTypeAffiliatedWith):   {},
+		string(DependencyTypeMemberOf):         {},
+		string(DependencyTypePartnersWith):     {},
 		"COOPERATES_WITH": {},
-		string(horizonmodels.DependencyTypeRelatedTo):  {},
-		string(horizonmodels.DependencyTypeRelativeOf): {},
+		string(DependencyTypeRelatedTo):  {},
+		string(DependencyTypeRelativeOf): {},
 	}
 	programGovBridgeEdgeSet := map[string]struct{}{
-		string(horizonmodels.DependencyTypeAdministers): {},
-		string(horizonmodels.DependencyTypeRegulates):   {},
-		string(horizonmodels.DependencyTypeInfluences):  {},
-		string(horizonmodels.DependencyTypeAffects):     {},
+		string(DependencyTypeAdministers): {},
+		string(DependencyTypeRegulates):   {},
+		string(DependencyTypeInfluences):  {},
+		string(DependencyTypeAffects):     {},
 		"IMPACTS": {},
-		string(horizonmodels.DependencyTypeControls):         {},
-		string(horizonmodels.DependencyTypeManages):          {},
-		string(horizonmodels.DependencyTypeControlsAccess):   {},
-		string(horizonmodels.DependencyTypeImposesCondition): {},
+		string(DependencyTypeControls):         {},
+		string(DependencyTypeManages):          {},
+		string(DependencyTypeControlsAccess):   {},
+		string(DependencyTypeImposesCondition): {},
 	}
 
+	// AH relation names are canonical lowercase snake_case; preserve case
+	// here so lookups in {authority,execution,propagation}EdgeSet (whose keys
+	// come from string(ah.RelationName...)) match without uppercasing.
+	// Pre-AH legacy uppercase tokens (e.g. "PARENT_OF") embedded in those
+	// sets are intentionally preserved as dead entries: real persisted edges
+	// no longer carry them post-migration.
 	normalizeType := func(raw string) string {
-		return strings.ToUpper(strings.TrimSpace(raw))
+		return strings.TrimSpace(raw)
 	}
 	roleForType := func(edgeType string) string {
 		et := normalizeType(edgeType)
@@ -372,7 +379,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		case roleAuthority:
 			return "authority"
 		case roleExecution:
-			if et == string(horizonmodels.DependencyTypeGatekeepsDecision) || et == string(horizonmodels.DependencyTypeUsesMechanism) {
+			if et == string(DependencyTypeGatekeepsDecision) || et == string(DependencyTypeUsesMechanism) {
 				return "decision"
 			}
 			return "mechanism"
@@ -433,7 +440,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		if f == nil {
 			return false
 		}
-		if strings.ToUpper(strings.TrimSpace(string(f.Type))) == string(horizonmodels.FragmentTypeProgram) {
+		if horizonmodels.ClassSubtypeProgram.MatchesFragment(f) {
 			return true
 		}
 		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
@@ -444,8 +451,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		if f == nil {
 			return false
 		}
-		ft := strings.ToUpper(strings.TrimSpace(string(f.Type)))
-		if ft != string(horizonmodels.FragmentTypeOrganization) {
+		if f.Class != FragmentTypeOrganization {
 			return false
 		}
 		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
@@ -476,7 +482,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 				}
 				s := strings.TrimSpace(e.SourceFragmentID)
 				t := strings.TrimSpace(e.TargetFragmentID)
-				et := normalizeType(string(e.Type))
+				et := normalizeType(string(e.Relation))
 				if s == "" || t == "" || et == "" {
 					continue
 				}
@@ -528,7 +534,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		}
 		s := strings.TrimSpace(e.SourceFragmentID)
 		t := strings.TrimSpace(e.TargetFragmentID)
-		et := normalizeType(string(e.Type))
+		et := normalizeType(string(e.Relation))
 		if s == "" || t == "" || et == "" || role == "" {
 			return false
 		}
@@ -583,7 +589,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 			if e == nil {
 				continue
 			}
-			role := roleForType(string(e.Type))
+			role := roleForType(string(e.Relation))
 			if role == "" {
 				continue
 			}
@@ -690,11 +696,9 @@ func (h *HorizonHandlers) buildControlCorridor(
 		if f == nil {
 			return false
 		}
-		ft := strings.ToUpper(strings.TrimSpace(string(f.Type)))
-		switch ft {
-		case string(horizonmodels.FragmentTypeOrganization), string(horizonmodels.FragmentTypeProgram),
-			string(horizonmodels.FragmentTypePerson), string(horizonmodels.FragmentTypeDecisionPoint),
-			string(horizonmodels.FragmentTypeMechanism):
+		switch f.Class {
+		case FragmentTypeOrganization, FragmentTypePerson,
+			FragmentTypeDecisionPoint, FragmentTypeMechanism:
 			return true
 		}
 		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
@@ -742,9 +746,9 @@ func (h *HorizonHandlers) buildControlCorridor(
 		for _, role := range []string{roleAuthority, roleExecution} {
 			for _, e := range outByRole[role][cur.id] {
 				enqueueForward(e.To, cur.hop+1)
-				if e.Type == string(horizonmodels.DependencyTypeAppliesTo) ||
-					e.Type == string(horizonmodels.DependencyTypeControlsAccess) ||
-					e.Type == string(horizonmodels.DependencyTypeImposesCondition) {
+				if e.Type == string(DependencyTypeAppliesTo) ||
+					e.Type == string(DependencyTypeControlsAccess) ||
+					e.Type == string(DependencyTypeImposesCondition) {
 					impactRoots[e.To] = struct{}{}
 				}
 			}
@@ -757,11 +761,11 @@ func (h *HorizonHandlers) buildControlCorridor(
 	}
 	for id := range forwardDist {
 		f := getFragment(id)
-		ft := ""
+		var fc ah.FragmentClass
 		if f != nil {
-			ft = strings.ToUpper(strings.TrimSpace(string(f.Type)))
+			fc = f.Class
 		}
-		if ft == string(horizonmodels.FragmentTypeDecisionPoint) || ft == string(horizonmodels.FragmentTypeMechanism) || len(outByRole[roleExecution][id]) > 0 {
+		if fc == FragmentTypeDecisionPoint || fc == FragmentTypeMechanism || len(outByRole[roleExecution][id]) > 0 {
 			propStart[id] = struct{}{}
 		}
 	}
@@ -798,14 +802,14 @@ func (h *HorizonHandlers) buildControlCorridor(
 		if f == nil {
 			return false
 		}
-		ft := strings.ToUpper(strings.TrimSpace(string(f.Type)))
-		switch ft {
-		case string(horizonmodels.FragmentTypeMarket), string(horizonmodels.FragmentTypeOrganization),
-			string(horizonmodels.FragmentTypeProgram), string(horizonmodels.FragmentTypeProduct),
-			string(horizonmodels.FragmentTypeDomain), string(horizonmodels.FragmentTypeFacility),
-			string(horizonmodels.FragmentTypeCommunity):
+		switch f.Class {
+		case FragmentTypeMarket, FragmentTypeOrganization,
+			FragmentTypeProduct, FragmentTypeFacility,
+			FragmentTypeCommunity:
 			return true
 		}
+		// Legacy DOMAIN folded to canonical-path /domain/* (no FragmentClass);
+		// Legacy PROGRAM folded into FragmentTypeOrganization above (subtype=program).
 		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
 		return strings.HasPrefix(cp, "/market/") || strings.HasPrefix(cp, "/domain/") || strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/program/")
 	}
@@ -892,10 +896,10 @@ func (h *HorizonHandlers) buildControlCorridor(
 		if f == nil {
 			continue
 		}
-		ft := strings.ToUpper(strings.TrimSpace(string(f.Type)))
-		if ft == string(horizonmodels.FragmentTypeDecisionPoint) {
+		switch f.Class {
+		case FragmentTypeDecisionPoint:
 			decisions[id] = struct{}{}
-		} else if ft == string(horizonmodels.FragmentTypeMechanism) {
+		case FragmentTypeMechanism:
 			mechanisms[id] = struct{}{}
 		}
 	}
@@ -904,10 +908,10 @@ func (h *HorizonHandlers) buildControlCorridor(
 		if f == nil {
 			continue
 		}
-		ft := strings.ToUpper(strings.TrimSpace(string(f.Type)))
-		if ft == string(horizonmodels.FragmentTypeDecisionPoint) {
+		switch f.Class {
+		case FragmentTypeDecisionPoint:
 			decisions[id] = struct{}{}
-		} else if ft == string(horizonmodels.FragmentTypeMechanism) {
+		case FragmentTypeMechanism:
 			mechanisms[id] = struct{}{}
 		}
 	}
@@ -1469,7 +1473,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 			Seed:  containsID(seedIDs, id),
 		}
 		if f != nil {
-			n.Type = strings.TrimSpace(string(f.Type))
+			n.Type = strings.TrimSpace(string(f.Class))
 			n.CanonicalPath = strings.TrimSpace(f.CanonicalPath)
 		}
 		nodesOut = append(nodesOut, n)
@@ -1510,7 +1514,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 			Coverage: coverage,
 		}
 		if f != nil {
-			out.Type = strings.TrimSpace(string(f.Type))
+			out.Type = strings.TrimSpace(string(f.Class))
 			out.Path = strings.TrimSpace(f.CanonicalPath)
 		}
 		return out

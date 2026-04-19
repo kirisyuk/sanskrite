@@ -13,7 +13,7 @@ import (
 type EndpointInterestingness struct {
 	FragmentID      string
 	CanonicalPath   string
-	FragmentType    horizonmodels.FragmentType
+	FragmentType    FragmentType
 	Country         string
 	Hops            int
 	Occurrences     int
@@ -63,7 +63,7 @@ func ScoreInterestingEndpoints(
 			continue
 		}
 		tailFrag, err := loadEndpointFragment(ctx, fragmentsRepo, cache, tailID)
-		if err != nil || tailFrag == nil || !endpointTypeAllowed(tailFrag.Type) {
+		if err != nil || tailFrag == nil || !endpointFragmentAllowed(tailFrag) {
 			continue
 		}
 		score := scoreEndpoint(signal, localCountry, tailFrag, path, fragmentsRepo, cache, ctx, profile)
@@ -78,7 +78,7 @@ func ScoreInterestingEndpoints(
 			continue
 		}
 		tailFrag, err := loadTraceEndpointFragment(ctx, fragmentsRepo, cache, ev)
-		if err != nil || tailFrag == nil || !endpointTypeAllowed(tailFrag.Type) {
+		if err != nil || tailFrag == nil || !endpointFragmentAllowed(tailFrag) {
 			continue
 		}
 		score := scoreTraceEndpoint(signal, localCountry, tailFrag, ev, profile)
@@ -102,7 +102,7 @@ func ScoreInterestingEndpoints(
 		if item.Hops >= 2 {
 			summary.LongPathEndpoints++
 		}
-		if item.FragmentType == horizonmodels.FragmentTypeFacility {
+		if item.FragmentType == FragmentTypeFacility {
 			summary.FacilityEndpoints++
 		}
 		if item.Remote && item.Hops >= profile.NonObviousMinHops && item.Interestingness >= profile.NonObviousThreshold {
@@ -165,7 +165,7 @@ func scoreEndpoint(
 	out := EndpointInterestingness{
 		FragmentID:    strings.TrimSpace(tailFrag.ID),
 		CanonicalPath: strings.TrimSpace(tailFrag.CanonicalPath),
-		FragmentType:  tailFrag.Type,
+		FragmentType:  tailFrag.Class,
 		Country:       countryFromFragment(tailFrag),
 		Hops:          endpointMaxInt(0, len(path)-1),
 		Occurrences:   1,
@@ -229,15 +229,17 @@ func scoreEndpoint(
 		out.SurpriseScore += endpointMinFloat(float64(distinctPathTypes-1)*profile.PathDiversityStep, profile.PathDiversityCap)
 	}
 
+	// FragmentTypeFacility (=site) already covers legacy DEPOSIT (site/deposit
+	// subtype) under the AH taxonomy.
 	if strings.TrimSpace(signal.Axis) == horizonmodels.AxisGeoConflict && out.Remote &&
-		(out.FragmentType == horizonmodels.FragmentTypeFacility || out.FragmentType == horizonmodels.FragmentTypeMarket || out.FragmentType == horizonmodels.FragmentTypeDeposit) {
+		(out.FragmentType == FragmentTypeFacility || out.FragmentType == FragmentTypeMarket) {
 		out.BusinessScore += profile.ConflictBusinessTailBonus
 		out.Reasons = append(out.Reasons, "conflict_to_business_tail")
 	}
 	if (strings.TrimSpace(signal.Axis) == horizonmodels.AxisLogisticsCapacity ||
 		strings.TrimSpace(signal.Axis) == horizonmodels.AxisLogisticsLatency ||
 		strings.TrimSpace(signal.Axis) == horizonmodels.AxisPhysicalFlowSupply) &&
-		(out.FragmentType == horizonmodels.FragmentTypeFacility || out.FragmentType == horizonmodels.FragmentTypeMarket || out.FragmentType == horizonmodels.FragmentTypeDeposit) {
+		(out.FragmentType == FragmentTypeFacility || out.FragmentType == FragmentTypeMarket) {
 		out.BusinessScore += profile.FlowBusinessTailBonus
 		out.Reasons = append(out.Reasons, "flow_tail")
 	}
@@ -259,7 +261,7 @@ func scoreTraceEndpoint(
 	out := EndpointInterestingness{
 		FragmentID:    strings.TrimSpace(tailFrag.ID),
 		CanonicalPath: strings.TrimSpace(tailFrag.CanonicalPath),
-		FragmentType:  tailFrag.Type,
+		FragmentType:  tailFrag.Class,
 		Country:       countryFromFragment(tailFrag),
 		Hops:          endpointMaxInt(0, ev.Hops),
 		Occurrences:   1,
@@ -339,13 +341,14 @@ func scoreTraceEndpoint(
 		out.BusinessScore += profile.TraceFlowAxisBonus
 		out.Reasons = append(out.Reasons, "flow_axis_bridge")
 	}
+	// FragmentTypeFacility (=site) already covers legacy DEPOSIT under the AH taxonomy.
 	if strings.TrimSpace(signal.Axis) == horizonmodels.AxisGeoConflict && out.Remote &&
-		(out.FragmentType == horizonmodels.FragmentTypeFacility || out.FragmentType == horizonmodels.FragmentTypeMarket || out.FragmentType == horizonmodels.FragmentTypeDeposit) {
+		(out.FragmentType == FragmentTypeFacility || out.FragmentType == FragmentTypeMarket) {
 		out.BusinessScore += profile.ConflictBusinessTailBonus
 		out.Reasons = append(out.Reasons, "conflict_to_business_tail")
 	}
 	if isFlowAxis(strings.TrimSpace(signal.Axis)) &&
-		(out.FragmentType == horizonmodels.FragmentTypeFacility || out.FragmentType == horizonmodels.FragmentTypeMarket || out.FragmentType == horizonmodels.FragmentTypeDeposit) {
+		(out.FragmentType == FragmentTypeFacility || out.FragmentType == FragmentTypeMarket) {
 		out.BusinessScore += profile.FlowBusinessTailBonus
 		out.Reasons = append(out.Reasons, "flow_tail")
 	}
@@ -357,31 +360,43 @@ func scoreTraceEndpoint(
 	return out
 }
 
-func endpointTypeAllowed(ft horizonmodels.FragmentType) bool {
-	switch ft {
-	case horizonmodels.FragmentTypePerson, horizonmodels.FragmentTypeEvent, horizonmodels.FragmentTypeMediaChannel:
+// endpointFragmentAllowed gates which fragments may serve as propagation
+// endpoints. Person/event are filtered by class; legacy MEDIA_CHANNEL
+// (org/media_channel under AH) is filtered via the predicate so the
+// surrounding org/* taxonomy is not over-rejected.
+func endpointFragmentAllowed(frag *horizonmodels.HorizonFragment) bool {
+	if frag == nil {
 		return false
-	default:
-		return true
 	}
+	switch frag.Class {
+	case FragmentTypePerson, FragmentTypeEvent:
+		return false
+	}
+	if frag.IsLegacyMediaChannel() {
+		return false
+	}
+	return true
 }
 
 func endpointTypeBonus(_ string, frag *horizonmodels.HorizonFragment, profile EndpointScoringProfile) (float64, string) {
 	if frag == nil {
 		return 0, ""
 	}
-	switch frag.Type {
-	case horizonmodels.FragmentTypeFacility:
+	subtype := strings.TrimSpace(frag.Subtype)
+	switch frag.Class {
+	case FragmentTypeFacility:
+		if subtype == "deposit" {
+			return profile.DepositTypeWeight, "deposit_tail"
+		}
 		return profile.FacilityTypeWeight, "facility_tail"
-	case horizonmodels.FragmentTypeMarket:
+	case FragmentTypeMarket:
 		return profile.MarketTypeWeight, "market_tail"
-	case horizonmodels.FragmentTypeDeposit:
-		return profile.DepositTypeWeight, "deposit_tail"
-	case horizonmodels.FragmentTypeProgram:
-		return profile.ProgramTypeWeight, "program_tail"
-	case horizonmodels.FragmentTypeOrganization:
+	case FragmentTypeOrganization:
+		if subtype == "program" {
+			return profile.ProgramTypeWeight, "program_tail"
+		}
 		return profile.OrganizationTypeWeight, "org_tail"
-	case horizonmodels.FragmentTypeGeoRegion:
+	case FragmentTypeGeoRegion:
 		if strings.Contains(strings.ToLower(strings.TrimSpace(frag.GeoFeatureType)), "strait") ||
 			strings.Contains(strings.ToLower(strings.TrimSpace(frag.GeoFeatureType)), "canal") ||
 			strings.Contains(strings.ToLower(strings.TrimSpace(frag.CanonicalPath)), "gulf") {
@@ -460,7 +475,7 @@ func endpointAbstractionPenalty(frag *horizonmodels.HorizonFragment, overlay Pro
 		penalty += profile.GenericLocPenalty
 		reasons = append(reasons, "generic_loc_tail")
 	}
-	if frag.Type == horizonmodels.FragmentTypeOrganization && overlay.BusinessRole == "generic" && !strings.HasPrefix(path, "/gov/") {
+	if frag.Class == FragmentTypeOrganization && overlay.BusinessRole == "generic" && !strings.HasPrefix(path, "/gov/") {
 		penalty += profile.GenericOrgPenalty
 		reasons = append(reasons, "generic_org_tail")
 	}
@@ -488,11 +503,11 @@ func endpointSpecificityBonus(frag *horizonmodels.HorizonFragment, profile Endpo
 	path := strings.TrimSpace(frag.CanonicalPath)
 	bonus := 0.0
 	reasons := make([]string, 0, 2)
-	if frag.Type == horizonmodels.FragmentTypeFacility && !isGenericLocPath(path) {
+	if frag.Class == FragmentTypeFacility && !isGenericLocPath(path) {
 		bonus += profile.ConcreteFacilityBonus
 		reasons = append(reasons, "concrete_facility")
 	}
-	if frag.Type == horizonmodels.FragmentTypeMarket && !strings.Contains(path, "/global/") {
+	if frag.Class == FragmentTypeMarket && !strings.Contains(path, "/global/") {
 		bonus += profile.ConcreteMarketBonus
 		reasons = append(reasons, "concrete_market")
 	}
@@ -509,15 +524,15 @@ func isGenericLocPath(path string) bool {
 }
 
 func distinctBusinessPathTypes(path []string, fragmentsRepo *horizonrepo.HorizonFragmentsRepository, cache map[string]*horizonmodels.HorizonFragment, ctx context.Context) int {
-	seen := make(map[horizonmodels.FragmentType]bool)
+	seen := make(map[FragmentType]bool)
 	for _, id := range path {
 		frag, err := loadEndpointFragment(ctx, fragmentsRepo, cache, strings.TrimSpace(id))
 		if err != nil || frag == nil {
 			continue
 		}
-		switch frag.Type {
-		case horizonmodels.FragmentTypeFacility, horizonmodels.FragmentTypeMarket, horizonmodels.FragmentTypeDeposit, horizonmodels.FragmentTypeOrganization, horizonmodels.FragmentTypeGeoRegion, horizonmodels.FragmentTypeProgram:
-			seen[frag.Type] = true
+		switch frag.Class {
+		case FragmentTypeFacility, FragmentTypeMarket, FragmentTypeOrganization, FragmentTypeGeoRegion:
+			seen[frag.Class] = true
 		}
 	}
 	return len(seen)

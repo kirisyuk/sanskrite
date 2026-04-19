@@ -15,7 +15,7 @@ func TestDetectFacilityQualifierSemanticFromFragment(t *testing.T) {
 		{
 			name: "explicit object qualifier route",
 			frag: &models.HorizonFragment{
-				Type:          models.FragmentTypeFacility,
+				Class:          FragmentTypeFacility,
 				CanonicalPath: "/fac/sa/east-west-corridor",
 				Identifiers:   map[string]string{"objectQualifier": "route"},
 			},
@@ -24,7 +24,7 @@ func TestDetectFacilityQualifierSemanticFromFragment(t *testing.T) {
 		{
 			name: "route qualifier",
 			frag: &models.HorizonFragment{
-				Type:          models.FragmentTypeFacility,
+				Class:          FragmentTypeFacility,
 				CanonicalPath: "/fac/ae/jebel-ali-corridor",
 				Qualifiers:    map[string]interface{}{"route": true},
 			},
@@ -33,7 +33,7 @@ func TestDetectFacilityQualifierSemanticFromFragment(t *testing.T) {
 		{
 			name: "procurement qualifier",
 			frag: &models.HorizonFragment{
-				Type:          models.FragmentTypeFacility,
+				Class:          FragmentTypeFacility,
 				CanonicalPath: "/fac/us/vendor-gateway",
 				Qualifiers:    map[string]interface{}{"facilityRole": "procurement hub"},
 			},
@@ -42,7 +42,7 @@ func TestDetectFacilityQualifierSemanticFromFragment(t *testing.T) {
 		{
 			name: "supply qualifier",
 			frag: &models.HorizonFragment{
-				Type:          models.FragmentTypeFacility,
+				Class:          FragmentTypeFacility,
 				CanonicalPath: "/fac/de/supplier-park",
 				Identifiers:   map[string]string{"supplyChainRole": "supplier"},
 			},
@@ -51,7 +51,7 @@ func TestDetectFacilityQualifierSemanticFromFragment(t *testing.T) {
 		{
 			name: "no qualifier",
 			frag: &models.HorizonFragment{
-				Type:          models.FragmentTypeFacility,
+				Class:          FragmentTypeFacility,
 				CanonicalPath: "/fac/de/manufacturing-plant",
 			},
 			want: facilityQualifierSemanticNone,
@@ -68,39 +68,39 @@ func TestDetectFacilityQualifierSemanticFromFragment(t *testing.T) {
 
 func TestShouldSkipSameFacilityQualifierRecursion(t *testing.T) {
 	routeSource := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/global/red-sea-corridor",
 		Qualifiers:    map[string]interface{}{"route": true},
 	}
 	routeTarget := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/global/suez-route",
 		Qualifiers:    map[string]interface{}{"route_path": []interface{}{"/loc/eg/suez"}},
 	}
-	if !shouldSkipSameFacilityQualifierRecursion(routeSource, routeTarget.CanonicalPath, routeTarget.Type, routeTarget) {
+	if !shouldSkipSameFacilityQualifierRecursion(routeSource, routeTarget.CanonicalPath, routeTarget.Class, routeTarget) {
 		t.Fatalf("expected route->route recursion to be skipped")
 	}
 
 	supplySource := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/cn/supplier-cluster",
 		Identifiers:   map[string]string{"supplyChainRole": "supplier"},
 	}
 	procurementTarget := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/us/procurement-center",
 		Qualifiers:    map[string]interface{}{"role": "procurement"},
 	}
-	if shouldSkipSameFacilityQualifierRecursion(supplySource, procurementTarget.CanonicalPath, procurementTarget.Type, procurementTarget) {
+	if shouldSkipSameFacilityQualifierRecursion(supplySource, procurementTarget.CanonicalPath, procurementTarget.Class, procurementTarget) {
 		t.Fatalf("did not expect supply->procurement recursion skip")
 	}
 
 	supplyTarget := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/pl/downstream-supplier",
 		Qualifiers:    map[string]interface{}{"supplyRole": "supplier"},
 	}
-	if !shouldSkipSameFacilityQualifierRecursion(supplySource, supplyTarget.CanonicalPath, supplyTarget.Type, supplyTarget) {
+	if !shouldSkipSameFacilityQualifierRecursion(supplySource, supplyTarget.CanonicalPath, supplyTarget.Class, supplyTarget) {
 		t.Fatalf("expected supply->supply recursion to be skipped")
 	}
 }
@@ -108,17 +108,17 @@ func TestShouldSkipSameFacilityQualifierRecursion(t *testing.T) {
 func TestIsFacilityQualifierBusinessRelation_Route(t *testing.T) {
 	if isFacilityQualifierBusinessRelation(
 		facilityQualifierSemanticRoute,
-		string(models.DependencyTypeManages),
+		string(DependencyTypeManages),
 		"/person/jane-doe",
-		models.FragmentTypePerson,
+		FragmentTypePerson,
 	) {
 		t.Fatalf("route fac should not keep person/governance relation for business scouting")
 	}
 	if !isFacilityQualifierBusinessRelation(
 		facilityQualifierSemanticRoute,
-		string(models.DependencyTypeDependsOn),
+		string(DependencyTypeDependsOn),
 		"/org/sg/maersk",
-		models.FragmentTypeOrganization,
+		FragmentTypeOrganization,
 	) {
 		t.Fatalf("route fac should keep business dependency to logistics org")
 	}

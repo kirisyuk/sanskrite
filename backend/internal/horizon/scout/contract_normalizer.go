@@ -64,12 +64,12 @@ func (n *ContractNormalizer) Normalize(ctx context.Context, base *models.Horizon
 	if strings.TrimSpace(base.CanonicalPath) == "" && effectivePath != "" {
 		base.CanonicalPath = effectivePath
 	}
-	if base.Type == "" {
+	if base.Class == "" {
 		inferred := InferFragmentTypeFromCanonicalPath(strings.TrimSpace(base.CanonicalPath))
 		if inferred == "" {
-			inferred = models.FragmentTypeOrganization
+			inferred = FragmentTypeOrganization
 		}
-		base.Type = inferred
+		base.Class = inferred
 	}
 	if strings.TrimSpace(base.TenantID) == "" {
 		base.TenantID = "global"

@@ -49,7 +49,7 @@ func (f *fakeGeoNamesClient) GetCountryCode(_ context.Context, _, _ float64) (st
 func TestEnrichCoordinatesFromGeocoding_NullIslandDoesNotBlock(t *testing.T) {
 	cc := "AE"
 	frag := &hmodels.HorizonFragment{
-		Type: hmodels.FragmentTypeOrganization,
+		Class: FragmentTypeOrganization,
 		HomeLocation: &hmodels.Location{
 			Name:      "Dubai",
 			ISO3166_1: &cc,
@@ -75,7 +75,7 @@ func TestEnrichCoordinatesFromGeocoding_NullIslandDoesNotBlock(t *testing.T) {
 func TestEnrichCoordinatesFromGeocoding_MarketIsGeoRelevant(t *testing.T) {
 	cc := "US"
 	frag := &hmodels.HorizonFragment{
-		Type: hmodels.FragmentTypeMarket,
+		Class: FragmentTypeMarket,
 		HomeLocation: &hmodels.Location{
 			Name:      "Houston",
 			ISO3166_1: &cc,
@@ -99,7 +99,7 @@ func TestEnrichCoordinatesFromGeocoding_MarketIsGeoRelevant(t *testing.T) {
 
 func TestBuildLastSegmentAddressCandidates_MarketSkipsSectorSlugs(t *testing.T) {
 	frag := &hmodels.HorizonFragment{
-		Type:          hmodels.FragmentTypeMarket,
+		Class:          FragmentTypeMarket,
 		CanonicalPath: "/market/om/industrial/automotive",
 	}
 
@@ -111,7 +111,7 @@ func TestBuildLastSegmentAddressCandidates_MarketSkipsSectorSlugs(t *testing.T) 
 
 func TestBuildAddressFromFragment_FacilityUsesParentCountry(t *testing.T) {
 	frag := &hmodels.HorizonFragment{
-		Type:          hmodels.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/na/plant-7",
 		ParentPath:    "/org/us/acme-holding",
 		HomeLocation: &hmodels.Location{
@@ -127,7 +127,7 @@ func TestBuildAddressFromFragment_FacilityUsesParentCountry(t *testing.T) {
 
 func TestEnrichCoordinatesFromGeoNames_UsesGeoNamesIDForFacility(t *testing.T) {
 	frag := &hmodels.HorizonFragment{
-		Type: hmodels.FragmentTypeFacility,
+		Class: FragmentTypeFacility,
 		Identifiers: map[string]string{
 			"geonamesId": "292223",
 		},
@@ -155,7 +155,7 @@ func TestEnrichCoordinatesFromGeoNames_UsesGeoNamesIDForFacility(t *testing.T) {
 
 func TestEnrichCoordinatesFromGeoNames_UsesGeoNamesKBRefID(t *testing.T) {
 	frag := &hmodels.HorizonFragment{
-		Type: hmodels.FragmentTypeFacility,
+		Class: FragmentTypeFacility,
 		KBRefs: []hmodels.KBReference{
 			{KB: "GeoNames", ExternalID: "292223"},
 		},
@@ -181,13 +181,13 @@ func TestEnrichCoordinatesFromGeoNames_UsesGeoNamesKBRefID(t *testing.T) {
 func TestEnrichCoordinatesFromParent_Facility(t *testing.T) {
 	cc := "US"
 	parent := &hmodels.HorizonFragment{
-		Type:          hmodels.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/us/acme",
 		Coordinates:   &hmodels.Coordinates{Lat: 29.7604, Lon: -95.3698},
 		HomeLocation:  &hmodels.Location{ISO3166_1: &cc},
 	}
 	child := &hmodels.HorizonFragment{
-		Type:          hmodels.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/na/plant-7",
 	}
 
@@ -206,14 +206,14 @@ func TestEnrichCoordinatesFromParent_Facility(t *testing.T) {
 func TestBuildFacilityAddressCandidates_UsesParentContext(t *testing.T) {
 	cc := "US"
 	frag := &hmodels.HorizonFragment{
-		Type:          hmodels.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/na/petrochem-plant-alpha",
 		Identifiers: map[string]string{
 			"city": "Houston",
 		},
 	}
 	parent := &hmodels.HorizonFragment{
-		Type:          hmodels.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/us/acme",
 		Labels:        map[string]string{"en": "Acme Corp"},
 		HomeLocation:  &hmodels.Location{ISO3166_1: &cc},
@@ -237,7 +237,7 @@ func TestBuildFacilityAddressCandidates_UsesParentContext(t *testing.T) {
 
 func TestBuildAddressFromFragment_EntityNameCountryFallback(t *testing.T) {
 	frag := &hmodels.HorizonFragment{
-		Type:          hmodels.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/us/acme-corp",
 		Labels:        map[string]string{"en": "Acme Corp"},
 		Identifiers:   map[string]string{},
@@ -251,7 +251,7 @@ func TestBuildAddressFromFragment_EntityNameCountryFallback(t *testing.T) {
 
 func TestBuildLastSegmentAddressCandidates_AddsTailGeoVariants(t *testing.T) {
 	frag := &hmodels.HorizonFragment{
-		Type:          hmodels.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/kz/eco-resource-kz-almaty",
 	}
 
@@ -267,7 +267,7 @@ func TestBuildLastSegmentAddressCandidates_AddsTailGeoVariants(t *testing.T) {
 
 func TestInferPlaceHintCandidates_ExtractsTrailingGeoClues(t *testing.T) {
 	frag := &hmodels.HorizonFragment{
-		Type:          hmodels.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/cn/byd-electronic-huizhou-factory",
 		Labels:        map[string]string{"en": "Byd Electronic Huizhou Factory"},
 	}
@@ -287,7 +287,7 @@ func TestInferPlaceHintCandidates_ExtractsTrailingGeoClues(t *testing.T) {
 
 func TestInferPlaceHintCandidates_PrefersTwoTokenPlaceAfterSuffixTrim(t *testing.T) {
 	frag := &hmodels.HorizonFragment{
-		Type:          hmodels.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/vn/binh-duong-factory",
 		Labels:        map[string]string{"en": "Binh Duong Factory"},
 	}

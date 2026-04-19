@@ -920,7 +920,7 @@ func dependencyEdgeKey(edge *horizonmodels.DependencyEdge) string {
 	return strings.Join([]string{
 		strings.TrimSpace(edge.SourceFragmentID),
 		strings.TrimSpace(edge.TargetFragmentID),
-		string(edge.Type),
+		string(edge.Relation),
 	}, "|")
 }
 

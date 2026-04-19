@@ -298,7 +298,7 @@ func (h *HorizonHandlers) lensConsoleReadObject(ctx context.Context, lens *horiz
 	objectType := ""
 	if fragment != nil {
 		displayLabel = lensConsoleFragmentLabel(fragment)
-		objectType = strings.TrimSpace(string(fragment.Type))
+		objectType = strings.TrimSpace(string(fragment.Class))
 	} else if item != nil {
 		displayLabel = strings.TrimSpace(stringPtrValue(item.Label))
 		objectType = strings.TrimSpace(stringPtrValue(item.Type))
@@ -720,7 +720,7 @@ func buildLensConsoleSnapshot(fragments []*horizonmodels.HorizonFragment, items 
 			FragmentID:    strings.TrimSpace(frag.ID),
 			CanonicalPath: strings.TrimSpace(frag.CanonicalPath),
 			Label:         lensConsoleFragmentLabel(frag),
-			Type:          strings.TrimSpace(string(frag.Type)),
+			Type:          strings.TrimSpace(string(frag.Class)),
 		}
 		snapshot.Nodes = append(snapshot.Nodes, node)
 		seenNodeIDs[nodeID] = struct{}{}
@@ -826,7 +826,7 @@ func lensConsoleFragmentCandidate(frag *horizonmodels.HorizonFragment, score flo
 		"fragmentId":    strings.TrimSpace(frag.ID),
 		"canonicalPath": strings.TrimSpace(frag.CanonicalPath),
 		"label":         lensConsoleFragmentLabel(frag),
-		"type":          strings.TrimSpace(string(frag.Type)),
+		"type":          strings.TrimSpace(string(frag.Class)),
 		"description":   strings.TrimSpace(frag.Description),
 		"score":         score,
 	}

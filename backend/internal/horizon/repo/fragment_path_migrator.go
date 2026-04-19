@@ -142,7 +142,7 @@ func (m *FragmentPathMigrator) MoveCanonicalPath(ctx context.Context, fragmentID
 	m.fragmentsRepo.invalidateFragmentRedis(ctx, oldPath)
 
 	if m.redirectsRepo != nil {
-		_, _, _, _ = m.redirectsRepo.RecordObservation(ctx, "global", oldPath, targetPath, firstNonEmptyReason(reason, "path_migration"), string(frag.Type), 1, fragmentPathMigratorRedirectTTL)
+		_, _, _, _ = m.redirectsRepo.RecordObservation(ctx, "global", oldPath, targetPath, firstNonEmptyReason(reason, "path_migration"), string(frag.Class), 1, fragmentPathMigratorRedirectTTL)
 	}
 
 	res := &FragmentPathMigrationResult{

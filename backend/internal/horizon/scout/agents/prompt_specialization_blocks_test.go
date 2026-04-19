@@ -4,12 +4,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 func TestBuildObjectTypeTaskSpecializationBlock_FacilityRouteFocus(t *testing.T) {
-	got := buildObjectTypeTaskSpecializationBlock("/fac/global/red-sea-corridor", models.FragmentTypeFacility, "")
+	got := buildObjectTypeTaskSpecializationBlock("/fac/global/red-sea-corridor", FragmentTypeFacility, "")
 	for _, want := range []string{"route-qualified fac", "waypoint coordinates", "suppliers/logistics operators/customers"} {
 		if !strings.Contains(strings.ToLower(got), strings.ToLower(want)) {
 			t.Fatalf("facility specialization block missing %q", want)
@@ -20,7 +19,7 @@ func TestBuildObjectTypeTaskSpecializationBlock_FacilityRouteFocus(t *testing.T)
 func TestBuildObjectTypeTaskSpecializationBlockWithHints_FacilitySupplyFocus(t *testing.T) {
 	got := buildObjectTypeTaskSpecializationBlockWithHints(
 		"/fac/de/neutral-facility",
-		models.FragmentTypeFacility,
+		FragmentTypeFacility,
 		"",
 		map[string]interface{}{"supplyRole": "supplier hub"},
 		nil,
@@ -36,7 +35,7 @@ func TestBuildObjectTypeTaskSpecializationBlockWithHints_FacilitySupplyFocus(t *
 func TestBuildObjectTypeTaskSpecializationBlockWithHints_FacilityProcurementFocus(t *testing.T) {
 	got := buildObjectTypeTaskSpecializationBlockWithHints(
 		"/fac/us/vendor-center",
-		models.FragmentTypeFacility,
+		FragmentTypeFacility,
 		"",
 		nil,
 		map[string]string{"facilityRole": "procurement"},
@@ -64,7 +63,7 @@ func TestBuildExtractionSpecializationModulesBlock_ContainsCoreSupplyChain(t *te
 func TestBuildObjectQualifierContractBlock_Facility(t *testing.T) {
 	got := buildObjectQualifierContractBlockWithHints(
 		"/fac/global/red-sea-corridor",
-		models.FragmentTypeFacility,
+		FragmentTypeFacility,
 		map[string]interface{}{"route": true},
 		nil,
 		nil,

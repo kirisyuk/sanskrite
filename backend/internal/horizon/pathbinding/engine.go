@@ -421,10 +421,10 @@ func (e *Engine) relatedActorLookupRefs(ctx context.Context, canonicalPath strin
 	}
 
 	relatedIDs := make(map[string]struct{}, 8)
-	for _, edgeType := range []horizonmodels.DependencyType{
-		horizonmodels.DependencyTypeOwns,
-		horizonmodels.DependencyTypeControls,
-		horizonmodels.DependencyTypeOperatesIn,
+	for _, edgeType := range []DependencyType{
+		DependencyTypeOwns,
+		DependencyTypeControls,
+		DependencyTypeOperatesIn,
 	} {
 		et := edgeType
 		if isOrg {
@@ -485,7 +485,7 @@ func (e *Engine) zoneRefsForPath(ctx context.Context, canonicalPath string) []st
 	if len(frags) == 0 {
 		return nil
 	}
-	typ := horizonmodels.DependencyTypeAffects
+	typ := DependencyTypeAffects
 	refs := make([]string, 0, 8)
 	for _, frag := range frags {
 		if frag == nil || strings.TrimSpace(frag.ID) == "" {
@@ -503,7 +503,7 @@ func (e *Engine) zoneRefsForPath(ctx context.Context, canonicalPath string) []st
 			if err != nil || sourceFrag == nil {
 				continue
 			}
-			if sourceFrag.Type == horizonmodels.FragmentTypeAffectedZone || strings.HasPrefix(strings.TrimSpace(sourceFrag.CanonicalPath), "/zone/") {
+			if sourceFrag.IsLegacyAffectedZone() || strings.HasPrefix(strings.TrimSpace(sourceFrag.CanonicalPath), "/zone/") {
 				refs = append(refs, strings.TrimSpace(sourceFrag.CanonicalPath))
 			}
 		}

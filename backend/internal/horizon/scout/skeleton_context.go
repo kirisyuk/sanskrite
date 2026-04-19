@@ -156,10 +156,10 @@ func (e *ScoutEngine) buildMarketSkeletonContext(ctx context.Context, canonicalP
 
 	// Edges (only if fragment exists in DB; otherwise we can't query edges by ID).
 	if out.FragmentID != "" {
-		edgeType := models.DependencyTypeHasMarketSegment
+		edgeType := DependencyTypeHasMarketSegment
 		parents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &edgeType, 5)
 		children, _ := e.edgesRepo.ListBySource(ctx, "global", out.FragmentID, &edgeType, 15)
-		legacyType := models.DependencyTypeHasSubmarket
+		legacyType := DependencyTypeHasSubmarket
 		if legParents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &legacyType, 5); len(legParents) > 0 {
 			parents = append(parents, legParents...)
 		}
@@ -230,7 +230,7 @@ func (e *ScoutEngine) buildMarketSkeletonContext(ctx context.Context, canonicalP
 				continue
 			}
 			out.ParentEdges = append(out.ParentEdges, skeletonEdgeView{
-				Type:       string(ed.Type),
+				Type:       string(ed.Relation),
 				SourceID:   strings.TrimSpace(ed.SourceFragmentID),
 				TargetID:   strings.TrimSpace(ed.TargetFragmentID),
 				SourcePath: resolvePath(strings.TrimSpace(ed.SourceFragmentID)),
@@ -244,7 +244,7 @@ func (e *ScoutEngine) buildMarketSkeletonContext(ctx context.Context, canonicalP
 				continue
 			}
 			out.ChildEdges = append(out.ChildEdges, skeletonEdgeView{
-				Type:       string(ed.Type),
+				Type:       string(ed.Relation),
 				SourceID:   strings.TrimSpace(ed.SourceFragmentID),
 				TargetID:   strings.TrimSpace(ed.TargetFragmentID),
 				SourcePath: resolvePath(strings.TrimSpace(ed.SourceFragmentID)),
@@ -321,7 +321,7 @@ func (e *ScoutEngine) buildGovSkeletonContext(ctx context.Context, canonicalPath
 	}
 
 	if out.FragmentID != "" {
-		edgeType := models.DependencyTypeAdministers
+		edgeType := DependencyTypeAdministers
 		parents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &edgeType, 5)
 		children, _ := e.edgesRepo.ListBySource(ctx, "global", out.FragmentID, &edgeType, 15)
 
@@ -388,7 +388,7 @@ func (e *ScoutEngine) buildGovSkeletonContext(ctx context.Context, canonicalPath
 
 		toView := func(ed *models.DependencyEdge) skeletonEdgeView {
 			return skeletonEdgeView{
-				Type:        string(ed.Type),
+				Type:        string(ed.Relation),
 				SourceID:    strings.TrimSpace(ed.SourceFragmentID),
 				TargetID:    strings.TrimSpace(ed.TargetFragmentID),
 				SourcePath:  resolvePath(strings.TrimSpace(ed.SourceFragmentID)),
@@ -456,13 +456,13 @@ func (e *ScoutEngine) buildGovSkeletonContext(ctx context.Context, canonicalPath
 }
 
 // govStrategicEdgeTypes lists edge types that connect gov entities to the decision/mechanism layer.
-var govStrategicEdgeTypes = []models.DependencyType{
-	models.DependencyTypeGatekeepsDecision,
-	models.DependencyTypeControlsAccess,
-	models.DependencyTypeUsesMechanism,
-	models.DependencyTypeImposesCondition,
-	models.DependencyTypeAppliesTo,
-	models.DependencyTypeRegulates,
+var govStrategicEdgeTypes = []DependencyType{
+	DependencyTypeGatekeepsDecision,
+	DependencyTypeControlsAccess,
+	DependencyTypeUsesMechanism,
+	DependencyTypeImposesCondition,
+	DependencyTypeAppliesTo,
+	DependencyTypeRegulates,
 }
 
 // queryGovStrategicEdgesOutgoing returns outgoing strategic edges from this gov entity

@@ -126,7 +126,7 @@ func BuildFragmentStatePrimitives(fragment *hmodels.HorizonFragment, computedAt 
 	scopeRef := strings.TrimSpace(fragment.CanonicalPath)
 	nodeRefs := compactRefs([]string{scopeRef})
 	productRefs := []string(nil)
-	if fragment.Type == hmodels.FragmentTypeProduct {
+	if fragment.Class == FragmentTypeProduct {
 		productRefs = compactRefs([]string{scopeRef})
 	}
 	out := make([]*hmodels.AnalyticalPrimitive, 0, len(metricNames))

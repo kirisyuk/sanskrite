@@ -201,7 +201,7 @@ func (h *HorizonHandlers) resolveHomeWorkspaceEntities(ctx context.Context, quer
 			ID:            strings.TrimSpace(fragment.ID),
 			Name:          buildHomeWorkspaceEntityName(fragment),
 			CanonicalPath: canonicalPath,
-			Type:          strings.TrimSpace(string(fragment.Type)),
+			Type:          strings.TrimSpace(string(fragment.Class)),
 			Description:   strings.TrimSpace(fragment.Description),
 			Location:      buildHomeWorkspaceEntityLocation(fragment),
 			Industry:      buildHomeWorkspaceEntityIndustry(fragment),
@@ -714,7 +714,7 @@ func homeWorkspaceEntityRelevant(query string, fragment *horizonmodels.HorizonFr
 	if tokenOverlapCountLocal(candidateTokens, queryTokens) >= 2 {
 		return true
 	}
-	typ := strings.ToUpper(strings.TrimSpace(string(fragment.Type)))
+	typ := strings.ToUpper(strings.TrimSpace(string(fragment.Class)))
 	if (typ == "AFFECTED_ZONE" || typ == "FACILITY" || typ == "GEO_REGION" || typ == "PRODUCT" || typ == "ORGANIZATION") &&
 		tokenOverlapCountLocal(candidateTokens, queryTokens) >= 1 {
 		return true

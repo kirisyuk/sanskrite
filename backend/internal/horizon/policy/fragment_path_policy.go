@@ -3,47 +3,73 @@ package policy
 import (
 	"strings"
 
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
-var fragmentPathPrefixes = map[horizonmodels.FragmentType]string{
-	horizonmodels.FragmentTypeOrganization:  "/org/",
-	horizonmodels.FragmentTypeFacility:      "/fac/",
-	horizonmodels.FragmentTypeGeoRegion:     "/loc/",
-	horizonmodels.FragmentTypeProduct:       "/product/",
-	horizonmodels.FragmentTypePerson:        "/person/",
-	horizonmodels.FragmentTypeMediaChannel:  "/media/",
-	horizonmodels.FragmentTypeCommunity:     "/community/",
-	horizonmodels.FragmentTypeDomain:        "/domain/",
-	horizonmodels.FragmentTypeSphere:        "/sphere/",
-	horizonmodels.FragmentTypeSupplyLink:    "/supply-link/",
-	horizonmodels.FragmentTypeTrack:         "/track/",
-	horizonmodels.FragmentTypeProgram:       "/program/",
-	horizonmodels.FragmentTypeMarket:        "/market/",
-	horizonmodels.FragmentTypeEvent:         "/event/",
-	horizonmodels.FragmentTypeDeposit:       "/deposit/",
-	horizonmodels.FragmentTypeDecisionPoint: "/decision/",
-	horizonmodels.FragmentTypeMechanism:     "/mechanism/",
+// fragmentPathPrefixes maps an AH (Class, subtype) pair to its canonical
+// path prefix. Subtype="" means the entry applies to any subtype of the
+// class. More specific (Class, subtype) entries override the bare-class
+// entry.
+type classSubtypeKey struct {
+	Class   ah.FragmentClass
+	Subtype string
 }
 
-// ExpectedCanonicalPathPrefix returns the canonical path prefix for fragment type.
-func ExpectedCanonicalPathPrefix(fragType horizonmodels.FragmentType) string {
-	return fragmentPathPrefixes[fragType]
+var fragmentPathPrefixes = map[classSubtypeKey]string{
+	{Class: ah.FragmentClassOrg}:                                       "/org/",
+	{Class: ah.FragmentClassOrg, Subtype: subtypeProgram}:              "/program/",
+	{Class: ah.FragmentClassOrg, Subtype: "media_channel"}:             "/media/",
+	{Class: ah.FragmentClassSite}:                                      "/fac/",
+	{Class: ah.FragmentClassSite, Subtype: subtypeDeposit}:             "/deposit/",
+	{Class: ah.FragmentClassSite, Subtype: subtypeSupplyLink}:          "/supply-link/",
+	{Class: ah.FragmentClassGeo}:                                       "/loc/",
+	{Class: ah.FragmentClassGeo, Subtype: "affected_zone"}:             "/zone/",
+	{Class: ah.FragmentClassProduct}:                                   "/product/",
+	{Class: ah.FragmentClassPerson}:                                    "/person/",
+	{Class: ah.FragmentClassCommunity}:                                 "/community/",
+	{Class: ah.FragmentClassMarket}:                                    "/market/",
+	{Class: ah.FragmentClassMobileAsset}:                               "/track/",
+	{Class: ah.FragmentClassDecision}:                                  "/decision/",
+	{Class: ah.FragmentClassMechanism}:                                 "/mechanism/",
+	{Class: ah.FragmentClassEvidence}:                                  "/evidence/",
+	{Class: ah.FragmentClassEvidence, Subtype: "event"}:                "/event/",
+	{Class: ah.FragmentClassEvidence, Subtype: "domain_legacy"}:        "/domain/",
+	{Class: ah.FragmentClassEvidence, Subtype: "sphere_legacy"}:        "/sphere/",
 }
 
-// IsCanonicalPathAllowedForType checks path prefix with known exceptions.
-func IsCanonicalPathAllowedForType(fragType horizonmodels.FragmentType, canonicalPath string) bool {
+// ExpectedCanonicalPathPrefix returns the canonical path prefix for a
+// fragment (class, subtype). Falls back to the bare-class prefix when no
+// specialized subtype prefix is registered.
+func ExpectedCanonicalPathPrefix(class ah.FragmentClass, subtype string) string {
+	subtype = strings.TrimSpace(subtype)
+	if prefix, ok := fragmentPathPrefixes[classSubtypeKey{Class: class, Subtype: subtype}]; ok && prefix != "" {
+		return prefix
+	}
+	return fragmentPathPrefixes[classSubtypeKey{Class: class}]
+}
+
+// IsCanonicalPathAllowedForType checks the canonical path prefix with
+// known AH-aware exceptions (notably: org subtype=gov uses /gov/).
+func IsCanonicalPathAllowedForType(class ah.FragmentClass, subtype, canonicalPath string) bool {
 	path := strings.TrimSpace(canonicalPath)
 	if path == "" {
 		return false
 	}
-	expectedPrefix := ExpectedCanonicalPathPrefix(fragType)
+	expectedPrefix := ExpectedCanonicalPathPrefix(class, subtype)
 	if expectedPrefix == "" {
 		return true
 	}
 	if strings.HasPrefix(path, expectedPrefix) {
 		return true
 	}
-	// Government entities remain ORGANIZATION in type system but use /gov/* path namespace.
-	return fragType == horizonmodels.FragmentTypeOrganization && strings.HasPrefix(path, "/gov/")
+	// Government bodies stay class=org with subtype=gov but use the /gov/ namespace.
+	if class == ah.FragmentClassOrg && strings.HasPrefix(path, "/gov/") {
+		return true
+	}
+	// Legacy site subtypes may appear under the bare /fac/ prefix during
+	// the transitional window when subtype hasn't been backfilled yet.
+	if class == ah.FragmentClassSite && strings.HasPrefix(path, "/fac/") {
+		return true
+	}
+	return false
 }

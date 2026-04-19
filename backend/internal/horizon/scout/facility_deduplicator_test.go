@@ -52,12 +52,12 @@ func TestFacilitySlugCriticalDedupAnchor(t *testing.T) {
 
 func TestFacilityPlaceholderMatchCandidateRejectsTwoPlaceholders(t *testing.T) {
 	incoming := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/na/port-of-rotterdam",
 		Labels:        map[string]string{"en": "Port of Rotterdam"},
 	}
 	candidate := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/na/port-of-rotterdam",
 		Labels:        map[string]string{"en": "Port of Rotterdam"},
 	}

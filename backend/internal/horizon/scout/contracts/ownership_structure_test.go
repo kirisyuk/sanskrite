@@ -7,6 +7,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
 	basemodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type ownershipTestFragmentsRepo struct {
@@ -36,15 +37,15 @@ type ownershipTestEdgesRepo struct {
 	edges []*models.DependencyEdge
 }
 
-func (r ownershipTestEdgesRepo) ListBySource(_ context.Context, _ string, sourceFragmentID string, edgeType *models.DependencyType, limit int) ([]*models.DependencyEdge, error) {
+func (r ownershipTestEdgesRepo) ListBySource(_ context.Context, _ string, sourceFragmentID string, edgeType *DependencyType, limit int) ([]*models.DependencyEdge, error) {
 	return r.filter(limit, func(edge *models.DependencyEdge) bool {
-		return edge.SourceFragmentID == sourceFragmentID && (edgeType == nil || edge.Type == *edgeType)
+		return edge.SourceFragmentID == sourceFragmentID && (edgeType == nil || edge.Relation == *edgeType)
 	}), nil
 }
 
-func (r ownershipTestEdgesRepo) ListByTarget(_ context.Context, _ string, targetFragmentID string, edgeType *models.DependencyType, limit int) ([]*models.DependencyEdge, error) {
+func (r ownershipTestEdgesRepo) ListByTarget(_ context.Context, _ string, targetFragmentID string, edgeType *DependencyType, limit int) ([]*models.DependencyEdge, error) {
 	return r.filter(limit, func(edge *models.DependencyEdge) bool {
-		return edge.TargetFragmentID == targetFragmentID && (edgeType == nil || edge.Type == *edgeType)
+		return edge.TargetFragmentID == targetFragmentID && (edgeType == nil || edge.Relation == *edgeType)
 	}), nil
 }
 
@@ -153,8 +154,8 @@ func TestOwnershipStructureHandler_ShowsDownstreamOwnedBranchFromDynastyFocus(t 
 func TestOwnershipStructureHandler_ThinOwnershipGraphReturnsResearchPlan(t *testing.T) {
 	ctx := context.Background()
 	handler := NewOwnershipStructureHandler()
-	child := &models.HorizonFragment{ID: "child", CanonicalPath: "/org/ae/thin-opco", Type: models.FragmentTypeOrganization}
-	parent := &models.HorizonFragment{ID: "parent", CanonicalPath: "/org/ae/thin-holdco", Type: models.FragmentTypeOrganization}
+	child := &models.HorizonFragment{ID: "child", CanonicalPath: "/org/ae/thin-opco", Class: FragmentTypeOrganization}
+	parent := &models.HorizonFragment{ID: "parent", CanonicalPath: "/org/ae/thin-holdco", Class: FragmentTypeOrganization}
 	repo := ownershipTestFragmentsRepo{
 		byID:   map[string]*models.HorizonFragment{"child": child, "parent": parent},
 		byPath: map[string]*models.HorizonFragment{child.CanonicalPath: child, parent.CanonicalPath: parent},
@@ -164,7 +165,7 @@ func TestOwnershipStructureHandler_ThinOwnershipGraphReturnsResearchPlan(t *test
 			ID:               "thin-e1",
 			SourceFragmentID: "parent",
 			TargetFragmentID: "child",
-			Type:             models.DependencyTypeOwns,
+			Relation:             DependencyTypeOwns,
 		},
 	}
 
@@ -194,11 +195,11 @@ func TestOwnershipStructureHandler_ThinOwnershipGraphReturnsResearchPlan(t *test
 
 func ownershipFixture() (ownershipTestFragmentsRepo, []*models.DependencyEdge) {
 	fragments := []*models.HorizonFragment{
-		{ID: "dynasty", CanonicalPath: "/community/ae/dynasty/al-maktoum", Type: models.FragmentTypeCommunity},
-		{ID: "holdco", CanonicalPath: "/org/ae/difc-holdco", Type: models.FragmentTypeOrganization},
-		{ID: "opco", CanonicalPath: "/org/ae/difc-opco", Type: models.FragmentTypeOrganization},
-		{ID: "person", CanonicalPath: "/person/ae/sheikh-tariq", Type: models.FragmentTypePerson},
-		{ID: "media", CanonicalPath: "/media/telegram/al-maktoum-majlis", Type: models.FragmentTypeMediaChannel},
+		{ID: "dynasty", CanonicalPath: "/community/ae/dynasty/al-maktoum", Class: FragmentTypeCommunity},
+		{ID: "holdco", CanonicalPath: "/org/ae/difc-holdco", Class: FragmentTypeOrganization},
+		{ID: "opco", CanonicalPath: "/org/ae/difc-opco", Class: FragmentTypeOrganization},
+		{ID: "person", CanonicalPath: "/person/ae/sheikh-tariq", Class: FragmentTypePerson},
+		{ID: "media", CanonicalPath: "/media/telegram/al-maktoum-majlis", Class: ah.FragmentClassOrg, Subtype: "media_channel"},
 	}
 	repo := ownershipTestFragmentsRepo{
 		byID:   make(map[string]*models.HorizonFragment, len(fragments)),
@@ -214,7 +215,7 @@ func ownershipFixture() (ownershipTestFragmentsRepo, []*models.DependencyEdge) {
 			ID:               "e1",
 			SourceFragmentID: "dynasty",
 			TargetFragmentID: "holdco",
-			Type:             models.DependencyTypeOwns,
+			Relation:             DependencyTypeOwns,
 			Qualifiers: map[string]interface{}{
 				"share_type":        "beneficial",
 				"ownership_percent": "87",
@@ -227,7 +228,7 @@ func ownershipFixture() (ownershipTestFragmentsRepo, []*models.DependencyEdge) {
 			ID:               "e2",
 			SourceFragmentID: "holdco",
 			TargetFragmentID: "opco",
-			Type:             models.DependencyTypeOwns,
+			Relation:             DependencyTypeOwns,
 			Qualifiers: map[string]interface{}{
 				"share_type":            "direct",
 				"ownership_percent":     "100",
@@ -244,25 +245,25 @@ func ownershipFixture() (ownershipTestFragmentsRepo, []*models.DependencyEdge) {
 			ID:               "e3",
 			SourceFragmentID: "person",
 			TargetFragmentID: "dynasty",
-			Type:             models.DependencyTypeMemberOf,
+			Relation:             DependencyTypeMemberOf,
 		},
 		{
 			ID:               "e4",
 			SourceFragmentID: "person",
 			TargetFragmentID: "holdco",
-			Type:             models.DependencyTypeBoardMemberOf,
+			Relation:             DependencyTypeBoardMemberOf,
 		},
 		{
 			ID:               "e5",
 			SourceFragmentID: "person",
 			TargetFragmentID: "opco",
-			Type:             models.DependencyTypeEmployedBy,
+			Relation:             DependencyTypeEmployedBy,
 		},
 		{
 			ID:               "e6",
 			SourceFragmentID: "dynasty",
 			TargetFragmentID: "media",
-			Type:             models.DependencyTypeOperatesVia,
+			Relation:             DependencyTypeOperatesVia,
 		},
 	}
 	return repo, edges

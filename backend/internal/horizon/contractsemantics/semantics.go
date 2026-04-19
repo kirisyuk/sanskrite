@@ -6,8 +6,11 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
+// GraphLayer is the architectural layer an edge participates in for
+// the purposes of contract overlays and propagation.
 type GraphLayer string
 
 const (
@@ -17,27 +20,39 @@ const (
 	GraphLayerInterpretive    GraphLayer = "interpretive"
 )
 
+// DomainModeProfile is the contract surface for a single domain mode
+// (supply_chain, governance, ...). All edge slices use the AH
+// relation name space.
+//
+// Under the AH taxonomy many legacy edges (TRANSFORMS_INTO, USED_IN,
+// HAS_MARKET_SEGMENT, OPERATES_IN, PARTICIPATES_IN ...) have been
+// folded into attributes / canonical_path / siteTransforms and are
+// no longer edges. Domain-mode profiles only enumerate AH-existing
+// relations; the wire-format prompt allowlist returned by
+// AllowedEdgeStringsForDomainMode is sourced from the legacy
+// taxonomy SoT (so prompts keep their established vocabulary).
 type DomainModeProfile struct {
 	Mode               string
 	PrimaryLayer       GraphLayer
 	AllowedEntities    []string
-	AllowedEdges       []models.DependencyType
-	PathCarriedEdges   []models.DependencyType
-	OverlayEdges       []models.DependencyType
-	InterpretiveEdges  []models.DependencyType
+	AllowedEdges       []ah.RelationName
+	PathCarriedEdges   []ah.RelationName
+	OverlayEdges       []ah.RelationName
+	InterpretiveEdges  []ah.RelationName
 	ComplementaryModes []string
 	ArtifactKinds      []models.MaterializedKind
 	Description        string
 }
 
+// ComposedProfile is the union of multiple DomainModeProfiles.
 type ComposedProfile struct {
 	Modes              []string
 	PrimaryLayers      []GraphLayer
 	AllowedEntities    []string
-	AllowedEdges       []models.DependencyType
-	PathCarriedEdges   []models.DependencyType
-	OverlayEdges       []models.DependencyType
-	InterpretiveEdges  []models.DependencyType
+	AllowedEdges       []ah.RelationName
+	PathCarriedEdges   []ah.RelationName
+	OverlayEdges       []ah.RelationName
+	InterpretiveEdges  []ah.RelationName
 	ComplementaryModes []string
 	ArtifactKinds      []models.MaterializedKind
 }
@@ -54,6 +69,8 @@ var executionOrder = map[string]int{
 	taxonomy.DomainModeGeneral:      80,
 }
 
+// SortDomainModesForExecution returns a deterministic ordering of
+// domain modes by their canonical execution priority.
 func SortDomainModesForExecution(modes []string) []string {
 	normalized := taxonomy.NormalizeDomainModes(modes)
 	sort.SliceStable(normalized, func(i, j int) bool {
@@ -73,10 +90,14 @@ func SortDomainModesForExecution(modes []string) []string {
 	return normalized
 }
 
+// ProfileForDomainMode returns the contract profile for a single
+// domain mode. AllowedEdges is derived from the legacy wire SoT
+// translated into AH relations; the curated Path/Overlay/Interpretive
+// slices are AH-native.
 func ProfileForDomainMode(mode string) DomainModeProfile {
 	mode = normalizeMode(mode)
 	allowedEntities := append([]string(nil), taxonomy.AllowedEntityTypesForDomainMode(mode)...)
-	allowedEdges := normalizeEdgeTypes(taxonomy.AllowedEdgeTypesForDomainMode(mode))
+	allowedEdges := normalizeWireRelations(taxonomy.AllowedEdgeTypesForDomainMode(mode))
 	switch mode {
 	case taxonomy.DomainModeSupplyChain:
 		return DomainModeProfile{
@@ -84,25 +105,20 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 			PrimaryLayer:    GraphLayerPathCarried,
 			AllowedEntities: allowedEntities,
 			AllowedEdges:    allowedEdges,
-			PathCarriedEdges: []models.DependencyType{
-				models.DependencyTypeProduces,
-				models.DependencyTypeSuppliesTo,
-				models.DependencyTypeTransformsInto,
-				models.DependencyTypeAssemblesInto,
-				models.DependencyTypeUsedIn,
-				models.DependencyTypeExtractsFrom,
+			PathCarriedEdges: []ah.RelationName{
+				ah.RelationNameProduces,
+				ah.RelationNameSupplies,
+				ah.RelationNameLegConnects,
+				ah.RelationNamePassesThrough,
+				ah.RelationNameTransshipsAt,
+				ah.RelationNameRequiresCapability,
 			},
-			OverlayEdges: []models.DependencyType{
-				models.DependencyTypeLocatedIn,
-				models.DependencyTypeOperatesIn,
-				models.DependencyTypeParticipatesIn,
-				models.DependencyTypeTradedIn,
-				models.DependencyTypeHasMarketSegment,
-				models.DependencyTypeCompetesWith,
-				models.DependencyTypePartnersWith,
-				models.DependencyTypeOperatesVia,
-				models.DependencyTypeMemberOf,
-				models.DependencyTypeInvestsIn,
+			OverlayEdges: []ah.RelationName{
+				ah.RelationNameOperates,
+				ah.RelationNameJointVentureWith,
+				ah.RelationNameMemberOf,
+				ah.RelationNameInvestedIn,
+				ah.RelationNameSupportedBy,
 			},
 			ComplementaryModes: []string{
 				taxonomy.DomainModeGovernance,
@@ -119,23 +135,18 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 			PrimaryLayer:    GraphLayerPathCarried,
 			AllowedEntities: allowedEntities,
 			AllowedEdges:    allowedEdges,
-			PathCarriedEdges: []models.DependencyType{
-				models.DependencyTypeProduces,
-				models.DependencyTypeSuppliesTo,
-				models.DependencyTypeTransformsInto,
-				models.DependencyTypeAssemblesInto,
-				models.DependencyTypeUsedIn,
+			PathCarriedEdges: []ah.RelationName{
+				ah.RelationNameProduces,
+				ah.RelationNameSupplies,
+				ah.RelationNameRequiresCapability,
 			},
-			OverlayEdges: []models.DependencyType{
-				models.DependencyTypeControlsAccess,
-				models.DependencyTypeOperatesVia,
-				models.DependencyTypeLocatedIn,
-				models.DependencyTypeOperatesIn,
-				models.DependencyTypeParticipatesIn,
-				models.DependencyTypeHasMarketSegment,
+			OverlayEdges: []ah.RelationName{
+				ah.RelationNameOperates,
+				ah.RelationNameWields,
+				ah.RelationNameMemberOf,
 			},
-			InterpretiveEdges: []models.DependencyType{
-				models.DependencyTypeDependsOn,
+			InterpretiveEdges: []ah.RelationName{
+				ah.RelationNameInfluences,
 			},
 			ComplementaryModes: []string{
 				taxonomy.DomainModeGovernance,
@@ -194,28 +205,20 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 			PrimaryLayer:    GraphLayerContractOverlay,
 			AllowedEntities: allowedEntities,
 			AllowedEdges:    allowedEdges,
-			OverlayEdges: []models.DependencyType{
-				models.DependencyTypeRegulates,
-				models.DependencyTypeControlsAccess,
-				models.DependencyTypeImposesCondition,
-				models.DependencyTypeGatekeepsDecision,
-				models.DependencyTypeUsesMechanism,
-				models.DependencyTypeAppliesTo,
-				models.DependencyTypeInGeoScope,
-				models.DependencyTypeAffects,
-				models.DependencyTypeAdministers,
-				models.DependencyTypeParticipatesIn,
-				models.DependencyTypeTradedIn,
-				models.DependencyTypeLocatedIn,
-				models.DependencyTypeOperatesIn,
-				models.DependencyTypeHasSubgroup,
-				models.DependencyTypeMemberOf,
-				models.DependencyTypeAffiliatedWith,
-				models.DependencyTypeOperatesVia,
+			OverlayEdges: []ah.RelationName{
+				ah.RelationNameRegulates,
+				ah.RelationNameImposes,
+				ah.RelationNameGatekeeps,
+				ah.RelationNameWields,
+				ah.RelationNameEnactedVia,
+				ah.RelationNameSubjectTo,
+				ah.RelationNameConstrainedBy,
+				ah.RelationNameOperates,
+				ah.RelationNameMemberOf,
 			},
-			InterpretiveEdges: []models.DependencyType{
-				models.DependencyTypeInfluences,
-				models.DependencyTypeDependsOn,
+			InterpretiveEdges: []ah.RelationName{
+				ah.RelationNameInfluences,
+				ah.RelationNameDisrupts,
 			},
 			ArtifactKinds: []models.MaterializedKind{
 				models.MaterializedKindRegulatoryImpactMap,
@@ -254,27 +257,18 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 			PrimaryLayer:    GraphLayerInterpretive,
 			AllowedEntities: allowedEntities,
 			AllowedEdges:    allowedEdges,
-			OverlayEdges: []models.DependencyType{
-				models.DependencyTypeParticipatesIn,
-				models.DependencyTypeTradedIn,
-				models.DependencyTypeOwns,
-				models.DependencyTypeSubsidiaryOf,
-				models.DependencyTypeControls,
-				models.DependencyTypeSuppliesTo,
-				models.DependencyTypeRegulates,
-				models.DependencyTypeInvestsIn,
-				models.DependencyTypePartnersWith,
-				models.DependencyTypeLocatedIn,
-				models.DependencyTypeOperatesIn,
-				models.DependencyTypeHasSubgroup,
-				models.DependencyTypeMemberOf,
-				models.DependencyTypeAffiliatedWith,
-				models.DependencyTypeOperatesVia,
+			OverlayEdges: []ah.RelationName{
+				ah.RelationNameBeneficiallyOwns,
+				ah.RelationNameSubsidiaryOf,
+				ah.RelationNameControlsVia,
+				ah.RelationNameSupplies,
+				ah.RelationNameRegulates,
+				ah.RelationNameInvestedIn,
+				ah.RelationNameJointVentureWith,
+				ah.RelationNameMemberOf,
 			},
-			InterpretiveEdges: []models.DependencyType{
-				models.DependencyTypeDependsOn,
-				models.DependencyTypeInfluences,
-				models.DependencyTypeCompetesWith,
+			InterpretiveEdges: []ah.RelationName{
+				ah.RelationNameInfluences,
 			},
 			ArtifactKinds:      []models.MaterializedKind{models.MaterializedKindEcosystemMap},
 			ComplementaryModes: []string{taxonomy.DomainModeSupplyChain, taxonomy.DomainModeServiceChain, taxonomy.DomainModeGovernance, taxonomy.DomainModeMarket, taxonomy.DomainModePolicyImpact},
@@ -285,30 +279,24 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 	}
 }
 
+// AllowedEdgeStringsForDomainMode returns the wire-format strings
+// (UPPER_SNAKE legacy DependencyType) of allowed edges for a domain
+// mode. This is the stable boundary used by LLM prompts and the
+// frontend that has not yet migrated to the AH wire vocabulary.
 func AllowedEdgeStringsForDomainMode(mode string) []string {
-	profile := ProfileForDomainMode(mode)
-	if len(profile.AllowedEdges) == 0 {
-		return nil
-	}
-	out := make([]string, 0, len(profile.AllowedEdges))
-	for _, edgeType := range profile.AllowedEdges {
-		normalized := strings.TrimSpace(string(edgeType))
-		if normalized == "" {
-			continue
-		}
-		out = append(out, normalized)
-	}
-	return out
+	return taxonomy.AllowedEdgeTypesForDomainMode(normalizeMode(mode))
 }
 
+// ComposeDomainModes unions multiple domain profiles into a single
+// composed profile, deduplicating by AH relation.
 func ComposeDomainModes(modes []string) ComposedProfile {
 	ordered := SortDomainModesForExecution(modes)
 	out := ComposedProfile{Modes: ordered}
 	entitySeen := map[string]struct{}{}
-	edgeSeen := map[models.DependencyType]struct{}{}
-	pathSeen := map[models.DependencyType]struct{}{}
-	overlaySeen := map[models.DependencyType]struct{}{}
-	interpretSeen := map[models.DependencyType]struct{}{}
+	edgeSeen := map[ah.RelationName]struct{}{}
+	pathSeen := map[ah.RelationName]struct{}{}
+	overlaySeen := map[ah.RelationName]struct{}{}
+	interpretSeen := map[ah.RelationName]struct{}{}
 	compSeen := map[string]struct{}{}
 	kindSeen := map[models.MaterializedKind]struct{}{}
 	layerSeen := map[GraphLayer]struct{}{}
@@ -329,10 +317,10 @@ func ComposeDomainModes(modes []string) ComposedProfile {
 			entitySeen[e] = struct{}{}
 			out.AllowedEntities = append(out.AllowedEntities, e)
 		}
-		appendUniqueEdgeTypes(&out.AllowedEdges, edgeSeen, profile.AllowedEdges)
-		appendUniqueEdgeTypes(&out.PathCarriedEdges, pathSeen, profile.PathCarriedEdges)
-		appendUniqueEdgeTypes(&out.OverlayEdges, overlaySeen, profile.OverlayEdges)
-		appendUniqueEdgeTypes(&out.InterpretiveEdges, interpretSeen, profile.InterpretiveEdges)
+		appendUniqueRelations(&out.AllowedEdges, edgeSeen, profile.AllowedEdges)
+		appendUniqueRelations(&out.PathCarriedEdges, pathSeen, profile.PathCarriedEdges)
+		appendUniqueRelations(&out.OverlayEdges, overlaySeen, profile.OverlayEdges)
+		appendUniqueRelations(&out.InterpretiveEdges, interpretSeen, profile.InterpretiveEdges)
 		for _, mode := range profile.ComplementaryModes {
 			mode = normalizeMode(mode)
 			if mode == "" {
@@ -358,41 +346,51 @@ func ComposeDomainModes(modes []string) ComposedProfile {
 	return out
 }
 
-func ModeAllowsEdge(mode string, edgeType models.DependencyType) bool {
+// ModeAllowsEdge reports whether the AH relation is permitted in
+// the named domain mode.
+func ModeAllowsEdge(mode string, rel ah.RelationName) bool {
+	rel = normalizeRelation(rel)
+	if rel == "" {
+		return false
+	}
 	profile := ProfileForDomainMode(mode)
-	edgeType = normalizeEdgeType(edgeType)
 	for _, allowed := range profile.AllowedEdges {
-		if normalizeEdgeType(allowed) == edgeType {
+		if normalizeRelation(allowed) == rel {
 			return true
 		}
 	}
 	return false
 }
 
-func EdgeLayer(edgeType models.DependencyType) GraphLayer {
-	edgeType = normalizeEdgeType(edgeType)
-	switch edgeType {
-	case models.DependencyTypeAffects, models.DependencyTypeTriggeredBy:
+// EdgeLayer assigns an AH relation to its architectural graph layer.
+func EdgeLayer(rel ah.RelationName) GraphLayer {
+	switch normalizeRelation(rel) {
+	case ah.RelationNameDisrupts:
 		return GraphLayerCorePropagation
-	case models.DependencyTypeProduces, models.DependencyTypeSuppliesTo, models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto, models.DependencyTypeUsedIn, models.DependencyTypeExtractsFrom:
+	case ah.RelationNameProduces, ah.RelationNameSupplies,
+		ah.RelationNameLegConnects, ah.RelationNamePassesThrough,
+		ah.RelationNameTransshipsAt, ah.RelationNameRequiresCapability:
 		return GraphLayerPathCarried
-	case models.DependencyTypeOwns, models.DependencyTypeSubsidiaryOf, models.DependencyTypeControls,
-		models.DependencyTypeManages, models.DependencyTypeInvestsIn, models.DependencyTypeBoardMemberOf,
-		models.DependencyTypeEmployedBy, models.DependencyTypeFounded, models.DependencyTypeAdministers,
-		models.DependencyTypeAssures, models.DependencyTypeRegulates, models.DependencyTypeControlsAccess,
-		models.DependencyTypeImposesCondition, models.DependencyTypeGatekeepsDecision, models.DependencyTypeUsesMechanism,
-		models.DependencyTypeAppliesTo, models.DependencyTypeParticipatesIn, models.DependencyTypeLocatedIn,
-		models.DependencyTypeOperatesIn, models.DependencyTypeHasMarketSegment, models.DependencyTypePartnersWith,
-		models.DependencyTypeHasSubgroup, models.DependencyTypeMemberOf, models.DependencyTypeAffiliatedWith,
-		models.DependencyTypeOperatesVia:
+	case ah.RelationNameBeneficiallyOwns, ah.RelationNameSubsidiaryOf, ah.RelationNameControlsVia,
+		ah.RelationNameOperates, ah.RelationNameInvestedIn,
+		ah.RelationNameAssures, ah.RelationNameRegulates, ah.RelationNameImposes,
+		ah.RelationNameGatekeeps, ah.RelationNameWields, ah.RelationNameEnactedVia,
+		ah.RelationNameSubjectTo, ah.RelationNameConstrainedBy,
+		ah.RelationNameMemberOf, ah.RelationNameJointVentureWith,
+		ah.RelationNameManagedBy, ah.RelationNameHoldsBoardSeat,
+		ah.RelationNameSupportedBy, ah.RelationNameCharters:
 		return GraphLayerContractOverlay
+	case ah.RelationNameInfluences:
+		return GraphLayerInterpretive
 	default:
 		return GraphLayerInterpretive
 	}
 }
 
-func EdgeSupportsPathCarrying(edgeType models.DependencyType) bool {
-	return EdgeLayer(edgeType) == GraphLayerPathCarried
+// EdgeSupportsPathCarrying reports whether the relation participates
+// in a path-carried (operational) flow.
+func EdgeSupportsPathCarrying(rel ah.RelationName) bool {
+	return EdgeLayer(rel) == GraphLayerPathCarried
 }
 
 func normalizeMode(mode string) string {
@@ -403,24 +401,46 @@ func normalizeMode(mode string) string {
 	return normalized[0]
 }
 
-func normalizeEdgeTypes(values []string) []models.DependencyType {
-	out := make([]models.DependencyType, 0, len(values))
+// normalizeWireRelations translates legacy UPPER_SNAKE wire strings
+// from the taxonomy SoT into canonical AH relation names. Wire
+// strings that have no AH edge home (folded into attributes,
+// canonical_path, or dropped per migration_map.yaml) are silently
+// skipped — those vocabulary items remain on the wire for prompt
+// continuity but no longer correspond to a real edge.
+func normalizeWireRelations(values []string) []ah.RelationName {
+	out := make([]ah.RelationName, 0, len(values))
+	seen := make(map[ah.RelationName]struct{}, len(values))
 	for _, v := range values {
-		if t := normalizeEdgeType(models.DependencyType(v)); t != "" {
-			out = append(out, t)
+		rel, ok := models.NormalizeWireRelationStrict(v)
+		if !ok {
+			continue
 		}
+		if _, dup := seen[rel]; dup {
+			continue
+		}
+		seen[rel] = struct{}{}
+		out = append(out, rel)
 	}
 	return out
 }
 
-func normalizeEdgeType(edgeType models.DependencyType) models.DependencyType {
-	edgeType = models.DependencyType(strings.TrimSpace(strings.ToUpper(string(edgeType))))
-	return edgeType
+func normalizeRelation(rel ah.RelationName) ah.RelationName {
+	trimmed := strings.TrimSpace(string(rel))
+	if trimmed == "" {
+		return ""
+	}
+	if normalized, ok := ah.NormalizeRelation(trimmed); ok {
+		return normalized
+	}
+	if normalized, ok := models.NormalizeWireRelationStrict(trimmed); ok {
+		return normalized
+	}
+	return ah.RelationName(trimmed)
 }
 
-func appendUniqueEdgeTypes(dst *[]models.DependencyType, seen map[models.DependencyType]struct{}, values []models.DependencyType) {
+func appendUniqueRelations(dst *[]ah.RelationName, seen map[ah.RelationName]struct{}, values []ah.RelationName) {
 	for _, value := range values {
-		value = normalizeEdgeType(value)
+		value = normalizeRelation(value)
 		if value == "" {
 			continue
 		}

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -62,10 +63,20 @@ func FilterDomainRelations(ctx context.Context, mode string, rels []DiscoveredRe
 	}
 
 	profile := contractsemantics.ProfileForDomainMode(mode)
-	allowedEdges := make([]string, 0, len(profile.AllowedEdges))
+	// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+	// profile.AllowedEdges is the AH-canonical (snake_case) projection;
+	// taxonomy.AllowedEdgeTypesForDomainMode is the SoT wire-form
+	// allowlist and contains tokens that are folded/dropped at the AH
+	// boundary but still must be accepted at the scout layer (e.g.
+	// HAS_SUBGROUP, AFFILIATED_WITH for community-anchored governance
+	// edges, OPERATES_VIA wire form, etc.). We union both so the
+	// per-token check below matches whichever shape the caller passed.
+	wireAllowed := taxonomy.AllowedEdgeTypesForDomainMode(mode)
+	allowedEdges := make([]string, 0, len(profile.AllowedEdges)+len(wireAllowed))
 	for _, edgeType := range profile.AllowedEdges {
 		allowedEdges = append(allowedEdges, string(edgeType))
 	}
+	allowedEdges = append(allowedEdges, wireAllowed...)
 	allowedEntities := profile.AllowedEntities
 
 	// If domain mode doesn't specify limits, allow all.
@@ -79,8 +90,27 @@ func FilterDomainRelations(ctx context.Context, mode string, rels []DiscoveredRe
 	for _, rel := range rels {
 		// 1. Check Edge Type
 		if len(allowedEdges) > 0 {
-			normalizedType := taxonomy.NormalizeRelationType(rel.RelationType)
-			if normalizedType == "" || !filterContains(allowedEdges, normalizedType) {
+			// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+			// `allowedEdges` is sourced from contractsemantics.ProfileForDomainMode,
+			// which returns canonical lowercase ah.RelationName entries (the
+			// AH taxonomy's snake_case form). Legacy callers still pass
+			// UPPER_SNAKE wire tokens (e.g. "OWNS", "CONTROLS_ACCESS",
+			// "IMPOSES_CONDITION") so we route the probe through the wire→AH
+			// alias map (NormalizeWireRelationStrict) before comparing.
+			// Falls back to the upper-case wire form for the strict equality
+			// path so legacy tokens that have NO AH home (Dropped relations
+			// in legacyRelationAliases) still get a single equality check.
+			normalizedWire := taxonomy.NormalizeRelationType(rel.RelationType)
+			matched := false
+			if normalizedWire != "" && filterContains(allowedEdges, normalizedWire) {
+				matched = true
+			}
+			if !matched {
+				if ahRel, ok := models.NormalizeWireRelationStrict(rel.RelationType); ok && filterContains(allowedEdges, string(ahRel)) {
+					matched = true
+				}
+			}
+			if !matched {
 				dropped++
 				trace.Log(ctx, "domain_isolation", "domain_isolation.exception", map[string]any{
 					"mode":         mode,

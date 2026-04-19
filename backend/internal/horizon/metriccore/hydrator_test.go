@@ -73,7 +73,7 @@ func TestInferOperationalTargetContractRecognizesToyMarketAndCustoms(t *testing.
 	t.Parallel()
 	market := &horizonmodels.HorizonFragment{
 		CanonicalPath:  "/market/kz/consumer-goods/toys",
-		Type:           horizonmodels.FragmentTypeMarket,
+		Class:          FragmentTypeMarket,
 		MarketDomain:   "consumer",
 		MarketVertical: "toys",
 		Labels:         map[string]string{"en": "Kazakhstan toy market"},
@@ -88,7 +88,7 @@ func TestInferOperationalTargetContractRecognizesToyMarketAndCustoms(t *testing.
 
 	customs := &horizonmodels.HorizonFragment{
 		CanonicalPath: "/gov/kz/state-revenue-committee",
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 		GovType:       "committee",
 		Labels:        map[string]string{"en": "State Revenue Committee"},
 		Description:   "Kazakhstan customs and revenue authority",
@@ -103,7 +103,7 @@ func TestInferOperationalTargetContractRecognizesToyMarketAndCustoms(t *testing.
 
 	product := &horizonmodels.HorizonFragment{
 		CanonicalPath: "/product/finished/mechanical/assembly/toys",
-		Type:          horizonmodels.FragmentTypeProduct,
+		Class:         FragmentTypeProduct,
 		Labels:        map[string]string{"en": "Toys"},
 	}
 	class, reqs = inferOperationalTargetContract(product)
@@ -116,7 +116,7 @@ func TestInferOperationalTargetContractRecognizesToyMarketAndCustoms(t *testing.
 
 	industrialProduct := &horizonmodels.HorizonFragment{
 		CanonicalPath: "/product/component/mechanical/manufacturing/automotive-spare-parts",
-		Type:          horizonmodels.FragmentTypeProduct,
+		Class:         FragmentTypeProduct,
 		Labels:        map[string]string{"en": "Automotive Spare Parts"},
 	}
 	class, reqs = inferOperationalTargetContract(industrialProduct)

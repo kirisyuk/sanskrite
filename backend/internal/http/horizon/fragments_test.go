@@ -12,7 +12,8 @@ func TestFragmentToGeoItem_IncludesAffectedZoneWithCoordinates(t *testing.T) {
 	fragment := &models.HorizonFragment{
 		ID:             "zone-1",
 		CanonicalPath:  "/zone/sea/infrastructure_disruption/strait-of-hormuz",
-		Type:           models.FragmentTypeAffectedZone,
+		Class:         models.ClassSubtypeAffectedZone.Class,
+		Subtype:       models.ClassSubtypeAffectedZone.Subtype,
 		Labels:         map[string]string{"en": "Strait of Hormuz (critical infra)"},
 		Coordinates:    &models.Coordinates{Lat: 26.5667, Lon: 56.2500},
 		RadiusKm:       180,
@@ -52,7 +53,8 @@ func TestFragmentToGeoItem_ConflictLinkedInfraIsExposedToMap(t *testing.T) {
 	fragment := &models.HorizonFragment{
 		ID:             "zone-fujairah",
 		CanonicalPath:  "/zone/ae/infrastructure_disruption/fujairah",
-		Type:           models.FragmentTypeAffectedZone,
+		Class:         models.ClassSubtypeAffectedZone.Class,
+		Subtype:       models.ClassSubtypeAffectedZone.Subtype,
 		Labels:         map[string]string{"en": "Fujairah (systems disruption)"},
 		Description:    "Fujairah (systems disruption) - systems disruption",
 		Coordinates:    &models.Coordinates{Lat: 25.1288, Lon: 56.3265},
@@ -93,7 +95,8 @@ func TestReadZoneActivitySnapshot_FallsBackToSignalLandingQualifiers(t *testing.
 	fragment := &models.HorizonFragment{
 		ID:            "zone-kharg",
 		CanonicalPath: "/zone/ir/military_conflict/kharg-island-crude-oil-export-terminal",
-		Type:          models.FragmentTypeAffectedZone,
+		Class:         models.ClassSubtypeAffectedZone.Class,
+		Subtype:       models.ClassSubtypeAffectedZone.Subtype,
 		Coordinates:   &models.Coordinates{Lat: 29.25, Lon: 50.32},
 		RadiusKm:      12,
 		Qualifiers: map[string]interface{}{

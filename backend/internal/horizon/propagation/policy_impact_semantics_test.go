@@ -7,7 +7,7 @@ import (
 )
 
 func TestPolicyImpactTransferFactor_AllowsConfiguredAxis(t *testing.T) {
-	f, ok := policyImpactTransferFactor(horizonmodels.DependencyTypeRegulates, horizonmodels.AxisLegalCompliance)
+	f, ok := policyImpactTransferFactor(DependencyTypeRegulates, horizonmodels.AxisLegalCompliance)
 	if !ok {
 		t.Fatalf("expected legal/compliance to be allowed on REGULATES")
 	}
@@ -17,7 +17,7 @@ func TestPolicyImpactTransferFactor_AllowsConfiguredAxis(t *testing.T) {
 }
 
 func TestPolicyImpactTransferFactor_BlocksUnsupportedAxis(t *testing.T) {
-	if _, ok := policyImpactTransferFactor(horizonmodels.DependencyTypeRegulates, horizonmodels.AxisLogisticsCapacity); ok {
+	if _, ok := policyImpactTransferFactor(DependencyTypeRegulates, horizonmodels.AxisLogisticsCapacity); ok {
 		t.Fatalf("expected logistics/capacity to be blocked on REGULATES")
 	}
 }
@@ -39,11 +39,11 @@ func TestPolicyImpactDecodeScopeFactor_JurisdictionFilter(t *testing.T) {
 		},
 	}
 	inScope := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 		CanonicalPath: "/org/kz/ministry-of-finance",
 	}
 	outOfScope := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 		CanonicalPath: "/org/ae/mubadala",
 	}
 
@@ -62,7 +62,7 @@ func TestPolicyImpactDecodeScopeFactor_LegacyOrgPathBlocked(t *testing.T) {
 		},
 	}
 	legacy := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 		CanonicalPath: "/org/mubadala-investment-company-pjsc",
 	}
 	if factor, ok := policyImpactDecodeScopeFactor(legacy, scenario); ok || factor > 0 {

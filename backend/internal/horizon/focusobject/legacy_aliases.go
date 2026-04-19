@@ -1,0 +1,99 @@
+package focusobject
+
+import (
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+)
+
+// Package-local aliases that retain the legacy DependencyType/FragmentType
+// vocabulary used throughout the focusobject package while we run the AH
+// taxonomy "Big Bang" migration. Source-of-truth mapping:
+// docs/taxonomy/migration_map.yaml.
+//
+// See backend/internal/horizon/scout/legacy_aliases.go for the canonical
+// template — this file is a verbatim per-package replica.
+
+// FragmentType is the focusobject-local alias for ah.FragmentClass.
+type FragmentType = ah.FragmentClass
+
+// DependencyType is the focusobject-local alias for ah.RelationName.
+type DependencyType = ah.RelationName
+
+const (
+	FragmentTypeOrganization  = ah.FragmentClassOrg
+	FragmentTypeFacility      = ah.FragmentClassSite
+	FragmentTypeGeoRegion     = ah.FragmentClassGeo
+	FragmentTypeProduct       = ah.FragmentClassProduct
+	FragmentTypeMarket        = ah.FragmentClassMarket
+	FragmentTypePerson        = ah.FragmentClassPerson
+	FragmentTypeCommunity     = ah.FragmentClassCommunity
+	FragmentTypeDecisionPoint = ah.FragmentClassDecision
+	FragmentTypeMechanism     = ah.FragmentClassMechanism
+	FragmentTypeTrack         = ah.FragmentClassMobileAsset
+	FragmentTypeEvent         = ah.FragmentClassEvidence
+)
+
+const (
+	DependencyTypeOwns              = ah.RelationNameBeneficiallyOwns
+	DependencyTypeSubsidiaryOf      = ah.RelationNameSubsidiaryOf
+	DependencyTypeControls          = ah.RelationNameControlsVia
+	DependencyTypeInvestsIn         = ah.RelationNameInvestedIn
+	DependencyTypeSuppliesTo        = ah.RelationNameSupplies
+	DependencyTypeProduces          = ah.RelationNameProduces
+	DependencyTypeRegulates         = ah.RelationNameRegulates
+	DependencyTypeAssures           = ah.RelationNameAssures
+	DependencyTypeInfluences        = ah.RelationNameInfluences
+	DependencyTypeGatekeepsDecision = ah.RelationNameGatekeeps
+	DependencyTypeUsesMechanism     = ah.RelationNameWields
+	DependencyTypeImposesCondition  = ah.RelationNameImposes
+	DependencyTypeAdministers       = ah.RelationNameOperates
+	DependencyTypeMemberOf          = ah.RelationNameMemberOf
+	DependencyTypeTradedIn          = ah.RelationNameListedOn
+	DependencyTypePartnersWith      = ah.RelationNameJointVentureWith
+	DependencyTypeAffects           = ah.RelationNameDisrupts
+	DependencyTypeBoardMemberOf     = ah.RelationNameHoldsBoardSeat
+	DependencyTypeMergedInto        = ah.RelationNameMergedInto
+
+	DependencyTypeOperatesIn          DependencyType = "operates_in"
+	DependencyTypeOperatesVia         DependencyType = "operates_via"
+	DependencyTypeManages             DependencyType = "manages"
+	DependencyTypeHasSubgroup         DependencyType = "has_subgroup"
+	DependencyTypeHasSubmarket        DependencyType = "has_submarket"
+	DependencyTypeHasMarketSegment    DependencyType = "has_market_segment"
+	DependencyTypeAffiliatedWith      DependencyType = "affiliated_with"
+	DependencyTypeAssociatedWith      DependencyType = "associated_with"
+	DependencyTypeEmployedBy          DependencyType = "employed_by"
+	DependencyTypeWorksFor            DependencyType = "works_for"
+	DependencyTypeFounded             DependencyType = "founded"
+	DependencyTypeKeyPerson           DependencyType = "key_person"
+	DependencyTypeHasKeyPerson        DependencyType = "has_key_person"
+	DependencyTypeLocatedIn           DependencyType = "located_in"
+	DependencyTypeDependsOn           DependencyType = "depends_on"
+	DependencyTypeFocusesOn           DependencyType = "focuses_on"
+	DependencyTypeCompetesWith        DependencyType = "competes_with"
+	DependencyTypeParticipatesIn      DependencyType = "participates_in"
+	DependencyTypeInGeoScope          DependencyType = "in_geo_scope"
+	DependencyTypeControlsAccess      DependencyType = "controls_access"
+	DependencyTypeAppliesTo           DependencyType = "applies_to"
+	DependencyTypeTransformsInto      DependencyType = "transforms_into"
+	DependencyTypeAssemblesInto       DependencyType = "assembles_into"
+	DependencyTypeExtractsFrom        DependencyType = "extracts_from"
+	DependencyTypeUsedIn              DependencyType = "used_in"
+	DependencyTypeAuditedBy           DependencyType = "audited_by"
+	DependencyTypeInvolvesActor       DependencyType = "involves_actor"
+	DependencyTypeAbout               DependencyType = "about"
+	DependencyTypeSurfaces            DependencyType = "surfaces"
+	DependencyTypeRelatedTo           DependencyType = "related_to"
+	DependencyTypeRelativeOf          DependencyType = "relative_of"
+	DependencyTypeRenamedTo           DependencyType = "renamed_to"
+	DependencyTypeRebrandedTo         DependencyType = "rebranded_to"
+	DependencyTypeLegalSuccessorOf    DependencyType = "legal_successor_of"
+	DependencyTypeSpunOffFrom         DependencyType = "spun_off_from"
+	DependencyTypeAcquiredBy          DependencyType = "acquired_by"
+	DependencyTypeCorporateTransition DependencyType = "corporate_transition"
+	DependencyTypeDominates           DependencyType = "dominates"
+	DependencyTypeDomainRelation      DependencyType = "domain_relation"
+	DependencyTypeRelatedDomain       DependencyType = "related_domain"
+	DependencyTypeBroadensTo          DependencyType = "broadens_to"
+	DependencyTypeNarrowsTo           DependencyType = "narrows_to"
+	DependencyTypeConsumes            DependencyType = "consumes"
+)

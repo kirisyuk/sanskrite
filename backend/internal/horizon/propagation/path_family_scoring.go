@@ -192,38 +192,38 @@ func classifyPathFamilies(ev SignalPropagationTraceEvent) []string {
 	}
 
 	switch strings.TrimSpace(ev.EdgeType) {
-	case string(horizonmodels.DependencyTypeRegulates),
-		string(horizonmodels.DependencyTypeControlsAccess),
-		string(horizonmodels.DependencyTypeImposesCondition),
-		string(horizonmodels.DependencyTypeGatekeepsDecision),
-		string(horizonmodels.DependencyTypeUsesMechanism),
-		string(horizonmodels.DependencyTypeAppliesTo):
+	case string(DependencyTypeRegulates),
+		string(DependencyTypeControlsAccess),
+		string(DependencyTypeImposesCondition),
+		string(DependencyTypeGatekeepsDecision),
+		string(DependencyTypeUsesMechanism),
+		string(DependencyTypeAppliesTo):
 		add("regulatory_control")
-	case string(horizonmodels.DependencyTypeSuppliesTo),
-		string(horizonmodels.DependencyTypeTransformsInto),
-		string(horizonmodels.DependencyTypeAssemblesInto),
-		string(horizonmodels.DependencyTypeUsedIn),
-		string(horizonmodels.DependencyTypeExtractsFrom),
-		string(horizonmodels.DependencyTypeProduces):
+	case string(DependencyTypeSuppliesTo),
+		string(DependencyTypeTransformsInto),
+		string(DependencyTypeAssemblesInto),
+		string(DependencyTypeUsedIn),
+		string(DependencyTypeExtractsFrom),
+		string(DependencyTypeProduces):
 		add("energy_supply_chain")
-	case string(horizonmodels.DependencyTypeParticipatesIn),
-		string(horizonmodels.DependencyTypeTradedIn),
-		string(horizonmodels.DependencyTypeHasMarketSegment),
-		string(horizonmodels.DependencyTypeHasSubmarket),
-		string(horizonmodels.DependencyTypeDominates):
+	case string(DependencyTypeParticipatesIn),
+		string(DependencyTypeTradedIn),
+		string(DependencyTypeHasMarketSegment),
+		string(DependencyTypeHasSubmarket),
+		string(DependencyTypeDominates):
 		add("market_exposure")
-	case string(horizonmodels.DependencyTypeOwns),
-		string(horizonmodels.DependencyTypeControls),
-		string(horizonmodels.DependencyTypeManages),
-		string(horizonmodels.DependencyTypeAdministers),
-		string(horizonmodels.DependencyTypeInvestsIn):
+	case string(DependencyTypeOwns),
+		string(DependencyTypeControls),
+		string(DependencyTypeManages),
+		string(DependencyTypeAdministers),
+		string(DependencyTypeInvestsIn):
 		add("organizational_control")
-	case string(horizonmodels.DependencyTypeLocatedIn),
-		string(horizonmodels.DependencyTypeOperatesIn),
-		string(horizonmodels.DependencyTypeAffects),
-		string(horizonmodels.DependencyTypeTriggeredBy):
+	case string(DependencyTypeLocatedIn),
+		string(DependencyTypeOperatesIn),
+		string(DependencyTypeAffects),
+		string(DependencyTypeTriggeredBy):
 		add("geo_operational_exposure")
-	case string(horizonmodels.DependencyTypeDependsOn):
+	case string(DependencyTypeDependsOn):
 		add("facility_dependency")
 	}
 	if strings.Contains(text, "lng") || strings.Contains(text, "natural-gas") || strings.Contains(text, "pipeline") ||

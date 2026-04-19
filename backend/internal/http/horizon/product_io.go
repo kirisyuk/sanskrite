@@ -307,7 +307,7 @@ OUTPUT SCHEMA (exact):
     { "productName": "string", "confidence": 0.0, "reason": "string" }
   ]
 }
-`, f.ID, strings.TrimSpace(f.CanonicalPath), string(f.Type), strings.TrimSpace(label), direction, hint)
+`, f.ID, strings.TrimSpace(f.CanonicalPath), horizonmodels.FormatClassSubtype(f.Class, f.Subtype), strings.TrimSpace(label), direction, hint)
 }
 
 

@@ -11,7 +11,10 @@ import (
 func TestBuildGraphIntentSharedPromptBlocks_UsesSharedPipelineContracts(t *testing.T) {
 	snapshot := horizonmodels.GraphIntentSnapshot{
 		Nodes: []horizonmodels.GraphIntentSnapshotNode{
-			{CanonicalPath: "/domain/v1/supply-chain/geo/de/product/ev-batteries", Type: string(horizonmodels.FragmentTypeDomain)},
+			// Legacy DOMAIN class is no longer in the AH taxonomy; the wire
+			// payload still carries the legacy UPPER_SNAKE token "DOMAIN" for
+			// back-compat (graph-intent prompt blocks must keep accepting it).
+			{CanonicalPath: "/domain/v1/supply-chain/geo/de/product/ev-batteries", Type: "DOMAIN"},
 		},
 	}
 
@@ -36,8 +39,8 @@ func TestBuildGraphIntentSharedPromptBlocks_UsesSharedPipelineContracts(t *testi
 func TestGraphIntentNormalizeUnsupportedRelation_MapsUsedInToSuppliesToForActorTarget(t *testing.T) {
 	got, _ := graphIntentNormalizeUnsupportedRelation(
 		"USED_IN",
-		graphIntentNodeRef{Type: string(horizonmodels.FragmentTypeProduct)},
-		graphIntentNodeRef{Type: string(horizonmodels.FragmentTypeOrganization)},
+		graphIntentNodeRef{Type: string(FragmentTypeProduct)},
+		graphIntentNodeRef{Type: string(FragmentTypeOrganization)},
 	)
 	if got != "SUPPLIES_TO" {
 		t.Fatalf("expected SUPPLIES_TO, got %q", got)

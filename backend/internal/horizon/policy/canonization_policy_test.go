@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type canonRulesRepoStub struct {
@@ -21,36 +21,36 @@ func TestCanonizationPolicy_NormalizeFragmentType_MatrixCoverage(t *testing.T) {
 
 	tests := []struct {
 		in   string
-		want horizonmodels.FragmentType
+		want ah.FragmentClass
 	}{
-		{in: "ORGANIZATION", want: horizonmodels.FragmentTypeOrganization},
-		{in: "ORG", want: horizonmodels.FragmentTypeOrganization},
-		{in: "GOV", want: horizonmodels.FragmentTypeOrganization},
-		{in: "GOVERNMENT", want: horizonmodels.FragmentTypeOrganization},
-		{in: "FACILITY", want: horizonmodels.FragmentTypeFacility},
-		{in: "FAC", want: horizonmodels.FragmentTypeFacility},
-		{in: "GEO_REGION", want: horizonmodels.FragmentTypeGeoRegion},
-		{in: "region", want: horizonmodels.FragmentTypeGeoRegion},
-		{in: "LOCATION", want: horizonmodels.FragmentTypeGeoRegion},
-		{in: "PRODUCT", want: horizonmodels.FragmentTypeProduct},
-		{in: "PROGRAM", want: horizonmodels.FragmentTypeProgram},
-		{in: "MARKET", want: horizonmodels.FragmentTypeMarket},
-		{in: "EVENT", want: horizonmodels.FragmentTypeEvent},
-		{in: "PERSON", want: horizonmodels.FragmentTypePerson},
-		{in: "INDIVIDUAL", want: horizonmodels.FragmentTypePerson},
-		{in: "MEDIA_CHANNEL", want: horizonmodels.FragmentTypeMediaChannel},
-		{in: "MEDIA", want: horizonmodels.FragmentTypeMediaChannel},
-		{in: "DEPOSIT", want: horizonmodels.FragmentTypeDeposit},
-		{in: "MINE", want: horizonmodels.FragmentTypeDeposit},
-		{in: "DOMAIN", want: horizonmodels.FragmentTypeDomain},
-		{in: "SPHERE", want: horizonmodels.FragmentTypeSphere},
-		{in: "DECISION_POINT", want: horizonmodels.FragmentTypeDecisionPoint},
-		{in: "DECISION", want: horizonmodels.FragmentTypeDecisionPoint},
-		{in: "MECHANISM", want: horizonmodels.FragmentTypeMechanism},
-		{in: "SUPPLY_LINK", want: horizonmodels.FragmentTypeSupplyLink},
-		{in: "SUPPLYLINK", want: horizonmodels.FragmentTypeSupplyLink},
-		{in: "COMMUNITY", want: horizonmodels.FragmentTypeCommunity},
-		{in: "NETWORK", want: horizonmodels.FragmentTypeCommunity},
+		{in: "ORGANIZATION", want: classOrganization},
+		{in: "ORG", want: classOrganization},
+		{in: "GOV", want: classOrganization},
+		{in: "GOVERNMENT", want: classOrganization},
+		{in: "FACILITY", want: classFacility},
+		{in: "FAC", want: classFacility},
+		{in: "GEO_REGION", want: classGeoRegion},
+		{in: "region", want: classGeoRegion},
+		{in: "LOCATION", want: classGeoRegion},
+		{in: "PRODUCT", want: classProduct},
+		{in: "PROGRAM", want: classProgram},
+		{in: "MARKET", want: classMarket},
+		{in: "EVENT", want: classEvent},
+		{in: "PERSON", want: classPerson},
+		{in: "INDIVIDUAL", want: classPerson},
+		{in: "MEDIA_CHANNEL", want: classMediaChannel},
+		{in: "MEDIA", want: classMediaChannel},
+		{in: "DEPOSIT", want: classDeposit},
+		{in: "MINE", want: classDeposit},
+		{in: "DOMAIN", want: classDomain},
+		{in: "SPHERE", want: classSphere},
+		{in: "DECISION_POINT", want: classDecisionPoint},
+		{in: "DECISION", want: classDecisionPoint},
+		{in: "MECHANISM", want: classMechanism},
+		{in: "SUPPLY_LINK", want: classSupplyLink},
+		{in: "SUPPLYLINK", want: classSupplyLink},
+		{in: "COMMUNITY", want: classCommunity},
+		{in: "NETWORK", want: classCommunity},
 	}
 
 	for _, tt := range tests {
@@ -64,10 +64,10 @@ func TestCanonizationPolicy_NormalizeFragmentType_MatrixCoverage(t *testing.T) {
 func TestCanonizationPolicy_NormalizeFragmentType_PathInference(t *testing.T) {
 	p := NewCanonizationPolicy(canonRulesRepoStub{})
 
-	if got := p.normalizeFragmentType("/gov/na/eag"); got != horizonmodels.FragmentTypeOrganization {
+	if got := p.normalizeFragmentType("/gov/na/eag"); got != classOrganization {
 		t.Fatalf("gov path should map to ORGANIZATION, got %q", got)
 	}
-	if got := p.normalizeFragmentType("/mechanism/regulatory/export-control"); got != horizonmodels.FragmentTypeMechanism {
+	if got := p.normalizeFragmentType("/mechanism/regulatory/export-control"); got != classMechanism {
 		t.Fatalf("mechanism path should map to MECHANISM, got %q", got)
 	}
 }
@@ -78,7 +78,7 @@ func TestCanonizationPolicy_NormalizeFragmentType_UnknownFallsBackToOrganization
 	if got == "" {
 		t.Fatalf("normalizeFragmentType must never return empty")
 	}
-	if got != horizonmodels.FragmentTypeOrganization {
+	if got != classOrganization {
 		t.Fatalf("unknown type should fall back to ORGANIZATION, got %q", got)
 	}
 }
@@ -128,7 +128,7 @@ func TestCanonizationPolicy_Decide_SkipsEmptyDbRuleOutput(t *testing.T) {
 		t.Fatalf("Decide() error = %v", err)
 	}
 	out, _ := decision.Params["output"].(string)
-	if out != string(horizonmodels.FragmentTypeMechanism) {
-		t.Fatalf("expected hardcoded fallback output %q, got %q", horizonmodels.FragmentTypeMechanism, out)
+	if out != string(classMechanism) {
+		t.Fatalf("expected hardcoded fallback output %q, got %q", classMechanism, out)
 	}
 }

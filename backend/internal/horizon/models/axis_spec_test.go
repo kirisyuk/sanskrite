@@ -1,15 +1,18 @@
 package models
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+)
 
 func TestDefaultAxisSpecs_PhysicalFlowSupplyIncludesOrganizationControlEdges(t *testing.T) {
 	spec := DefaultAxisSpecs()[AxisPhysicalFlowSupply]
 	want := map[string]bool{
-		"PRODUCES":    true,
-		"CONTROLS":    true,
-		"MANAGES":     true,
-		"OPERATES_IN": true,
-		"USED_IN":     true,
+		string(ah.RelationNameProduces):     true,
+		string(ah.RelationNameControlsVia):  true, // legacy CONTROLS
+		string(ah.RelationNameManagedBy):    true, // legacy MANAGES (reversed)
+		string(ah.RelationNameRequiresCapability): true, // legacy DEPENDS_ON(product->site)
 	}
 	got := map[string]bool{}
 	for _, edgeType := range spec.StrongEdgeTypes {
@@ -26,30 +29,61 @@ func TestDefaultPropagationProfiles_PhysicalFlowSupplyIncludesBidirectionalSuppl
 	profile := DefaultPropagationProfiles()[AxisPhysicalFlowSupply]
 	foundSupplies := false
 	foundProduces := false
-	foundOperatesIn := false
-	foundUsedIn := false
+	foundRequiresCapability := false
+	foundLegConnects := false
 	for _, spec := range profile.StrongEdges {
 		switch spec.Type {
-		case "SUPPLIES_TO":
+		case string(ah.RelationNameSupplies):
 			foundSupplies = spec.Direction == "both"
-		case "PRODUCES":
+		case string(ah.RelationNameProduces):
 			foundProduces = spec.Direction == "source_to_target"
-		case "OPERATES_IN":
-			foundOperatesIn = spec.Direction == "source_to_target"
-		case "USED_IN":
-			foundUsedIn = spec.Direction == "source_to_target"
+		case string(ah.RelationNameRequiresCapability):
+			foundRequiresCapability = spec.Direction == "target_to_source"
+		case string(ah.RelationNameLegConnects):
+			foundLegConnects = spec.Direction == "both"
 		}
 	}
 	if !foundSupplies {
-		t.Fatalf("physical_flow/supply profile must traverse SUPPLIES_TO in both directions")
+		t.Fatalf("physical_flow/supply profile must traverse supplies in both directions")
 	}
 	if !foundProduces {
-		t.Fatalf("physical_flow/supply profile must include PRODUCES source_to_target")
+		t.Fatalf("physical_flow/supply profile must include produces source_to_target")
 	}
-	if !foundOperatesIn {
-		t.Fatalf("physical_flow/supply profile must include OPERATES_IN source_to_target")
+	if !foundRequiresCapability {
+		t.Fatalf("physical_flow/supply profile must include requires_capability target_to_source (legacy DEPENDS_ON product->site)")
 	}
-	if !foundUsedIn {
-		t.Fatalf("physical_flow/supply profile must include USED_IN source_to_target")
+	if !foundLegConnects {
+		t.Fatalf("physical_flow/supply profile must include leg_connects both (route overlay)")
+	}
+}
+
+// TestDefaultPropagationProfiles_AllStrongEdgesAreKnownAHRelations is the
+// guard that locks in the AH SoT contract: every entry in every default
+// propagation profile MUST be a known ah.RelationName. Legacy UPPER_SNAKE
+// strings will fail the lookup.
+func TestDefaultPropagationProfiles_AllStrongEdgesAreKnownAHRelations(t *testing.T) {
+	for axis, profile := range DefaultPropagationProfiles() {
+		for i, spec := range profile.StrongEdges {
+			if !ah.IsKnownRelation(ah.RelationName(spec.Type)) {
+				t.Fatalf("axis %s: StrongEdges[%d].Type=%q is not a known ah.RelationName", axis, i, spec.Type)
+			}
+		}
+		for i, tr := range profile.Transformations {
+			if !ah.IsKnownRelation(ah.RelationName(tr.OnEdgeType)) {
+				t.Fatalf("axis %s: Transformations[%d].OnEdgeType=%q is not a known ah.RelationName", axis, i, tr.OnEdgeType)
+			}
+		}
+	}
+}
+
+// TestDefaultAxisSpecs_AllStrongEdgeTypesAreKnownAHRelations is the
+// matching guard for the AxisSpec mirror.
+func TestDefaultAxisSpecs_AllStrongEdgeTypesAreKnownAHRelations(t *testing.T) {
+	for axis, spec := range DefaultAxisSpecs() {
+		for i, edgeType := range spec.StrongEdgeTypes {
+			if !ah.IsKnownRelation(ah.RelationName(edgeType)) {
+				t.Fatalf("axis %s: StrongEdgeTypes[%d]=%q is not a known ah.RelationName", axis, i, edgeType)
+			}
+		}
 	}
 }

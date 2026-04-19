@@ -26,6 +26,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/regulatorytransform"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 var ErrEdgeNotFound = errors.New("dependency edge not found")
@@ -170,16 +171,16 @@ func (r *DependencyEdgesRepository) resolveEndpointTypesAndPaths(ctx context.Con
 		return "", "", "", ""
 	}
 	if sourceFrag, err := r.fragmentsRepo.Get(ctx, edge.SourceFragmentID); err == nil && sourceFrag != nil {
-		sourceType = string(sourceFrag.Type)
+		sourceType = string(sourceFrag.Class)
 		sourcePath = sourceFrag.CanonicalPath
 	}
 	if targetFrag, err := r.fragmentsRepo.Get(ctx, edge.TargetFragmentID); err == nil && targetFrag != nil {
-		targetType = string(targetFrag.Type)
+		targetType = string(targetFrag.Class)
 		targetPath = targetFrag.CanonicalPath
 	}
-	srcTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(sourceType), sourcePath)
-	dstTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(targetType), targetPath)
-	return string(srcTypeActual), string(dstTypeActual), sourcePath, targetPath
+	srcClassActual, _, _ := edgesemantics.ReconcileClassWithCanonicalPath(ah.FragmentClass(sourceType), sourcePath)
+	dstClassActual, _, _ := edgesemantics.ReconcileClassWithCanonicalPath(ah.FragmentClass(targetType), targetPath)
+	return string(srcClassActual), string(dstClassActual), sourcePath, targetPath
 }
 
 func (r *DependencyEdgesRepository) applyProductRelationDictionary(
@@ -193,8 +194,8 @@ func (r *DependencyEdgesRepository) applyProductRelationDictionary(
 	if r == nil || r.productDictionary == nil || edge == nil {
 		return sourcePath, targetPath, false
 	}
-	if models.FragmentType(strings.TrimSpace(sourceType)) != models.FragmentTypeProduct ||
-		models.FragmentType(strings.TrimSpace(targetType)) != models.FragmentTypeProduct {
+	if ah.FragmentClass(strings.TrimSpace(sourceType)) != ah.FragmentClassProduct ||
+		ah.FragmentClass(strings.TrimSpace(targetType)) != ah.FragmentClassProduct {
 		return sourcePath, targetPath, false
 	}
 	resolution, err := r.productDictionary.ResolveProductRelationForTenant(
@@ -205,7 +206,7 @@ func (r *DependencyEdgesRepository) applyProductRelationDictionary(
 	)
 	if err != nil || !resolution.Known {
 		if err != nil {
-			log.Printf("[DependencyEdgesRepository] WARNING: product relation dictionary lookup failed edge=%s type=%s err=%v", strings.TrimSpace(edge.ID), string(edge.Type), err)
+			log.Printf("[DependencyEdgesRepository] WARNING: product relation dictionary lookup failed edge=%s type=%s err=%v", strings.TrimSpace(edge.ID), string(edge.Relation), err)
 		}
 		return sourcePath, targetPath, false
 	}
@@ -218,9 +219,9 @@ func (r *DependencyEdgesRepository) applyProductRelationDictionary(
 		swapProductCanonicalPathQualifiers(edge.Qualifiers)
 		edge.Qualifiers["normalizedDirection"] = true
 	}
-	if edge.Type != resolution.EdgeType {
-		prevType := edge.Type
-		edge.Type = resolution.EdgeType
+	if edge.Relation != resolution.EdgeType {
+		prevType := edge.Relation
+		edge.Relation = resolution.EdgeType
 		edge.Qualifiers["normalizedByProductRelationDictionary"] = true
 		edge.Qualifiers["normalizedFromEdgeType"] = string(prevType)
 		edge.Qualifiers["normalizedEdgeType"] = string(resolution.EdgeType)
@@ -251,15 +252,15 @@ func (r *DependencyEdgesRepository) applyRegulatoryTransformDictionary(edge *mod
 	if sp == "" || tp == "" {
 		return
 	}
-	normalized, changed := r.regulatoryTransformRegistry.NormalizeRegulatoryEdgeType(sp, tp, edge.Type)
-	if !changed || normalized == "" || normalized == edge.Type {
+	normalized, changed := r.regulatoryTransformRegistry.NormalizeRegulatoryEdgeType(sp, tp, edge.Relation)
+	if !changed || normalized == "" || normalized == edge.Relation {
 		return
 	}
 	if edge.Qualifiers == nil {
 		edge.Qualifiers = map[string]interface{}{}
 	}
-	prev := edge.Type
-	edge.Type = normalized
+	prev := edge.Relation
+	edge.Relation = normalized
 	edge.Qualifiers["normalizedByRegulatoryTransformDictionary"] = true
 	edge.Qualifiers["normalizedFromEdgeType"] = string(prev)
 	edge.Qualifiers["normalizedEdgeType"] = string(normalized)
@@ -269,10 +270,10 @@ func (r *DependencyEdgesRepository) recordUnknownProductRelationCandidateAsync(e
 	if r == nil || r.productDictionary == nil || edge == nil {
 		return
 	}
-	if models.FragmentType(strings.TrimSpace(sourceType)) != models.FragmentTypeProduct || models.FragmentType(strings.TrimSpace(targetType)) != models.FragmentTypeProduct {
+	if ah.FragmentClass(strings.TrimSpace(sourceType)) != ah.FragmentClassProduct || ah.FragmentClass(strings.TrimSpace(targetType)) != ah.FragmentClassProduct {
 		return
 	}
-	if !productdictSupportsEdgeType(edge.Type) {
+	if !productdictSupportsEdgeType(edge.Relation) {
 		return
 	}
 	e := *edge
@@ -288,8 +289,8 @@ func (r *DependencyEdgesRepository) recordUnknownProductRelationCandidateAsync(e
 			TenantID:         firstNonEmptyString(strings.TrimSpace(e.TenantID), "global"),
 			FromPath:         sourcePath,
 			ToPath:           targetPath,
-			ObservedEdgeType: e.Type,
-			RelationHint:     relationHintForEdge(e.Type),
+			ObservedEdgeType: e.Relation,
+			RelationHint:     relationHintForEdge(e.Relation),
 			SourceKind:       "edge_create",
 			EdgeID:           strings.TrimSpace(e.ID),
 			SourceFragmentID: strings.TrimSpace(e.SourceFragmentID),
@@ -298,22 +299,22 @@ func (r *DependencyEdgesRepository) recordUnknownProductRelationCandidateAsync(e
 	}()
 }
 
-func relationHintForEdge(edgeType models.DependencyType) string {
+func relationHintForEdge(edgeType ah.RelationName) string {
 	switch edgeType {
-	case models.DependencyTypeAssemblesInto:
+	case relAssemblesInto:
 		return "assembly"
-	case models.DependencyTypeUsedIn:
+	case relUsedIn:
 		return "usage"
-	case models.DependencyTypeTransformsInto:
+	case relTransformsInto:
 		return "transformation"
 	default:
 		return ""
 	}
 }
 
-func productdictSupportsEdgeType(edgeType models.DependencyType) bool {
+func productdictSupportsEdgeType(edgeType ah.RelationName) bool {
 	switch edgeType {
-	case models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto, models.DependencyTypeUsedIn, models.DependencyTypeDependsOn:
+	case relTransformsInto, relAssemblesInto, relUsedIn, relDependsOn:
 		return true
 	default:
 		return false
@@ -346,7 +347,7 @@ func (r *DependencyEdgesRepository) uploadToGCS(ctx context.Context, edge *model
 		"structData": map[string]interface{}{
 			"tenantId":         edge.TenantID,
 			"type":             "horizon_edge",
-			"edgeType":         string(edge.Type),
+			"edgeType":         string(edge.Relation),
 			"sourceFragmentId": edge.SourceFragmentID,
 			"targetFragmentId": edge.TargetFragmentID,
 			"sourceType":       sourceType,
@@ -378,10 +379,10 @@ func (r *DependencyEdgesRepository) uploadToGCS(ctx context.Context, edge *model
 	metadata := map[string]string{
 		"type":     "horizon_edge",
 		"tenantId": edge.TenantID,
-		"edgeType": string(edge.Type),
+		"edgeType": string(edge.Relation),
 	}
 
-	log.Printf("[DependencyEdgesRepository] Exporting edge %s (%s -> %s, %s) to GCS for Vertex Indexing...", edge.ID, sourcePath, targetPath, edge.Type)
+	log.Printf("[DependencyEdgesRepository] Exporting edge %s (%s -> %s, %s) to GCS for Vertex Indexing...", edge.ID, sourcePath, targetPath, edge.Relation)
 	if err := r.storage.UploadBytes(ctx, r.bucket, objectPath, jsonData, "application/json", metadata); err != nil {
 		return fmt.Errorf("failed to upload edge to GCS: %w", err)
 	}
@@ -426,7 +427,7 @@ func edgeVectorText(edge *models.DependencyEdge, sourceType, targetType, sourceP
 	}
 	add(strings.TrimSpace(sourceLabel))
 	add(strings.TrimSpace(targetLabel))
-	add(fmt.Sprintf("Dependency edge: %s", strings.TrimSpace(string(edge.Type))))
+	add(fmt.Sprintf("Dependency edge: %s", strings.TrimSpace(string(edge.Relation))))
 	if sourceLabel != "" || targetLabel != "" {
 		add(fmt.Sprintf("Relation: %s -> %s", firstNonEmptyString(sourceLabel, sourcePath, edge.SourceFragmentID), firstNonEmptyString(targetLabel, targetPath, edge.TargetFragmentID)))
 	}
@@ -569,8 +570,8 @@ func edgeIdentityVariant(edge *models.DependencyEdge) string {
 	return strings.Join(parts, "|")
 }
 
-func normalizedEdgeIdentity(tenantID, sourceID, targetID string, edgeType models.DependencyType, variant string) (string, string, models.DependencyType, string, string) {
-	ns, nt, ntp, _ := models.NormalizeSymmetricEdge(strings.TrimSpace(sourceID), strings.TrimSpace(targetID), edgeType)
+func normalizedEdgeIdentity(tenantID, sourceID, targetID string, edgeType ah.RelationName, variant string) (string, string, ah.RelationName, string, string) {
+	ns, nt, ntp, _ := policy.NormalizeSymmetricEdge(strings.TrimSpace(sourceID), strings.TrimSpace(targetID), edgeType)
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" {
 		tenantID = "global"
@@ -693,7 +694,7 @@ func assignLoadedEdgeID(edge *models.DependencyEdge, doc *firestore.DocumentSnap
 		return
 	}
 	if stored := strings.TrimSpace(edge.ID); stored != "" && stored != strings.TrimSpace(doc.Ref.ID) {
-		log.Printf("[DependencyEdgesRepository] WARNING: correcting stale edge id field stored=%s actual=%s type=%s", stored, strings.TrimSpace(doc.Ref.ID), strings.TrimSpace(string(edge.Type)))
+		log.Printf("[DependencyEdgesRepository] WARNING: correcting stale edge id field stored=%s actual=%s type=%s", stored, strings.TrimSpace(doc.Ref.ID), strings.TrimSpace(string(edge.Relation)))
 	}
 	edge.ID = strings.TrimSpace(doc.Ref.ID)
 }
@@ -707,7 +708,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 	}
 
 	log.Printf("%s Creating edge: sourceID=%s, targetID=%s, type=%s",
-		logPrefix, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+		logPrefix, edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 	sourceType, targetType, sourcePath, targetPath := r.resolveEndpointTypesAndPaths(ctx, edge)
 
 	// Basic validation
@@ -728,7 +729,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 		policyReason := ""
 		policyPenalty := 0.0
 		policyEdgeModality := ""
-		canonFromEdgeType := models.DependencyType("")
+		canonFromEdgeType := ah.RelationName("")
 		decision := policy.PolicyDecision{Action: "allow"}
 		var err error
 
@@ -738,8 +739,8 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 		if targetType != "" || targetPath != "" {
 			log.Printf("%s Target fragment type: %s, path: %s", logPrefix, targetType, targetPath)
 		}
-		srcTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(sourceType), sourcePath)
-		dstTypeActual, _ := edgesemantics.ReconcileTypeWithCanonicalPath(models.FragmentType(targetType), targetPath)
+		srcTypeActual, _, _ := edgesemantics.ReconcileClassWithCanonicalPath(ah.FragmentClass(sourceType), sourcePath)
+		dstTypeActual, _, _ := edgesemantics.ReconcileClassWithCanonicalPath(ah.FragmentClass(targetType), targetPath)
 		sourceType = string(srcTypeActual)
 		targetType = string(dstTypeActual)
 
@@ -749,19 +750,19 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 		if sourceType != "" && targetType != "" {
 			reason, _ := edge.Qualifiers["reason"].(string)
 			canon := policy.ApplyEdgeCanonicalizationPolicy(policy.EdgeCanonicalizationInput{
-				EdgeType:          edge.Type,
+				EdgeType:          edge.Relation,
 				SourceType:        srcTypeActual,
 				TargetType:        dstTypeActual,
 				SourcePath:        sourcePath,
 				TargetPath:        targetPath,
-				RawRelationType:   string(edge.Type),
+				RawRelationType:   string(edge.Relation),
 				Reason:            strings.TrimSpace(reason),
 				Qualifiers:        edge.Qualifiers,
-				OwnershipEvidence: models.HasOwnershipEvidence("", edge.Qualifiers, edge.Metrics),
+				OwnershipEvidence: policy.HasOwnershipEvidence("", edge.Qualifiers, edgeMetricValuesAsFloats(edge.Metrics)),
 			})
 			if canon.Changed {
-				oldType := edge.Type
-				edge.Type = canon.EdgeType
+				oldType := edge.Relation
+				edge.Relation = canon.EdgeType
 				if canon.OriginalType != "" {
 					canonFromEdgeType = canon.OriginalType
 				} else {
@@ -776,7 +777,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 				if edge.Qualifiers == nil {
 					edge.Qualifiers = map[string]interface{}{}
 				}
-				if edge.Type == models.DependencyTypeAssures && oldType == models.DependencyTypeAuditedBy {
+				if edge.Relation == relAssures && oldType == relAuditedBy {
 					if _, ok := edge.Qualifiers["assurance_type"]; !ok {
 						edge.Qualifiers["assurance_type"] = "audit"
 					}
@@ -784,12 +785,12 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 				edge.Qualifiers["canonicalized"] = true
 				edge.Qualifiers["canonicalizedFromEdgeType"] = string(canonFromEdgeType)
 				edge.Qualifiers["canonicalizationReason"] = canon.Reason
-				edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
+				edge.Qualifiers["normalizedEdgeType"] = string(edge.Relation)
 				if canon.ShouldSwap {
 					edge.Qualifiers["normalizedDirection"] = true
 				}
 				log.Printf("%s Canonicalized edge: %s -> %s (%s) [from %s] reason=%s",
-					logPrefix, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, canonFromEdgeType, canon.Reason)
+					logPrefix, edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation, canonFromEdgeType, canon.Reason)
 			}
 			if canon.PolicyPenalty > 0 {
 				policyStatus = policy.MergePolicyStatus(policyStatus, canon.PolicyStatus)
@@ -804,7 +805,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 				}
 			}
 			if canon.PolicyReason == "transition_unclassified" {
-				log.Printf("%s transition_unclassified fallback applied: %s -> %s", logPrefix, canonFromEdgeType, edge.Type)
+				log.Printf("%s transition_unclassified fallback applied: %s -> %s", logPrefix, canonFromEdgeType, edge.Relation)
 				policy.LogPolicyEvent("edge_canonicalization_policy", policy.PolicyLogStageFallback, map[string]interface{}{
 					"trace_id":       "na",
 					"tenant_id":      edge.TenantID,
@@ -812,7 +813,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 					"edge_id":        edge.ID,
 					"source_type":    sourceType,
 					"target_type":    targetType,
-					"relation_type":  edge.Type,
+					"relation_type":  edge.Relation,
 					"action":         policy.ActionAllowWithPenalty,
 					"policy_status":  policyStatus,
 					"policy_reason":  canon.PolicyReason,
@@ -833,7 +834,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 				"targetType":          targetType,
 				"sourceCanonicalPath": sourcePath,
 				"targetCanonicalPath": targetPath,
-				"relationType":        string(edge.Type),
+				"relationType":        string(edge.Relation),
 			},
 			Edge: edge,
 		})
@@ -847,7 +848,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 				"edge_id":        edge.ID,
 				"source_type":    sourceType,
 				"target_type":    targetType,
-				"relation_type":  edge.Type,
+				"relation_type":  edge.Relation,
 				"action":         "validate_edge",
 				"policy_status":  "na",
 				"policy_reason":  err.Error(),
@@ -872,7 +873,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 			"edge_id":        edge.ID,
 			"source_type":    sourceType,
 			"target_type":    targetType,
-			"relation_type":  edge.Type,
+			"relation_type":  edge.Relation,
 			"action":         decision.Action,
 			"policy_status":  policyStatus,
 			"policy_reason":  reason,
@@ -892,12 +893,12 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 				swapProductCanonicalPathQualifiers(edge.Qualifiers)
 			},
 			RewriteType: func(newType string, _ string) {
-				newEdgeType := models.DependencyType(strings.TrimSpace(newType))
-				if newEdgeType == "" || newEdgeType == edge.Type {
+				newEdgeType := ah.RelationName(strings.TrimSpace(newType))
+				if newEdgeType == "" || newEdgeType == edge.Relation {
 					return
 				}
-				canonFromEdgeType = edge.Type
-				edge.Type = newEdgeType
+				canonFromEdgeType = edge.Relation
+				edge.Relation = newEdgeType
 			},
 			ApplyPenalty: func(penalty float64, _ string) {
 				if edge.Properties.Criticality > 0 {
@@ -936,7 +937,7 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 			decision,
 			sourceType,
 			targetType,
-			string(edge.Type),
+			string(edge.Relation),
 			policyStatus,
 			policyReason,
 			canonFromEdgeType != "",
@@ -950,10 +951,10 @@ func (r *DependencyEdgesRepository) Create(ctx context.Context, edge *models.Dep
 	edge.Metadata.LastUpdatedAt = now
 
 	variant := edgeIdentityVariant(edge)
-	sourceID, targetID, edgeType, _, docID := normalizedEdgeIdentity(edge.TenantID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, variant)
+	sourceID, targetID, edgeType, _, docID := normalizedEdgeIdentity(edge.TenantID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation, variant)
 	edge.SourceFragmentID = sourceID
 	edge.TargetFragmentID = targetID
-	edge.Type = edgeType
+	edge.Relation = edgeType
 	doc := r.col.Doc(docID)
 	edge.ID = doc.ID
 
@@ -1084,10 +1085,10 @@ func (r *DependencyEdgesRepository) CreateMany(ctx context.Context, edges []*mod
 			graphenrich.ApplyEdgeHeuristics(edge, "", "")
 			edge.Metadata.CreatedAt = now
 			edge.Metadata.LastUpdatedAt = now
-			sourceID, targetID, edgeType, _, docID := normalizedEdgeIdentity(edge.TenantID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, edgeIdentityVariant(edge))
+			sourceID, targetID, edgeType, _, docID := normalizedEdgeIdentity(edge.TenantID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation, edgeIdentityVariant(edge))
 			edge.SourceFragmentID = sourceID
 			edge.TargetFragmentID = targetID
-			edge.Type = edgeType
+			edge.Relation = edgeType
 			edge.ID = docID
 			if existing := chunkByID[docID]; existing != nil {
 				mergeEdgeForIdempotentUpsert(existing, edge)
@@ -1258,7 +1259,7 @@ func (r *DependencyEdgesRepository) GetBySourceAndTarget(ctx context.Context, te
 }
 
 // GetBySourceTargetAndType получает DependencyEdge по source, target и типу
-func (r *DependencyEdgesRepository) GetBySourceTargetAndType(ctx context.Context, tenantID, sourceFragmentID, targetFragmentID string, edgeType models.DependencyType) (*models.DependencyEdge, error) {
+func (r *DependencyEdgesRepository) GetBySourceTargetAndType(ctx context.Context, tenantID, sourceFragmentID, targetFragmentID string, edgeType ah.RelationName) (*models.DependencyEdge, error) {
 	q := r.col.Where("tenantId", "==", tenantID).
 		Where("sourceFragmentId", "==", sourceFragmentID).
 		Where("targetFragmentId", "==", targetFragmentID).
@@ -1281,7 +1282,7 @@ func (r *DependencyEdgesRepository) GetBySourceTargetAndType(ctx context.Context
 }
 
 // ListBySourceTargetAndType returns all edges for exact source/target/type triple (best-effort capped).
-func (r *DependencyEdgesRepository) ListBySourceTargetAndType(ctx context.Context, tenantID, sourceFragmentID, targetFragmentID string, edgeType models.DependencyType, limit int) ([]*models.DependencyEdge, error) {
+func (r *DependencyEdgesRepository) ListBySourceTargetAndType(ctx context.Context, tenantID, sourceFragmentID, targetFragmentID string, edgeType ah.RelationName, limit int) ([]*models.DependencyEdge, error) {
 	if limit <= 0 {
 		limit = 50
 	}
@@ -1308,7 +1309,7 @@ func (r *DependencyEdgesRepository) ListBySourceTargetAndType(ctx context.Contex
 }
 
 // ListBySource получает список исходящих DependencyEdge
-func (r *DependencyEdgesRepository) ListBySource(ctx context.Context, tenantID, sourceFragmentID string, edgeType *models.DependencyType, limit int) ([]*models.DependencyEdge, error) {
+func (r *DependencyEdgesRepository) ListBySource(ctx context.Context, tenantID, sourceFragmentID string, edgeType *ah.RelationName, limit int) ([]*models.DependencyEdge, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -1335,7 +1336,7 @@ func (r *DependencyEdgesRepository) ListBySource(ctx context.Context, tenantID, 
 
 // ListBySourceIDsAndType returns edges for multiple exact source IDs with a single chunked Firestore preload.
 // Missing sources are simply absent from the result. Intended for caller-side dedup/materialization batches.
-func (r *DependencyEdgesRepository) ListBySourceIDsAndType(ctx context.Context, tenantID string, sourceFragmentIDs []string, edgeType models.DependencyType) ([]*models.DependencyEdge, error) {
+func (r *DependencyEdgesRepository) ListBySourceIDsAndType(ctx context.Context, tenantID string, sourceFragmentIDs []string, edgeType ah.RelationName) ([]*models.DependencyEdge, error) {
 	if r == nil || r.col == nil {
 		return nil, ErrInvalidDocument
 	}
@@ -1392,7 +1393,7 @@ func (r *DependencyEdgesRepository) ListBySourceIDsAndType(ctx context.Context, 
 
 // ListByTargetIDsAndType returns edges for multiple exact target IDs with a single chunked Firestore preload.
 // Missing targets are simply absent from the result. Intended for caller-side reverse-adjacency batches.
-func (r *DependencyEdgesRepository) ListByTargetIDsAndType(ctx context.Context, tenantID string, targetFragmentIDs []string, edgeType models.DependencyType) ([]*models.DependencyEdge, error) {
+func (r *DependencyEdgesRepository) ListByTargetIDsAndType(ctx context.Context, tenantID string, targetFragmentIDs []string, edgeType ah.RelationName) ([]*models.DependencyEdge, error) {
 	if r == nil || r.col == nil {
 		return nil, ErrInvalidDocument
 	}
@@ -1448,7 +1449,7 @@ func (r *DependencyEdgesRepository) ListByTargetIDsAndType(ctx context.Context, 
 }
 
 // ListByTarget получает список входящих DependencyEdge
-func (r *DependencyEdgesRepository) ListByTarget(ctx context.Context, tenantID, targetFragmentID string, edgeType *models.DependencyType, limit int) ([]*models.DependencyEdge, error) {
+func (r *DependencyEdgesRepository) ListByTarget(ctx context.Context, tenantID, targetFragmentID string, edgeType *ah.RelationName, limit int) ([]*models.DependencyEdge, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -1534,7 +1535,7 @@ type EdgeQueryOptions struct {
 // ListBySourceWithOptions gets outgoing edges with filtering options.
 // When options.IncludeHistorical is false, historical edges (ValidTo < now) are filtered out.
 // When options.IncludeFuture is false, future edges (ValidFrom > now) are filtered out.
-func (r *DependencyEdgesRepository) ListBySourceWithOptions(ctx context.Context, tenantID, sourceFragmentID string, edgeType *models.DependencyType, limit int, opts *EdgeQueryOptions) ([]*models.DependencyEdge, error) {
+func (r *DependencyEdgesRepository) ListBySourceWithOptions(ctx context.Context, tenantID, sourceFragmentID string, edgeType *ah.RelationName, limit int, opts *EdgeQueryOptions) ([]*models.DependencyEdge, error) {
 	edges, err := r.ListBySource(ctx, tenantID, sourceFragmentID, edgeType, limit)
 	if err != nil {
 		return nil, err
@@ -1545,7 +1546,7 @@ func (r *DependencyEdgesRepository) ListBySourceWithOptions(ctx context.Context,
 // ListByTargetWithOptions gets incoming edges with filtering options.
 // When options.IncludeHistorical is false, historical edges (ValidTo < now) are filtered out.
 // When options.IncludeFuture is false, future edges (ValidFrom > now) are filtered out.
-func (r *DependencyEdgesRepository) ListByTargetWithOptions(ctx context.Context, tenantID, targetFragmentID string, edgeType *models.DependencyType, limit int, opts *EdgeQueryOptions) ([]*models.DependencyEdge, error) {
+func (r *DependencyEdgesRepository) ListByTargetWithOptions(ctx context.Context, tenantID, targetFragmentID string, edgeType *ah.RelationName, limit int, opts *EdgeQueryOptions) ([]*models.DependencyEdge, error) {
 	edges, err := r.ListByTarget(ctx, tenantID, targetFragmentID, edgeType, limit)
 	if err != nil {
 		return nil, err

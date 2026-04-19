@@ -32,19 +32,17 @@ type GeoCoordinatesAttribution struct {
 	CountryAlpha2    string
 }
 
-// GeoRelevantTypes are fragment types where coordinates are useful for map rendering.
-// Gov bodies use ORGANIZATION type with /gov/ canonical path.
-// GEO_REGION and DEPOSIT are geo-anchored entities (regions, mines, basins).
-var GeoRelevantTypes = map[hmodels.FragmentType]struct{}{
-	hmodels.FragmentTypeOrganization: {},
-	hmodels.FragmentTypeFacility:     {},
-	hmodels.FragmentTypeCommunity:    {},
-	hmodels.FragmentTypeProgram:      {},
-	hmodels.FragmentTypeGeoRegion:    {},
-	hmodels.FragmentTypeDeposit:      {},
-	hmodels.FragmentTypeEvent:        {},
-	hmodels.FragmentTypeMarket:       {},
-	hmodels.FragmentTypeAffectedZone: {},
+// GeoRelevantTypes are fragment classes where coordinates are useful for map rendering.
+// Gov bodies use ORGANIZATION class with /gov/ canonical path.
+// Legacy DEPOSIT/PROGRAM/AFFECTED_ZONE are folded into site/org/geo classes under
+// the AH taxonomy and are therefore already covered by the entries below.
+var GeoRelevantTypes = map[FragmentType]struct{}{
+	FragmentTypeOrganization: {},
+	FragmentTypeFacility:     {},
+	FragmentTypeCommunity:    {},
+	FragmentTypeGeoRegion:    {},
+	FragmentTypeEvent:        {},
+	FragmentTypeMarket:       {},
 }
 
 // EnrichCoordinatesFromGeoNames resolves coordinates via GeoNames.
@@ -86,7 +84,7 @@ func EnrichCoordinatesFromGeoNames(
 		}
 	}
 
-	if _, ok := GeoRelevantTypes[fragment.Type]; !ok {
+	if _, ok := GeoRelevantTypes[fragment.Class]; !ok {
 		return false, nil
 	}
 	name := ""
@@ -174,7 +172,7 @@ func enrichCoordinatesFromGeoNamesCanonicalZone(
 	fragment *hmodels.HorizonFragment,
 ) (bool, error) {
 	cp := strings.TrimSpace(fragment.CanonicalPath)
-	if !strings.HasPrefix(cp, "/zone/") || fragment.Type != hmodels.FragmentTypeAffectedZone {
+	if !strings.HasPrefix(cp, "/zone/") || !fragment.IsLegacyAffectedZone() {
 		return false, nil
 	}
 	parts := strings.Split(strings.Trim(cp, "/"), "/")
@@ -317,7 +315,7 @@ func EnrichCoordinatesFromParent(fragment *hmodels.HorizonFragment, parent *hmod
 	if fragment == nil || parent == nil {
 		return false
 	}
-	if !isParentGeoPropagationType(fragment.Type) {
+	if !isParentGeoPropagationType(fragment.Class) {
 		return false
 	}
 	if hmodels.HasRealGeoCoordinates(fragment.Coordinates) {
@@ -371,7 +369,7 @@ func EnrichCoordinatesFromGeocoding(
 	if client == nil || fragment == nil {
 		return false, nil
 	}
-	if _, ok := GeoRelevantTypes[fragment.Type]; !ok {
+	if _, ok := GeoRelevantTypes[fragment.Class]; !ok {
 		return false, nil
 	}
 	if hmodels.HasRealGeoCoordinates(fragment.Coordinates) {
@@ -480,7 +478,7 @@ func BuildAddressFromFragmentWithSource(f *hmodels.HorizonFragment) (string, str
 			}
 		}
 		// For geo-centric fragment kinds, a plain place name can still be geocoded.
-		if name != "" && (f.Type == hmodels.FragmentTypeGeoRegion || f.Type == hmodels.FragmentTypeEvent || f.Type == hmodels.FragmentTypeAffectedZone) {
+		if name != "" && (f.Class == FragmentTypeGeoRegion || f.Class == FragmentTypeEvent || f.IsLegacyAffectedZone()) {
 			if addressvalidate.IsPlausibleAddress(name) {
 				return name, geoAddressSourcePlaceCountry
 			}
@@ -488,7 +486,7 @@ func BuildAddressFromFragmentWithSource(f *hmodels.HorizonFragment) (string, str
 	}
 
 	// 2b. /zone/{geo}/{condition_type}/{slug}: build "slug, CC" from canonical path for AFFECTED_ZONE.
-	if f.Type == hmodels.FragmentTypeAffectedZone && strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/zone/") {
+	if f.IsLegacyAffectedZone() && strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/zone/") {
 		parts := strings.Split(strings.Trim(strings.TrimSpace(f.CanonicalPath), "/"), "/")
 		if len(parts) >= 4 && parts[0] == "zone" {
 			geo := strings.TrimSpace(parts[1])
@@ -541,7 +539,7 @@ func BuildAddressFromFragmentWithSource(f *hmodels.HorizonFragment) (string, str
 	}
 
 	// 4. Labels["en"] + country for DEPOSIT (e.g. "Permian Basin, US") — deposit names are place names, not company names.
-	if f.Type == hmodels.FragmentTypeDeposit {
+	if f.IsLegacyDeposit() {
 		name := ""
 		if f.Labels != nil {
 			name = strings.TrimSpace(f.Labels["en"])
@@ -563,7 +561,7 @@ func BuildAddressFromFragmentWithSource(f *hmodels.HorizonFragment) (string, str
 	// 5. Last-resort fallback for entity-centric types:
 	// geocode "entity name, CC" when no structured address/homeLocation is available.
 	// This is intentionally limited to types where HQ/site geocoding is still useful.
-	if isEntityNameGeoFallbackType(f.Type) {
+	if isEntityNameGeoFallbackType(f.Class) {
 		cc := extractCountryFromFragment(f)
 		if cc != "" {
 			names := make([]string, 0, 3)
@@ -607,10 +605,10 @@ func BuildLastSegmentAddressCandidates(f *hmodels.HorizonFragment) []string {
 	if f == nil {
 		return nil
 	}
-	if _, ok := GeoRelevantTypes[f.Type]; !ok {
+	if _, ok := GeoRelevantTypes[f.Class]; !ok {
 		return nil
 	}
-	if f.Type == hmodels.FragmentTypeMarket {
+	if f.Class == FragmentTypeMarket {
 		return nil
 	}
 	cp := strings.TrimSpace(f.CanonicalPath)
@@ -864,7 +862,7 @@ func titleGeoHint(raw string) string {
 // BuildFacilityAddressCandidates builds additional facility geocoding candidates using parent-org context.
 // The first candidate (when present) is always BuildAddressFromFragment(fragment).
 func BuildFacilityAddressCandidates(fragment *hmodels.HorizonFragment, parent *hmodels.HorizonFragment) []string {
-	if fragment == nil || fragment.Type != hmodels.FragmentTypeFacility {
+	if fragment == nil || fragment.Class != FragmentTypeFacility {
 		return nil
 	}
 	out := make([]string, 0, 8)
@@ -976,12 +974,12 @@ func facilityNameFromCanonicalPath(cp string) string {
 	return strings.TrimSpace(name)
 }
 
-func isEntityNameGeoFallbackType(t hmodels.FragmentType) bool {
+func isEntityNameGeoFallbackType(t FragmentType) bool {
+	// Legacy PROGRAM is org/program under AH and is therefore covered by FragmentTypeOrganization.
 	switch t {
-	case hmodels.FragmentTypeOrganization,
-		hmodels.FragmentTypeFacility,
-		hmodels.FragmentTypeCommunity,
-		hmodels.FragmentTypeProgram:
+	case FragmentTypeOrganization,
+		FragmentTypeFacility,
+		FragmentTypeCommunity:
 		return true
 	default:
 		return false
@@ -1038,9 +1036,11 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func isParentGeoPropagationType(t hmodels.FragmentType) bool {
+func isParentGeoPropagationType(t FragmentType) bool {
+	// Legacy PROGRAM is org/program under AH; if the runtime cares about programs
+	// here it should be re-introduced via a (Class, Subtype) check on the fragment.
 	switch t {
-	case hmodels.FragmentTypeFacility, hmodels.FragmentTypeCommunity, hmodels.FragmentTypeProgram:
+	case FragmentTypeFacility, FragmentTypeCommunity:
 		return true
 	default:
 		return false

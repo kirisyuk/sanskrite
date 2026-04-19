@@ -109,7 +109,7 @@ func (h *CommonalityAnalysisHandler) Execute(ctx context.Context, eng pipeline.E
 			if edge == nil {
 				continue
 			}
-			edgeType := strings.TrimSpace(string(edge.Type))
+			edgeType := strings.TrimSpace(string(edge.Relation))
 			if edgeType == "" || !commonalityEdgeTypeAllowed(edgeType) {
 				continue
 			}
@@ -378,11 +378,11 @@ func commonalityEdgeTypeAllowed(edgeType string) bool {
 		return false
 	}
 	switch edgeType {
-	case string(models.DependencyTypeLocatedIn),
-		string(models.DependencyTypeOperatesIn),
-		string(models.DependencyTypeParticipatesIn),
-		string(models.DependencyTypeHasMarketSegment),
-		string(models.DependencyTypeInfluences):
+	case string(DependencyTypeLocatedIn),
+		string(DependencyTypeOperatesIn),
+		string(DependencyTypeParticipatesIn),
+		string(DependencyTypeHasMarketSegment),
+		string(DependencyTypeInfluences):
 		return false
 	default:
 		return true

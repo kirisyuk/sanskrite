@@ -32,7 +32,7 @@ func RevalidateOrgGeo(
 	geocodingClient coreontology.GeocodingClientInterface,
 ) (OrgGeoRevalidationResult, error) {
 	var result OrgGeoRevalidationResult
-	if fragment == nil || geocodingClient == nil || fragment.Type != models.FragmentTypeOrganization {
+	if fragment == nil || geocodingClient == nil || fragment.Class != FragmentTypeOrganization {
 		return result, nil
 	}
 	if !strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/org/") && !strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/gov/") {

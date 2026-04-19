@@ -63,7 +63,7 @@ func BuildPropagationNodeOverlay(fragment *horizonmodels.HorizonFragment) Propag
 	}
 
 	switch {
-	case fragment.Type == horizonmodels.FragmentTypeAffectedZone:
+	case fragment.IsLegacyAffectedZone():
 		strategic := overlayFragmentMetricValue(fragment, horizonmodels.MetricPathImportanceStrategic)
 		bridge := overlayFragmentMetricValue(fragment, horizonmodels.MetricPathImportanceBridge)
 		businessBlast := overlayFragmentMetricValue(fragment, horizonmodels.MetricPathImportanceBusinessBlastRadius)
@@ -107,7 +107,7 @@ func BuildPropagationNodeOverlay(fragment *horizonmodels.HorizonFragment) Propag
 		overlay.BridgeScore = 0.44
 		overlay.CriticalityScore = 0.76
 	case overlayHasAny(text, "lng", "natural-gas", "gas", "oil", "refinery", "pipeline", "petrochem", "terminal", "power", "grid", "field") ||
-		fragment.Type == horizonmodels.FragmentTypeDeposit:
+		fragment.IsLegacyDeposit():
 		setPrimary("energy_asset")
 		setBusiness("producer")
 		addRole("source")
@@ -143,7 +143,7 @@ func BuildPropagationNodeOverlay(fragment *horizonmodels.HorizonFragment) Propag
 		overlay.OperationalScore = 0.78
 		overlay.BridgeScore = 0.34
 		overlay.CriticalityScore = 0.72
-	case fragment.Type == horizonmodels.FragmentTypeMarket:
+	case fragment.Class == FragmentTypeMarket:
 		setPrimary("market_aggregator")
 		setBusiness("market_operator")
 		addRole("bridge")
@@ -161,7 +161,7 @@ func BuildPropagationNodeOverlay(fragment *horizonmodels.HorizonFragment) Propag
 		overlay.OperationalScore = 0.62
 		overlay.BridgeScore = 0.38
 		overlay.CriticalityScore = 0.64
-	case fragment.Type == horizonmodels.FragmentTypeGeoRegion:
+	case fragment.Class == FragmentTypeGeoRegion:
 		setPrimary("geo_theater")
 		setBusiness("geo_scope")
 		addExposure("direct_geo")
@@ -183,7 +183,7 @@ func BuildPropagationNodeOverlay(fragment *horizonmodels.HorizonFragment) Propag
 	if strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/fac/") {
 		addRole("operator")
 	}
-	if fragment.Type == horizonmodels.FragmentTypeDeposit {
+	if fragment.IsLegacyDeposit() {
 		addRole("source")
 	}
 	return overlay
@@ -199,7 +199,7 @@ func overlayApplyOrganizationSemantics(
 	_ func(string),
 	applyDomainSemantic func(string, string, float64, float64, float64, ...string),
 ) bool {
-	if fragment == nil || overlay == nil || fragment.Type != horizonmodels.FragmentTypeOrganization {
+	if fragment == nil || overlay == nil || fragment.Class != FragmentTypeOrganization {
 		return false
 	}
 	text := overlayFragmentText(fragment)

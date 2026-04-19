@@ -5,13 +5,14 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 type EdgeCanonicalizationInput struct {
-	EdgeType          horizonmodels.DependencyType
-	SourceType        horizonmodels.FragmentType
-	TargetType        horizonmodels.FragmentType
+	EdgeType          ah.RelationName
+	SourceType        ah.FragmentClass
+	TargetType        ah.FragmentClass
 	SourcePath        string
 	TargetPath        string
 	RawRelationType   string
@@ -24,8 +25,8 @@ type EdgeCanonicalizationInput struct {
 }
 
 type EdgeCanonicalizationResult struct {
-	EdgeType       horizonmodels.DependencyType
-	OriginalType   horizonmodels.DependencyType
+	EdgeType       ah.RelationName
+	OriginalType   ah.RelationName
 	ShouldSwap     bool
 	Changed        bool
 	Reason         string
@@ -51,11 +52,11 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 		if res.OriginalType == "" {
 			res.OriginalType = in.EdgeType
 		}
-		res.EdgeType = horizonmodels.DependencyTypeAssures
+		res.EdgeType = relAssures
 		res.Changed = true
 		res.ShouldSwap = true // AUDITED_BY: assuree -> assurer; ASSURES: assurer -> assuree.
 		res.Reason = "canonicalize: legacy AUDITED_BY -> ASSURES (swap direction)"
-		in.EdgeType = horizonmodels.DependencyTypeAssures
+		in.EdgeType = relAssures
 		in.SourceType, in.TargetType = in.TargetType, in.SourceType
 		in.SourcePath, in.TargetPath = in.TargetPath, in.SourcePath
 		if in.Qualifiers != nil {
@@ -70,7 +71,7 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 	// restore canonical ASSURES semantics (assurer -> assuree).
 	if shouldRewrite, shouldSwap, assuranceType := shouldCanonicalizeToAssures(in.EdgeType, in.RawRelationType, in.Reason, in.Qualifiers); shouldRewrite {
 		res.OriginalType = in.EdgeType
-		res.EdgeType = horizonmodels.DependencyTypeAssures
+		res.EdgeType = relAssures
 		res.Changed = true
 		res.Reason = "canonicalize: dependency/influence with assurance semantics -> ASSURES"
 		if shouldSwap {
@@ -87,7 +88,7 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 
 	// --- REGULATES /org → /gov swap (gov bodies are regulators, not the regulated) ---
 	// LLMs frequently output inverted direction as ORG -> GOV for REGULATES; fix best-effort.
-	if in.EdgeType == horizonmodels.DependencyTypeRegulates &&
+	if in.EdgeType == relRegulates &&
 		strings.HasPrefix(in.SourcePath, "/org/") && strings.HasPrefix(in.TargetPath, "/gov/") {
 		res.ShouldSwap = true
 		res.Changed = true
@@ -99,7 +100,7 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 	}
 
 	// --- ADMINISTERS /org → /gov swap (gov bodies administer, not companies) ---
-	if in.EdgeType == horizonmodels.DependencyTypeAdministers &&
+	if in.EdgeType == relAdministers &&
 		strings.HasPrefix(in.SourcePath, "/org/") && strings.HasPrefix(in.TargetPath, "/gov/") {
 		res.ShouldSwap = true
 		res.Changed = true
@@ -109,7 +110,7 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 	}
 
 	// --- OWNS /org → /gov swap (gov owns state-owned enterprises, not vice versa) ---
-	if in.EdgeType == horizonmodels.DependencyTypeOwns &&
+	if in.EdgeType == relOwns &&
 		strings.HasPrefix(in.SourcePath, "/org/") && strings.HasPrefix(in.TargetPath, "/gov/") {
 		res.ShouldSwap = true
 		res.Changed = true
@@ -119,7 +120,7 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 	}
 
 	// --- CONTROLS /product/ → /gov/ or /org/ swap (gov/org controls product, not vice versa) ---
-	if in.EdgeType == horizonmodels.DependencyTypeControls &&
+	if in.EdgeType == relControls &&
 		strings.HasPrefix(in.SourcePath, "/product/") &&
 		(strings.HasPrefix(in.TargetPath, "/gov/") || strings.HasPrefix(in.TargetPath, "/org/")) {
 		res.ShouldSwap = true
@@ -129,12 +130,12 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 		in.SourcePath, in.TargetPath = in.TargetPath, in.SourcePath
 	}
 
-	if in.EdgeType == horizonmodels.DependencyTypeInvestsIn &&
-		in.SourceType == horizonmodels.FragmentTypeOrganization &&
-		in.TargetType == horizonmodels.FragmentTypeFacility &&
+	if in.EdgeType == relInvestsIn &&
+		in.SourceType == classOrganization &&
+		in.TargetType == classFacility &&
 		in.OwnershipEvidence {
 		res.OriginalType = in.EdgeType
-		res.EdgeType = horizonmodels.DependencyTypeOwns
+		res.EdgeType = relOwns
 		res.Changed = true
 		res.Reason = "canonicalize: ORGANIZATION INVESTS_IN FACILITY with ownership evidence -> ORGANIZATION OWNS FACILITY"
 	} else if fix, ok := ResolveEdgeDirectionAutoFix(in.EdgeType, in.SourceType, in.TargetType, in.SourcePath, in.TargetPath); ok {
@@ -143,7 +144,7 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 		res.ShouldSwap = fix.ShouldSwap
 		res.Changed = true
 		res.Reason = fix.Reason
-	} else if newType, shouldSwap, changed, reason := horizonmodels.CanonicalizeEdgeWithPaths(
+	} else if newType, shouldSwap, changed, reason := CanonicalizeEdgeWithPaths(
 		in.EdgeType, in.SourceType, in.TargetType, in.SourcePath, in.TargetPath,
 	); changed {
 		res.OriginalType = in.EdgeType
@@ -156,7 +157,7 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 	}
 
 	if res.Changed && res.OriginalType != "" {
-		penalty := horizonmodels.CanonicalizationPenalty(res.OriginalType, res.EdgeType, in.SourceType, in.TargetType)
+		penalty := CanonicalizationPenalty(res.OriginalType, res.EdgeType, in.SourceType, in.TargetType)
 		if penalty > 0 {
 			res.PolicyStatus = horizonmodels.PolicyStatusPenalized
 			res.PolicyPenalty = penalty
@@ -170,15 +171,15 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 		rawRelationType = string(in.EdgeType)
 	}
 	// --- Transition fallback: transition_unclassified → INFLUENCES ---
-	if horizonmodels.IsTransitionLikeRelationType(rawRelationType) &&
-		!horizonmodels.IsTransitionEdgeType(res.EdgeType) &&
-		in.SourceType == horizonmodels.FragmentTypeOrganization &&
-		in.TargetType == horizonmodels.FragmentTypeOrganization {
-		if res.EdgeType != horizonmodels.DependencyTypeInfluences {
+	if IsTransitionLikeRelationName(rawRelationType) &&
+		!IsTransitionEdgeRelation(res.EdgeType) &&
+		in.SourceType == classOrganization &&
+		in.TargetType == classOrganization {
+		if res.EdgeType != relInfluences {
 			if res.OriginalType == "" {
 				res.OriginalType = res.EdgeType
 			}
-			res.EdgeType = horizonmodels.DependencyTypeInfluences
+			res.EdgeType = relInfluences
 			res.Changed = true
 			res.Reason = "canonicalize: transition_unclassified -> INFLUENCES"
 		}
@@ -197,7 +198,7 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 		_, exists := edgesemantics.EdgeDirectionPolicies[res.EdgeType]
 		if !exists {
 			res.OriginalType = res.EdgeType
-			res.EdgeType = horizonmodels.DependencyTypeInfluences
+			res.EdgeType = relInfluences
 			res.Changed = true
 			res.Reason = "canonicalize: unknown_edge_type -> INFLUENCES (best-effort)"
 			res.PolicyStatus = horizonmodels.PolicyStatusPenalized
@@ -213,10 +214,10 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 	// Must run last to catch all rewrites (CanonicalizeEdgeWithPaths, transition fallback, unknown fallback).
 	if in.SupplyChainMode &&
 		res.Changed &&
-		in.EdgeType == horizonmodels.DependencyTypeDependsOn &&
-		res.EdgeType == horizonmodels.DependencyTypeParticipatesIn &&
-		((in.SourceType == horizonmodels.FragmentTypeOrganization && in.TargetType == horizonmodels.FragmentTypeMarket) ||
-			(in.SourceType == horizonmodels.FragmentTypeMarket && in.TargetType == horizonmodels.FragmentTypeOrganization)) {
+		in.EdgeType == relDependsOn &&
+		res.EdgeType == relParticipatesIn &&
+		((in.SourceType == classOrganization && in.TargetType == classMarket) ||
+			(in.SourceType == classMarket && in.TargetType == classOrganization)) {
 		res.EdgeType = in.EdgeType
 		if res.OriginalType != "" {
 			res.EdgeType = res.OriginalType
@@ -249,10 +250,10 @@ func ApplyEdgeCanonicalizationPolicy(in EdgeCanonicalizationInput) EdgeCanonical
 }
 
 func shouldCanonicalizeLegacyAuditedBy(
-	edgeType horizonmodels.DependencyType,
+	edgeType ah.RelationName,
 	rawRelationType string,
 ) bool {
-	if edgeType == horizonmodels.DependencyTypeAuditedBy {
+	if edgeType == relAuditedBy {
 		return true
 	}
 	raw := strings.ToUpper(strings.TrimSpace(rawRelationType))
@@ -260,7 +261,7 @@ func shouldCanonicalizeLegacyAuditedBy(
 }
 
 func shouldCanonicalizeToAssures(
-	edgeType horizonmodels.DependencyType,
+	edgeType ah.RelationName,
 	rawRelationType, reason string,
 	qualifiers map[string]interface{},
 ) (shouldRewrite bool, shouldSwap bool, assuranceType string) {
@@ -271,9 +272,9 @@ func shouldCanonicalizeToAssures(
 		assuranceType = inferAssuranceTypeFromReason(reasonLower)
 	}
 
-	if edgeType != horizonmodels.DependencyTypeDependsOn &&
-		edgeType != horizonmodels.DependencyTypeInfluences &&
-		edgeType != horizonmodels.DependencyTypeControls {
+	if edgeType != relDependsOn &&
+		edgeType != relInfluences &&
+		edgeType != relControls {
 		return false, false, ""
 	}
 	hasAssuranceRaw := raw == "ASSURES" || raw == "AUDITED_BY" || strings.Contains(raw, "AUDIT") || strings.Contains(raw, "ASSUR") || strings.Contains(raw, "CERTIF")
@@ -298,7 +299,7 @@ func shouldCanonicalizeToAssures(
 	default:
 		// DEPENDS_ON default is usually assuree -> assurer; invert to canonical ASSURES.
 		// For CONTROLS/INFLUENCES keep emitted direction unless linguistic cues indicate inversion.
-		shouldSwap = edgeType == horizonmodels.DependencyTypeDependsOn
+		shouldSwap = edgeType == relDependsOn
 	}
 
 	return true, shouldSwap, assuranceType
@@ -382,8 +383,8 @@ func reasonSuggestsSourceAssuresTarget(reason string) bool {
 //
 // Returns: (isValid, shouldReverse, policyStatus, policyReason, policyPenalty).
 func ApplyEdgeDirectionValidation(
-	edgeType horizonmodels.DependencyType,
-	sourceType, targetType horizonmodels.FragmentType,
+	edgeType ah.RelationName,
+	sourceType, targetType ah.FragmentClass,
 ) (bool, bool, string, string, float64) {
 	valid, shouldReverse, rule := edgesemantics.ValidateEdgeDirection(edgeType, sourceType, targetType)
 	if valid {

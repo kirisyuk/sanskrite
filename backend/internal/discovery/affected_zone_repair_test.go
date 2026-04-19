@@ -6,13 +6,15 @@ import (
 	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestHasAffectedZoneIdentityDrift_DetectsCorruptedLegacyZone(t *testing.T) {
 	cn := "CN"
 	f := &horizonmodels.HorizonFragment{
 		CanonicalPath: "/zone/cn/military_conflict/china",
-		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Class:          ah.FragmentClassGeo,
+		Subtype:          "affected_zone",
 		Identifiers: map[string]string{
 			"legalName":    "strait of hormuz (kinetic operations)",
 			"merged_paths": "/zone/cn/military_conflict/strait-of-hormuz",
@@ -37,7 +39,8 @@ func TestHasAffectedZoneIdentityDrift_DetectsCorruptedLegacyZone(t *testing.T) {
 func TestHasAffectedZoneIdentityDrift_RejectsSyntheticApproximatePlaceholder(t *testing.T) {
 	f := &horizonmodels.HorizonFragment{
 		CanonicalPath: "/zone/za/humanitarian_crisis/south-africa",
-		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Class:          ah.FragmentClassGeo,
+		Subtype:          "affected_zone",
 		Qualifiers: map[string]interface{}{
 			"zoneInferenceScore": "0",
 			"geoPrecision":       "approximate_country",
@@ -54,7 +57,8 @@ func TestHasAffectedZoneIdentityDrift_DoesNotIgnoreMergedPathMismatchAtMediumSco
 	cy := "CY"
 	f := &horizonmodels.HorizonFragment{
 		CanonicalPath: "/zone/cy/military_conflict/northern-cyprus",
-		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Class:          ah.FragmentClassGeo,
+		Subtype:          "affected_zone",
 		Identifiers: map[string]string{
 			"legalName":    "North Sea (kinetic operations)",
 			"merged_paths": "/zone/fr/military_conflict/north-sea,/zone/fr/military_conflict/france",
@@ -164,7 +168,8 @@ func TestApplyAffectedZoneIdentity_OverridesLegacyCountryPlaceholder(t *testing.
 func TestHasAffectedZoneIdentityDrift_AllowsPreciseConcreteRetargetWithLegacyMergedPaths(t *testing.T) {
 	f := &horizonmodels.HorizonFragment{
 		CanonicalPath: "/zone/ae/infrastructure_disruption/fujairah",
-		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Class:          ah.FragmentClassGeo,
+		Subtype:          "affected_zone",
 		Identifiers: map[string]string{
 			"merged_paths": "/zone/ae/infrastructure_disruption/united-arab-emirates",
 		},

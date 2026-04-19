@@ -91,20 +91,20 @@ func (h *ControlMapHandler) Execute(ctx context.Context, eng pipeline.Engine, in
 		}, nil
 	}
 
-	primaryTypes := []models.DependencyType{
-		models.DependencyTypeControls,
-		models.DependencyTypeManages,
-		models.DependencyTypeAdministers,
+	primaryTypes := []DependencyType{
+		DependencyTypeControls,
+		DependencyTypeManages,
+		DependencyTypeAdministers,
 	}
-	supportingTypes := []models.DependencyType{
-		models.DependencyTypeOwns,
-		models.DependencyTypeInvestsIn,
-		models.DependencyTypeHasSubgroup,
-		models.DependencyTypeMemberOf,
-		models.DependencyTypeAffiliatedWith,
-		models.DependencyTypeOperatesVia,
+	supportingTypes := []DependencyType{
+		DependencyTypeOwns,
+		DependencyTypeInvestsIn,
+		DependencyTypeHasSubgroup,
+		DependencyTypeMemberOf,
+		DependencyTypeAffiliatedWith,
+		DependencyTypeOperatesVia,
 	}
-	edgeTypes := append(append([]models.DependencyType(nil), primaryTypes...), supportingTypes...)
+	edgeTypes := append(append([]DependencyType(nil), primaryTypes...), supportingTypes...)
 
 	nodeCache := map[string]*models.HorizonFragment{}
 	focusNodePaths := make([]string, 0, len(focusFragments))

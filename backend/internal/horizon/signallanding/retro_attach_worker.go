@@ -57,7 +57,7 @@ func (w *RetroAttachWorker) EnqueueFragment(ctx context.Context, fragment *horiz
 		TenantID:      strings.TrimSpace(firstNonEmpty(fragment.TenantID, "global")),
 		FragmentID:    strings.TrimSpace(fragment.ID),
 		CanonicalPath: strings.TrimSpace(fragment.CanonicalPath),
-		FragmentType:  fragment.Type,
+		FragmentClass: fragment.Class,
 		Source:        strings.TrimSpace(source),
 	}
 	if err := w.queueRepo.UpsertObservation(ctx, item, w.maturityWindow); err != nil && w.logger != nil {

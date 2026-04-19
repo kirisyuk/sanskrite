@@ -33,6 +33,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 var ErrFragmentNotFound = errors.New("horizon fragment not found")
@@ -118,7 +119,7 @@ func (r *HorizonFragmentsRepository) normalizeProductDictionaryRefs(ctx context.
 		return nil
 	}
 	tenantID := firstNonEmptyFragmentTenant(fragment.TenantID)
-	if fragment.Type == models.FragmentTypeProduct {
+	if fragment.Class == ah.FragmentClassProduct {
 		canonicalPath, matched, err := r.productDictionary.CanonicalizeProductPathForTenant(ctx, tenantID, fragment.CanonicalPath)
 		if err != nil {
 			return err
@@ -144,7 +145,7 @@ func (r *HorizonFragmentsRepository) normalizeRegulatoryDictionaryRefs(ctx conte
 	if r == nil || fragment == nil {
 		return nil
 	}
-	if r.mechanismDictionary != nil && fragment.Type == models.FragmentTypeMechanism {
+	if r.mechanismDictionary != nil && fragment.Class == ah.FragmentClassMechanism {
 		cp := strings.TrimSpace(fragment.CanonicalPath)
 		if strings.HasPrefix(cp, "/mechanism/") {
 			canonicalPath, matched, err := r.mechanismDictionary.CanonicalizeMechanismPath(ctx, cp)
@@ -174,7 +175,7 @@ func (r *HorizonFragmentsRepository) normalizeRegulatoryDictionaryRefs(ctx conte
 			if matched && canonicalPath != "" && canonicalPath != cp {
 				fragment.CanonicalPath = canonicalPath
 				fragment.CanonicalParts = nil
-			} else if !matched && fragment.Type == models.FragmentTypeOrganization {
+			} else if !matched && fragment.Class == ah.FragmentClassOrg {
 				r.govDictionary.RecordUnknownGovCandidateAsync(
 					firstNonEmptyFragmentTenant(fragment.TenantID),
 					cp,
@@ -201,7 +202,7 @@ func (r *HorizonFragmentsRepository) recordUnknownProductCandidatesAsync(fragmen
 		}()
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		defer cancel()
-		if f.Type == models.FragmentTypeProduct {
+		if f.Class == ah.FragmentClassProduct {
 			_ = r.productDictionary.RecordUnknownProductCandidate(ctx, productdict.ProductObservation{
 				TenantID:     firstNonEmptyFragmentTenant(f.TenantID),
 				ObservedPath: strings.TrimSpace(f.CanonicalPath),
@@ -210,7 +211,7 @@ func (r *HorizonFragmentsRepository) recordUnknownProductCandidatesAsync(fragmen
 				FragmentID:   strings.TrimSpace(f.ID),
 			})
 		}
-		if f.Type == models.FragmentTypeSupplyLink && f.ProductRef != nil {
+		if f.IsLegacySupplyLink() && f.ProductRef != nil {
 			_ = r.productDictionary.RecordUnknownProductCandidate(ctx, productdict.ProductObservation{
 				TenantID:     firstNonEmptyFragmentTenant(f.TenantID),
 				ObservedPath: strings.TrimSpace(*f.ProductRef),
@@ -280,12 +281,12 @@ func (r *HorizonFragmentsRepository) buildGraphEnrichContext(ctx context.Context
 			neighborIDs[id] = struct{}{}
 		}
 		if edge.Qualifiers != nil {
-			routeHints = append(routeHints, graphEnrichQualifierStrings(edge.Qualifiers[models.QualifierTransportVia])...)
-			routeHints = append(routeHints, graphEnrichQualifierStrings(edge.Qualifiers[models.QualifierFlowRefs])...)
-			zoneHints = append(zoneHints, graphEnrichQualifierStrings(edge.Qualifiers[models.QualifierZoneRefs])...)
-			zoneHints = append(zoneHints, graphEnrichQualifierStrings(edge.Qualifiers[models.QualifierAffectedZoneRefs])...)
+			routeHints = append(routeHints, graphEnrichQualifierStrings(edge.Qualifiers[graphenrich.QualifierTransportVia])...)
+			routeHints = append(routeHints, graphEnrichQualifierStrings(edge.Qualifiers[graphenrich.QualifierFlowRefs])...)
+			zoneHints = append(zoneHints, graphEnrichQualifierStrings(edge.Qualifiers[graphenrich.QualifierZoneRefs])...)
+			zoneHints = append(zoneHints, graphEnrichQualifierStrings(edge.Qualifiers[graphenrich.QualifierAffectedZoneRefs])...)
 		}
-		pathHints = append(pathHints, string(edge.Type), string(edge.GetFacet()))
+		pathHints = append(pathHints, string(edge.Relation), edgeFacetString(edge))
 	}
 	for _, edge := range outgoing {
 		collectEdge(edge)
@@ -374,12 +375,15 @@ func ensurePersistInvariants(fragment *models.HorizonFragment) {
 		return
 	}
 	cp := strings.TrimSpace(fragment.CanonicalPath)
-	if fragment.Type == "" && cp != "" {
-		if inferred, ok := edgesemantics.ExpectedTypeFromCanonicalPath(cp); ok && inferred != "" {
-			fragment.Type = inferred
+	if fragment.Class == "" && cp != "" {
+		if inferredClass, inferredSubtype, ok := edgesemantics.ExpectedClassFromCanonicalPath(cp); ok && inferredClass != "" {
+			fragment.Class = inferredClass
+			if inferredSubtype != "" && strings.TrimSpace(fragment.Subtype) == "" {
+				fragment.Subtype = inferredSubtype
+			}
 		}
 	}
-	if fragment.Type != models.FragmentTypeSupplyLink && strings.TrimSpace(fragment.TenantID) == "" {
+	if !fragment.IsLegacySupplyLink() && strings.TrimSpace(fragment.TenantID) == "" {
 		fragment.TenantID = "global"
 	}
 	owner := strings.TrimSpace(fragment.Governance.Owner)
@@ -391,23 +395,26 @@ func ensurePersistInvariants(fragment *models.HorizonFragment) {
 	}
 }
 
-// bestEffortReconcileFragmentTypeFromPath keeps fragment.Type aligned with canonical path namespace.
-// This guarantees deterministic type<->path mapping at the repository boundary.
+// bestEffortReconcileFragmentTypeFromPath keeps fragment.Class aligned with canonical path namespace.
+// This guarantees deterministic class<->path mapping at the repository boundary.
 func bestEffortReconcileFragmentTypeFromPath(fragment *models.HorizonFragment) {
 	if fragment == nil {
 		return
 	}
-	reconciled, changed := edgesemantics.ReconcileTypeWithCanonicalPath(
-		fragment.Type,
+	reconciledClass, reconciledSubtype, changed := edgesemantics.ReconcileClassWithCanonicalPath(
+		fragment.Class,
 		strings.TrimSpace(fragment.CanonicalPath),
 	)
-	if !changed || reconciled == "" {
+	if !changed || reconciledClass == "" {
 		return
 	}
-	prev := fragment.Type
-	fragment.Type = reconciled
-	log.Printf("[HorizonFragments] INFO: reconciled fragment type from canonicalPath: fragmentId=%q canonicalPath=%q from=%q to=%q",
-		strings.TrimSpace(fragment.ID), strings.TrimSpace(fragment.CanonicalPath), prev, reconciled)
+	prev := fragment.Class
+	fragment.Class = reconciledClass
+	if reconciledSubtype != "" && strings.TrimSpace(fragment.Subtype) == "" {
+		fragment.Subtype = reconciledSubtype
+	}
+	log.Printf("[HorizonFragments] INFO: reconciled fragment class from canonicalPath: fragmentId=%q canonicalPath=%q from=%q to=%q",
+		strings.TrimSpace(fragment.ID), strings.TrimSpace(fragment.CanonicalPath), prev, reconciledClass)
 }
 
 func canonicalPathDocID(tenantID, canonicalPath string) string {
@@ -709,7 +716,8 @@ func (r *HorizonFragmentsRepository) uploadToGCS(ctx context.Context, fragment *
 		"structData": map[string]interface{}{
 			"tenantId":          fragment.TenantID,
 			"type":              "horizon_fragment",
-			"fragmentType":      fragment.Type,
+			"fragmentType":      fragment.Class,
+			"fragmentSubtype":   fragment.Subtype,
 			"canonicalPath":     fragment.CanonicalPath,
 			"displayName":       fragmentDisplayName(fragment),
 			"labelEn":           strings.TrimSpace(fragment.Labels["en"]),
@@ -1168,7 +1176,7 @@ func (r *HorizonFragmentsRepository) createWithOptions(ctx context.Context, frag
 	doc := r.col.NewDoc()
 	if cp != "" {
 		tenantKey := strings.TrimSpace(fragment.TenantID)
-		if fragment.Type != models.FragmentTypeSupplyLink {
+		if !fragment.IsLegacySupplyLink() {
 			tenantKey = "global"
 		}
 		if tenantKey == "" {
@@ -1517,7 +1525,7 @@ func (r *HorizonFragmentsRepository) BatchGetSupplyLinksByCanonicalPaths(ctx con
 		return nil, err
 	}
 	for cp, fragment := range fragments {
-		if fragment == nil || fragment.Type != models.FragmentTypeSupplyLink {
+		if fragment == nil || !fragment.IsLegacySupplyLink() {
 			delete(fragments, cp)
 		}
 	}
@@ -1734,7 +1742,7 @@ func (r *HorizonFragmentsRepository) FindByIdentifier(ctx context.Context, key, 
 // FindByIdentifierAndType finds fragments by a specific identifier key/value and optional fragment type.
 // This is safer than FindByIdentifier for dedup flows, because identifiers like shortName/legalName
 // can collide across different fragment types (e.g., PROGRAM vs ORGANIZATION).
-func (r *HorizonFragmentsRepository) FindByIdentifierAndType(ctx context.Context, key, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) {
+func (r *HorizonFragmentsRepository) FindByIdentifierAndType(ctx context.Context, key, value string, fragType ah.FragmentClass) ([]*models.HorizonFragment, error) {
 	if key == "" || value == "" {
 		return nil, ErrInvalidDocument
 	}
@@ -1762,7 +1770,7 @@ func (r *HorizonFragmentsRepository) FindByIdentifierAndType(ctx context.Context
 
 // FindByLabel finds fragments by a specific label language and value, filtered by type.
 // For example: FindByLabel(ctx, "en", "Wingtech Technology Co., Ltd.", "ORGANIZATION")
-func (r *HorizonFragmentsRepository) FindByLabel(ctx context.Context, lang, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) {
+func (r *HorizonFragmentsRepository) FindByLabel(ctx context.Context, lang, value string, fragType ah.FragmentClass) ([]*models.HorizonFragment, error) {
 	if lang == "" || value == "" {
 		return nil, ErrInvalidDocument
 	}
@@ -1792,7 +1800,7 @@ func (r *HorizonFragmentsRepository) FindByLabel(ctx context.Context, lang, valu
 	return fragments, nil
 }
 
-func (r *HorizonFragmentsRepository) FindByLabelForTenant(ctx context.Context, tenantID, lang, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) {
+func (r *HorizonFragmentsRepository) FindByLabelForTenant(ctx context.Context, tenantID, lang, value string, fragType ah.FragmentClass) ([]*models.HorizonFragment, error) {
 	tenantID = strings.TrimSpace(tenantID)
 	if tenantID == "" || tenantID == "global" {
 		return r.FindByLabel(ctx, lang, value, fragType)
@@ -1808,7 +1816,7 @@ func (r *HorizonFragmentsRepository) FindByLabelForTenant(ctx context.Context, t
 	return mergeFragmentsPreferTenant(tenantFragments, globalFragments, 20), nil
 }
 
-func (r *HorizonFragmentsRepository) findByLabelForSingleTenant(ctx context.Context, tenantID, lang, value string, fragType models.FragmentType) ([]*models.HorizonFragment, error) {
+func (r *HorizonFragmentsRepository) findByLabelForSingleTenant(ctx context.Context, tenantID, lang, value string, fragType ah.FragmentClass) ([]*models.HorizonFragment, error) {
 	if lang == "" || value == "" {
 		return nil, ErrInvalidDocument
 	}
@@ -1851,7 +1859,7 @@ func (r *HorizonFragmentsRepository) FindByNormalizedLegalName(ctx context.Conte
 	}
 
 	// Query orgs (limit to reasonable number for client-side filtering)
-	q := r.col.Where("tenantId", "==", "global").Where("type", "==", string(models.FragmentTypeOrganization)).Limit(500)
+	q := r.col.Where("tenantId", "==", "global").Where("type", "==", "ORGANIZATION").Limit(500)
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
@@ -2173,12 +2181,12 @@ func (r *HorizonFragmentsRepository) ListByStatus(ctx context.Context, status st
 
 // GeoListFilter holds optional filters for geo-object listing.
 type GeoListFilter struct {
-	Types         []models.FragmentType
+	Types         []ah.FragmentClass
 	CreatedAfter  *time.Time
 	CreatedBefore *time.Time
 }
 
-func (f *GeoListFilter) matchesType(t models.FragmentType) bool {
+func (f *GeoListFilter) matchesType(t ah.FragmentClass) bool {
 	if f == nil || len(f.Types) == 0 {
 		return true
 	}
@@ -2299,7 +2307,7 @@ func (r *HorizonFragmentsRepository) ListGeoBound(
 		if _, exists := seen[fragment.ID]; exists {
 			continue
 		}
-		if !filter.matchesType(fragment.Type) {
+		if !filter.matchesType(fragment.Class) {
 			continue
 		}
 		if !filter.matchesCreatedAt(fragment.CreatedAt) {
@@ -2573,11 +2581,21 @@ func (r *HorizonFragmentsRepository) SearchByVectorText(ctx context.Context, que
 	return nil, fmt.Errorf("vector search not yet implemented, requires Firestore vector index")
 }
 
-// ListByTypeAndTenant lists fragments by type and tenant ID.
+// ListByTypeAndTenant lists fragments by class and tenant ID.
+//
+// Queries Firestore on the canonical `class` field (post-AH migration shape).
+// For finer-grained selection within a class (e.g. "site/deposit" vs "site/refinery"),
+// use ListByClassSubtypeAndTenant instead.
+//
+// NOTE on transitional data: documents written before the AH-taxonomy migration
+// landed have a legacy `type` field with values like "FACILITY"/"DEPOSIT"/"AFFECTED_ZONE".
+// Such documents will NOT match this query — migrate-cli (cmd/taxonomy_migrate)
+// rewrites them to the new shape during the transition window. Use
+// ListByLegacyTypeAndTenant for explicit legacy-format reads.
 func (r *HorizonFragmentsRepository) ListByTypeAndTenant(
 	ctx context.Context,
 	tenantID string,
-	fragType models.FragmentType,
+	fragType ah.FragmentClass,
 	limit int,
 ) ([]*models.HorizonFragment, error) {
 	if limit <= 0 {
@@ -2587,7 +2605,7 @@ func (r *HorizonFragmentsRepository) ListByTypeAndTenant(
 		limit = 1000 // Firestore limit
 	}
 
-	q := r.col.Where("tenantId", "==", tenantID).Where("type", "==", string(fragType)).Limit(limit)
+	q := r.col.Where("tenantId", "==", tenantID).Where("class", "==", string(fragType)).Limit(limit)
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
@@ -2606,12 +2624,99 @@ func (r *HorizonFragmentsRepository) ListByTypeAndTenant(
 	return fragments, nil
 }
 
-// ListByType lists fragments by type across all tenants.
+// ListByClassSubtypeAndTenant lists fragments by class+subtype and tenant ID.
+//
+// Required for callers that previously used legacy fragment-type sentinels
+// (PROGRAM, MEDIA_CHANNEL, DEPOSIT, SUPPLY_LINK, AFFECTED_ZONE) which under
+// the AH taxonomy collapse to (Class, Subtype) tuples. Empty subtype matches
+// only documents with no subtype set; for "any subtype within class" use
+// ListByTypeAndTenant.
+func (r *HorizonFragmentsRepository) ListByClassSubtypeAndTenant(
+	ctx context.Context,
+	tenantID string,
+	class ah.FragmentClass,
+	subtype string,
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	q := r.col.
+		Where("tenantId", "==", tenantID).
+		Where("class", "==", string(class)).
+		Where("subtype", "==", subtype).
+		Limit(limit)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	fragments := make([]*models.HorizonFragment, 0, len(docs))
+	for _, doc := range docs {
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			continue
+		}
+		assignLoadedFragmentID(&fragment, doc)
+		fragments = append(fragments, &fragment)
+	}
+
+	return fragments, nil
+}
+
+// ListByLegacyTypeAndTenant lists fragments by the legacy UPPER_SNAKE
+// `type` field for the transition window before migrate-cli has rewritten
+// every document to the AH (`class` + `subtype`) shape. Pass values like
+// "AFFECTED_ZONE", "SUPPLY_LINK", "DEPOSIT" — case is preserved as-is.
+//
+// Once migrate-cli completes a tenant rewrite, callers should switch to
+// ListByClassSubtypeAndTenant; this helper will be removed at the
+// docs-actualize / cleanup-code milestone.
+func (r *HorizonFragmentsRepository) ListByLegacyTypeAndTenant(
+	ctx context.Context,
+	tenantID string,
+	legacyType string,
+	limit int,
+) ([]*models.HorizonFragment, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	if limit > 1000 {
+		limit = 1000
+	}
+
+	q := r.col.
+		Where("tenantId", "==", tenantID).
+		Where("type", "==", legacyType).
+		Limit(limit)
+	docs, err := q.Documents(ctx).GetAll()
+	if err != nil {
+		return nil, err
+	}
+
+	fragments := make([]*models.HorizonFragment, 0, len(docs))
+	for _, doc := range docs {
+		var fragment models.HorizonFragment
+		if err := doc.DataTo(&fragment); err != nil {
+			continue
+		}
+		assignLoadedFragmentID(&fragment, doc)
+		fragments = append(fragments, &fragment)
+	}
+
+	return fragments, nil
+}
+
+// ListByType lists fragments by class across all tenants.
 // Used sparingly by merge-retarget passes when a global fragment merge must update
-// tenant-scoped overlays such as SUPPLY_LINK fragments.
+// tenant-scoped overlays such as legacy supply-link fragments.
 func (r *HorizonFragmentsRepository) ListByType(
 	ctx context.Context,
-	fragType models.FragmentType,
+	fragType ah.FragmentClass,
 	limit int,
 ) ([]*models.HorizonFragment, error) {
 	if limit <= 0 {
@@ -2621,7 +2726,7 @@ func (r *HorizonFragmentsRepository) ListByType(
 		limit = 5000
 	}
 
-	q := r.col.Where("type", "==", string(fragType)).Limit(limit)
+	q := r.col.Where("class", "==", string(fragType)).Limit(limit)
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
@@ -2797,7 +2902,7 @@ func (r *HorizonFragmentsRepository) FindSupplyLinksByTransportVia(
 	}
 	docs, err := r.col.
 		Where("tenantId", "==", queryTenant).
-		Where("type", "==", string(models.FragmentTypeSupplyLink)).
+		Where("type", "==", "SUPPLY_LINK").
 		Where("transportViaRefs", "array-contains", transportRef).
 		Limit(limit).
 		Documents(ctx).
@@ -2858,7 +2963,7 @@ func (r *HorizonFragmentsRepository) FindSupplyLinksByTransportViaAnyTenant(
 			continue
 		}
 		assignLoadedFragmentID(&fragment, doc)
-		if fragment.Type != models.FragmentTypeSupplyLink {
+		if !fragment.IsLegacySupplyLink() {
 			continue
 		}
 		if _, ok := seen[fragment.ID]; ok {
@@ -2907,7 +3012,7 @@ func (r *HorizonFragmentsRepository) findSupplyLinksByRefFields(
 		for _, ref := range refs {
 			docs, err := r.col.
 				Where("tenantId", "==", tenantID).
-				Where("type", "==", string(models.FragmentTypeSupplyLink)).
+				Where("type", "==", "SUPPLY_LINK").
 				Where(field, "==", ref).
 				Limit(limit).
 				Documents(ctx).
@@ -2986,7 +3091,7 @@ func (r *HorizonFragmentsRepository) findSupplyLinksByRefFieldsAnyTenant(
 					continue
 				}
 				assignLoadedFragmentID(&fragment, doc)
-				if fragment.Type != models.FragmentTypeSupplyLink {
+				if !fragment.IsLegacySupplyLink() {
 					continue
 				}
 				if _, ok := seen[fragment.ID]; ok {
@@ -3045,10 +3150,10 @@ func (r *HorizonFragmentsRepository) buildSupplyLinkActorRefAliases(
 		return aliases
 	}
 
-	edgeTypes := []models.DependencyType{
-		models.DependencyTypeOwns,
-		models.DependencyTypeControls,
-		models.DependencyTypeOperatesIn,
+	edgeTypes := []ah.RelationName{
+		relOwns,
+		relControls,
+		relOperatesIn,
 	}
 	adjacentIDs := make(map[string]struct{}, 16)
 	for _, edgeType := range edgeTypes {

@@ -14,7 +14,7 @@ const (
 
 type FragmentSeed struct {
 	CanonicalPath  string
-	Type           horizonmodels.FragmentType
+	Type           FragmentType
 	DisplayName    string
 	Description    string
 	EntityPath     string
@@ -34,7 +34,7 @@ type FragmentSeed struct {
 type EdgeSeed struct {
 	SourcePath    string
 	TargetPath    string
-	Type          horizonmodels.DependencyType
+	Type          DependencyType
 	Criticality   float64
 	Amplification float64
 	LatencyHours  int
@@ -71,7 +71,7 @@ func Spec(projectID string) HotPathSpec {
 		Fragments: []FragmentSeed{
 			{
 				CanonicalPath: "/loc/kz",
-				Type:          horizonmodels.FragmentTypeGeoRegion,
+				Type:          FragmentTypeGeoRegion,
 				DisplayName:   "Kazakhstan",
 				Description:   "Country anchor for Kazakhstan policy-impact runs and macro calibration assumptions for VAT scenarios.",
 				EntityPath:    "/Geo/Country",
@@ -92,7 +92,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/gov/kz/ministry-of-finance",
-				Type:          horizonmodels.FragmentTypeOrganization,
+				Type:          FragmentTypeOrganization,
 				DisplayName:   "Ministry of Finance of Kazakhstan",
 				Description:   "Primary policy authority for Kazakhstan VAT design, budget framing, and tax reform steering.",
 				EntityPath:    "/Organization/Government/Ministry",
@@ -109,7 +109,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/gov/kz/state-revenue-committee",
-				Type:          horizonmodels.FragmentTypeOrganization,
+				Type:          FragmentTypeOrganization,
 				DisplayName:   "State Revenue Committee of Kazakhstan",
 				Description:   "Tax administration and enforcement body executing VAT collection, compliance, and audit posture.",
 				EntityPath:    "/Organization/Government/Agency",
@@ -128,7 +128,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/gov/kz/ministry-of-national-economy",
-				Type:          horizonmodels.FragmentTypeOrganization,
+				Type:          FragmentTypeOrganization,
 				DisplayName:   "Ministry of National Economy of Kazakhstan",
 				Description:   "Macro-policy and investment climate authority responsible for business environment, economic predictability, and investment posture.",
 				EntityPath:    "/Organization/Government/Ministry",
@@ -145,7 +145,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/gov/kz/ministry-of-health",
-				Type:          horizonmodels.FragmentTypeOrganization,
+				Type:          FragmentTypeOrganization,
 				DisplayName:   "Ministry of Health of Kazakhstan",
 				Description:   "Public health authority responsible for healthcare budgets, procurement continuity, and service resilience.",
 				EntityPath:    "/Organization/Government/Ministry",
@@ -162,7 +162,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/gov/kz/ministry-of-industry-and-construction",
-				Type:          horizonmodels.FragmentTypeOrganization,
+				Type:          FragmentTypeOrganization,
 				DisplayName:   "Ministry of Industry and Construction of Kazakhstan",
 				Description:   "Industrial and infrastructure authority linked to domestic production, construction, and engineering services capacity.",
 				EntityPath:    "/Organization/Government/Ministry",
@@ -179,7 +179,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/gov/kz/ministry-of-education",
-				Type:          horizonmodels.FragmentTypeOrganization,
+				Type:          FragmentTypeOrganization,
 				DisplayName:   "Education authority of Kazakhstan",
 				Description:   "Public education authority responsible for education budget continuity, procurement, and service resilience.",
 				EntityPath:    "/Organization/Government/Ministry",
@@ -196,7 +196,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/decision/taxation/raise-vat-to-16pct-kazakhstan-2026",
-				Type:          horizonmodels.FragmentTypeDecisionPoint,
+				Type:          FragmentTypeDecisionPoint,
 				DisplayName:   "Raise VAT to 16% in Kazakhstan",
 				Description:   "Decision point for the 2026 Kazakhstan VAT increase scenario used as the policy anchor in the hot path.",
 				EntityPath:    "/Decision/Taxation/RateChange",
@@ -215,7 +215,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/mechanism/regulatory/vat-rate-increase",
-				Type:          horizonmodels.FragmentTypeMechanism,
+				Type:          FragmentTypeMechanism,
 				DisplayName:   "VAT rate increase",
 				Description:   "Canonical regulatory mechanism representing an upward VAT rate change and its tax incidence channel.",
 				EntityPath:    "/Mechanism/Regulatory/Tax",
@@ -231,7 +231,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/program/kz/vat-reform-2026",
-				Type:          horizonmodels.FragmentTypeProgram,
+				Type:          FragmentTypeProgram,
 				DisplayName:   "Kazakhstan VAT reform 2026",
 				Description:   "Administrative execution program for VAT transition, taxpayer communication, and compliance rollout in Kazakhstan.",
 				EntityPath:    "/Program/Fiscal/TaxAdministration",
@@ -247,7 +247,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/program/kz/investment-climate-stability",
-				Type:          horizonmodels.FragmentTypeProgram,
+				Type:          FragmentTypeProgram,
 				DisplayName:   "Kazakhstan investment climate stability program",
 				Description:   "Programmatic response to preserve investor confidence, domestic expansion, and macro-policy predictability during the VAT transition.",
 				EntityPath:    "/Program/Economic/InvestmentClimate",
@@ -263,7 +263,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/program/kz/domestic-production-continuity",
-				Type:          horizonmodels.FragmentTypeProgram,
+				Type:          FragmentTypeProgram,
 				DisplayName:   "Kazakhstan domestic production continuity program",
 				Description:   "Programmatic support for internal production continuity, domestic value added, and GDP resilience under tax transition pressure.",
 				EntityPath:    "/Program/Industrial/ProductionContinuity",
@@ -279,7 +279,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/program/kz/public-services-resilience",
-				Type:          horizonmodels.FragmentTypeProgram,
+				Type:          FragmentTypeProgram,
 				DisplayName:   "Kazakhstan public services resilience program",
 				Description:   "Program for maintaining healthcare, education, and engineering service continuity during fiscal and procurement pressure.",
 				EntityPath:    "/Program/PublicServices/Resilience",
@@ -295,7 +295,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/market/kz/consumer/food",
-				Type:          horizonmodels.FragmentTypeMarket,
+				Type:          FragmentTypeMarket,
 				DisplayName:   "Kazakhstan food market",
 				Description:   "Consumer food market exposure bucket for VAT pass-through and demand elasticity in Kazakhstan.",
 				EntityPath:    "/Market/Consumer/Food",
@@ -314,7 +314,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/market/kz/consumer/retail",
-				Type:          horizonmodels.FragmentTypeMarket,
+				Type:          FragmentTypeMarket,
 				DisplayName:   "Kazakhstan retail market",
 				Description:   "Retail market exposure bucket for price pass-through, working-capital pressure, and consumer demand adaptation.",
 				EntityPath:    "/Market/Consumer/Retail",
@@ -333,7 +333,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/market/kz/industrial/import-distribution",
-				Type:          horizonmodels.FragmentTypeMarket,
+				Type:          FragmentTypeMarket,
 				DisplayName:   "Kazakhstan import distribution market",
 				Description:   "Import-heavy distribution market used to model VAT settlement pressure, inventory financing, and cost pass-through.",
 				EntityPath:    "/Market/Industrial/ImportDistribution",
@@ -352,7 +352,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/market/kz/finance/working-capital",
-				Type:          horizonmodels.FragmentTypeMarket,
+				Type:          FragmentTypeMarket,
 				DisplayName:   "Kazakhstan working capital market",
 				Description:   "Financing and settlement pressure bucket for VAT credit timing, liquidity, and short-term working-capital adaptation.",
 				EntityPath:    "/Market/Finance/WorkingCapital",
@@ -371,7 +371,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/market/kz/public-sector/budget-revenue",
-				Type:          horizonmodels.FragmentTypeMarket,
+				Type:          FragmentTypeMarket,
 				DisplayName:   "Kazakhstan budget revenue base",
 				Description:   "Public revenue base capturing VAT collection, budget inflow sensitivity, and fiscal headroom under the tax transition.",
 				EntityPath:    "/Market/Public/BudgetRevenue",
@@ -393,7 +393,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/market/kz/finance/investment-climate",
-				Type:          horizonmodels.FragmentTypeMarket,
+				Type:          FragmentTypeMarket,
 				DisplayName:   "Kazakhstan investment climate",
 				Description:   "Domestic and foreign investor confidence channel exposed to tax predictability, compliance friction, and transition credibility.",
 				EntityPath:    "/Market/Capital/InvestmentClimate",
@@ -412,7 +412,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/market/kz/industrial/internal-production",
-				Type:          horizonmodels.FragmentTypeMarket,
+				Type:          FragmentTypeMarket,
 				DisplayName:   "Kazakhstan internal production base",
 				Description:   "Internal production channel used as a proxy for domestic value added, manufacturing continuity, and GDP sensitivity.",
 				EntityPath:    "/Market/Industrial/InternalProduction",
@@ -434,7 +434,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/market/kz/healthcare/healthcare-public",
-				Type:          horizonmodels.FragmentTypeMarket,
+				Type:          FragmentTypeMarket,
 				DisplayName:   "Kazakhstan public healthcare system",
 				Description:   "Public healthcare segment exposed to procurement cost shifts, fiscal pressure, and medical goods pass-through.",
 				EntityPath:    "/Market/Public/HealthcarePublic",
@@ -453,7 +453,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/market/kz/healthcare/healthcare-private",
-				Type:          horizonmodels.FragmentTypeMarket,
+				Type:          FragmentTypeMarket,
 				DisplayName:   "Kazakhstan private healthcare sector",
 				Description:   "Private healthcare and pharmacy segment exposed to price pass-through, imports, and affordability shifts.",
 				EntityPath:    "/Market/Private/HealthcarePrivate",
@@ -472,7 +472,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/market/kz/construction/engineering-services",
-				Type:          horizonmodels.FragmentTypeMarket,
+				Type:          FragmentTypeMarket,
 				DisplayName:   "Kazakhstan engineering infrastructure services",
 				Description:   "Engineering and municipal infrastructure operations exposed to procurement costs, imported components, and fiscal capex discipline.",
 				EntityPath:    "/Market/Infrastructure/EngineeringServices",
@@ -491,7 +491,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/market/kz/education/education-system",
-				Type:          horizonmodels.FragmentTypeMarket,
+				Type:          FragmentTypeMarket,
 				DisplayName:   "Kazakhstan education system",
 				Description:   "Education services segment used to model budgetary trade-offs, procurement inflation, and long-term human capital sensitivity.",
 				EntityPath:    "/Market/Public/EducationSystem",
@@ -510,7 +510,7 @@ func Spec(projectID string) HotPathSpec {
 			},
 			{
 				CanonicalPath: "/community/kz/trade/bazaar-traders",
-				Type:          horizonmodels.FragmentTypeCommunity,
+				Type:          FragmentTypeCommunity,
 				DisplayName:   "Kazakhstan bazaar traders",
 				Description:   "Informal and semi-formal small-trader community used to model evasion, cash migration, and channel substitution.",
 				EntityPath:    "/Community/Trade/InformalRetail",
@@ -529,7 +529,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/gov/kz/ministry-of-finance",
 				TargetPath:    "/gov/kz/state-revenue-committee",
-				Type:          horizonmodels.DependencyTypeAdministers,
+				Type:          DependencyTypeAdministers,
 				Criticality:   0.92,
 				Amplification: 1.05,
 				Reason:        "Administrative authority chain for VAT policy execution",
@@ -541,7 +541,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/gov/kz/ministry-of-national-economy",
 				TargetPath:    "/program/kz/investment-climate-stability",
-				Type:          horizonmodels.DependencyTypeAdministers,
+				Type:          DependencyTypeAdministers,
 				Criticality:   0.82,
 				Amplification: 1.03,
 				Reason:        "National economy ministry owns the investment climate stabilization response.",
@@ -553,7 +553,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/gov/kz/ministry-of-industry-and-construction",
 				TargetPath:    "/program/kz/domestic-production-continuity",
-				Type:          horizonmodels.DependencyTypeAdministers,
+				Type:          DependencyTypeAdministers,
 				Criticality:   0.80,
 				Amplification: 1.03,
 				Reason:        "Industry ministry owns domestic production continuity and engineering service resilience.",
@@ -565,7 +565,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/gov/kz/ministry-of-health",
 				TargetPath:    "/program/kz/public-services-resilience",
-				Type:          horizonmodels.DependencyTypeAdministers,
+				Type:          DependencyTypeAdministers,
 				Criticality:   0.79,
 				Amplification: 1.02,
 				Reason:        "Health ministry co-administers the public services resilience response.",
@@ -577,7 +577,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/gov/kz/ministry-of-education",
 				TargetPath:    "/program/kz/public-services-resilience",
-				Type:          horizonmodels.DependencyTypeAdministers,
+				Type:          DependencyTypeAdministers,
 				Criticality:   0.77,
 				Amplification: 1.02,
 				Reason:        "Education authority co-administers public services continuity under fiscal pressure.",
@@ -589,7 +589,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/gov/kz/ministry-of-finance",
 				TargetPath:    "/decision/taxation/raise-vat-to-16pct-kazakhstan-2026",
-				Type:          horizonmodels.DependencyTypeGatekeepsDecision,
+				Type:          DependencyTypeGatekeepsDecision,
 				Criticality:   0.96,
 				Amplification: 1.08,
 				Reason:        "Finance ministry gates the VAT rate decision",
@@ -604,7 +604,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/gov/kz/ministry-of-finance",
 				TargetPath:    "/program/kz/vat-reform-2026",
-				Type:          horizonmodels.DependencyTypeAdministers,
+				Type:          DependencyTypeAdministers,
 				Criticality:   0.90,
 				Amplification: 1.03,
 				Reason:        "VAT transition program is managed through finance administration",
@@ -616,7 +616,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/gov/kz/state-revenue-committee",
 				TargetPath:    "/program/kz/vat-reform-2026",
-				Type:          horizonmodels.DependencyTypeAdministers,
+				Type:          DependencyTypeAdministers,
 				Criticality:   0.88,
 				Amplification: 1.04,
 				Reason:        "State Revenue Committee executes compliance and taxpayer rollout",
@@ -628,7 +628,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/decision/taxation/raise-vat-to-16pct-kazakhstan-2026",
 				TargetPath:    "/mechanism/regulatory/vat-rate-increase",
-				Type:          horizonmodels.DependencyTypeUsesMechanism,
+				Type:          DependencyTypeUsesMechanism,
 				Criticality:   0.95,
 				Amplification: 1.10,
 				Reason:        "Decision materializes through a VAT rate increase mechanism",
@@ -642,7 +642,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/program/kz/vat-reform-2026",
 				TargetPath:    "/mechanism/regulatory/vat-rate-increase",
-				Type:          horizonmodels.DependencyTypeUsesMechanism,
+				Type:          DependencyTypeUsesMechanism,
 				Criticality:   0.83,
 				Amplification: 1.02,
 				Reason:        "Administrative program executes the rate change mechanism",
@@ -653,7 +653,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/program/kz/investment-climate-stability",
 				TargetPath:    "/market/kz/finance/investment-climate",
-				Type:          horizonmodels.DependencyTypeInfluences,
+				Type:          DependencyTypeInfluences,
 				Criticality:   0.78,
 				Amplification: 1.05,
 				Reason:        "Investment climate program shapes predictability and business confidence under tax change.",
@@ -665,7 +665,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/program/kz/domestic-production-continuity",
 				TargetPath:    "/market/kz/industrial/internal-production",
-				Type:          horizonmodels.DependencyTypeInfluences,
+				Type:          DependencyTypeInfluences,
 				Criticality:   0.80,
 				Amplification: 1.06,
 				Reason:        "Production continuity program influences domestic output and GDP resilience.",
@@ -677,7 +677,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/program/kz/public-services-resilience",
 				TargetPath:    "/market/kz/healthcare/healthcare-public",
-				Type:          horizonmodels.DependencyTypeInfluences,
+				Type:          DependencyTypeInfluences,
 				Criticality:   0.74,
 				Amplification: 1.04,
 				Reason:        "Public services resilience program supports public healthcare continuity.",
@@ -689,7 +689,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/program/kz/public-services-resilience",
 				TargetPath:    "/market/kz/education/education-system",
-				Type:          horizonmodels.DependencyTypeInfluences,
+				Type:          DependencyTypeInfluences,
 				Criticality:   0.72,
 				Amplification: 1.04,
 				Reason:        "Public services resilience program supports education continuity.",
@@ -701,7 +701,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/program/kz/public-services-resilience",
 				TargetPath:    "/market/kz/construction/engineering-services",
-				Type:          horizonmodels.DependencyTypeInfluences,
+				Type:          DependencyTypeInfluences,
 				Criticality:   0.75,
 				Amplification: 1.05,
 				Reason:        "Public services resilience program supports engineering service reliability and maintenance continuity.",
@@ -713,7 +713,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/mechanism/regulatory/vat-rate-increase",
 				TargetPath:    "/loc/kz",
-				Type:          horizonmodels.DependencyTypeAppliesTo,
+				Type:          DependencyTypeAppliesTo,
 				Criticality:   0.86,
 				Amplification: 1.06,
 				Reason:        "National scope of the VAT increase",
@@ -726,7 +726,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/program/kz/vat-reform-2026",
 				TargetPath:    "/market/kz/consumer/food",
-				Type:          horizonmodels.DependencyTypeImposesCondition,
+				Type:          DependencyTypeImposesCondition,
 				Criticality:   0.84,
 				Amplification: 1.07,
 				Reason:        "Food retail faces partial pass-through and consumer price sensitivity",
@@ -744,7 +744,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/program/kz/vat-reform-2026",
 				TargetPath:    "/market/kz/consumer/retail",
-				Type:          horizonmodels.DependencyTypeImposesCondition,
+				Type:          DependencyTypeImposesCondition,
 				Criticality:   0.90,
 				Amplification: 1.10,
 				Reason:        "Retail sector carries higher pass-through and pricing pressure",
@@ -762,7 +762,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/mechanism/regulatory/vat-rate-increase",
 				TargetPath:    "/market/kz/industrial/import-distribution",
-				Type:          horizonmodels.DependencyTypeAppliesTo,
+				Type:          DependencyTypeAppliesTo,
 				Criticality:   0.88,
 				Amplification: 1.12,
 				Reason:        "Import distribution takes direct settlement and inventory-cost pressure",
@@ -780,7 +780,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/mechanism/regulatory/vat-rate-increase",
 				TargetPath:    "/market/kz/finance/working-capital",
-				Type:          horizonmodels.DependencyTypeAppliesTo,
+				Type:          DependencyTypeAppliesTo,
 				Criticality:   0.82,
 				Amplification: 1.09,
 				Reason:        "Liquidity and VAT credit timing affect working-capital demand",
@@ -797,7 +797,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/mechanism/regulatory/vat-rate-increase",
 				TargetPath:    "/market/kz/public-sector/budget-revenue",
-				Type:          horizonmodels.DependencyTypeAppliesTo,
+				Type:          DependencyTypeAppliesTo,
 				Criticality:   0.88,
 				Amplification: 1.10,
 				Reason:        "VAT rate increase directly changes budget revenue expectations and fiscal intake volatility.",
@@ -811,7 +811,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/program/kz/vat-reform-2026",
 				TargetPath:    "/market/kz/finance/investment-climate",
-				Type:          horizonmodels.DependencyTypeInfluences,
+				Type:          DependencyTypeInfluences,
 				Criticality:   0.81,
 				Amplification: 1.07,
 				Reason:        "Transition credibility and compliance burden influence investor confidence and tax predictability perception.",
@@ -825,7 +825,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/mechanism/regulatory/vat-rate-increase",
 				TargetPath:    "/market/kz/industrial/internal-production",
-				Type:          horizonmodels.DependencyTypeAppliesTo,
+				Type:          DependencyTypeAppliesTo,
 				Criticality:   0.82,
 				Amplification: 1.08,
 				Reason:        "Domestic production absorbs part of the tax pass-through through input costs, pricing, and output adjustments.",
@@ -839,7 +839,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/industrial/internal-production",
 				TargetPath:    "/market/kz/public-sector/budget-revenue",
-				Type:          horizonmodels.DependencyTypeInfluences,
+				Type:          DependencyTypeInfluences,
 				Criticality:   0.78,
 				Amplification: 1.05,
 				Reason:        "Internal production affects taxable value added and the broader fiscal base.",
@@ -851,7 +851,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/industrial/internal-production",
 				TargetPath:    "/market/kz/finance/investment-climate",
-				Type:          horizonmodels.DependencyTypeInfluences,
+				Type:          DependencyTypeInfluences,
 				Criticality:   0.74,
 				Amplification: 1.04,
 				Reason:        "Domestic production continuity shapes investor sentiment around capacity, resilience, and returns.",
@@ -863,7 +863,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/program/kz/vat-reform-2026",
 				TargetPath:    "/market/kz/healthcare/healthcare-public",
-				Type:          horizonmodels.DependencyTypeImposesCondition,
+				Type:          DependencyTypeImposesCondition,
 				Criticality:   0.77,
 				Amplification: 1.05,
 				Reason:        "Public healthcare procurement and medicines budgets face cost pressure under the new VAT regime.",
@@ -877,7 +877,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/mechanism/regulatory/vat-rate-increase",
 				TargetPath:    "/market/kz/healthcare/healthcare-private",
-				Type:          horizonmodels.DependencyTypeAppliesTo,
+				Type:          DependencyTypeAppliesTo,
 				Criticality:   0.75,
 				Amplification: 1.06,
 				Reason:        "Private healthcare and pharmacies face direct pass-through from imported equipment, supplies, and services.",
@@ -891,7 +891,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/program/kz/vat-reform-2026",
 				TargetPath:    "/market/kz/construction/engineering-services",
-				Type:          horizonmodels.DependencyTypeImposesCondition,
+				Type:          DependencyTypeImposesCondition,
 				Criticality:   0.79,
 				Amplification: 1.07,
 				Reason:        "Infrastructure operators face procurement inflation and capex reprioritization under higher VAT.",
@@ -905,7 +905,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/program/kz/vat-reform-2026",
 				TargetPath:    "/market/kz/education/education-system",
-				Type:          horizonmodels.DependencyTypeImposesCondition,
+				Type:          DependencyTypeImposesCondition,
 				Criticality:   0.73,
 				Amplification: 1.04,
 				Reason:        "Education budgets and service delivery experience procurement and wage-tradeoff pressure during the transition.",
@@ -919,7 +919,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/public-sector/budget-revenue",
 				TargetPath:    "/market/kz/healthcare/healthcare-public",
-				Type:          horizonmodels.DependencyTypeInfluences,
+				Type:          DependencyTypeInfluences,
 				Criticality:   0.72,
 				Amplification: 1.03,
 				Reason:        "Budget revenue conditions shape public healthcare fiscal room and procurement capacity.",
@@ -931,7 +931,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/public-sector/budget-revenue",
 				TargetPath:    "/market/kz/education/education-system",
-				Type:          horizonmodels.DependencyTypeInfluences,
+				Type:          DependencyTypeInfluences,
 				Criticality:   0.70,
 				Amplification: 1.03,
 				Reason:        "Fiscal intake conditions affect education budget headroom and service continuity.",
@@ -943,7 +943,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/public-sector/budget-revenue",
 				TargetPath:    "/market/kz/construction/engineering-services",
-				Type:          horizonmodels.DependencyTypeInfluences,
+				Type:          DependencyTypeInfluences,
 				Criticality:   0.74,
 				Amplification: 1.04,
 				Reason:        "Revenue headroom influences engineering maintenance, infrastructure upgrades, and service reliability.",
@@ -955,7 +955,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/program/kz/vat-reform-2026",
 				TargetPath:    "/community/kz/trade/bazaar-traders",
-				Type:          horizonmodels.DependencyTypeInfluences,
+				Type:          DependencyTypeInfluences,
 				Criticality:   0.79,
 				Amplification: 1.06,
 				LatencyHours:  24 * 45,
@@ -973,7 +973,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/gov/kz/state-revenue-committee",
 				TargetPath:    "/market/kz/consumer/retail",
-				Type:          horizonmodels.DependencyTypeRegulates,
+				Type:          DependencyTypeRegulates,
 				Criticality:   0.86,
 				Amplification: 1.05,
 				Reason:        "Retail is directly regulated through VAT administration and enforcement",
@@ -985,7 +985,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/gov/kz/state-revenue-committee",
 				TargetPath:    "/market/kz/industrial/import-distribution",
-				Type:          horizonmodels.DependencyTypeRegulates,
+				Type:          DependencyTypeRegulates,
 				Criticality:   0.84,
 				Amplification: 1.04,
 				Reason:        "Importers face VAT settlement, customs, and compliance controls",
@@ -997,7 +997,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/gov/kz/state-revenue-committee",
 				TargetPath:    "/community/kz/trade/bazaar-traders",
-				Type:          horizonmodels.DependencyTypeRegulates,
+				Type:          DependencyTypeRegulates,
 				Criticality:   0.72,
 				Amplification: 0.96,
 				Reason:        "Small traders are affected through audits, registration, and reporting friction",
@@ -1009,7 +1009,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/community/kz/trade/bazaar-traders",
 				TargetPath:    "/market/kz/consumer/retail",
-				Type:          horizonmodels.DependencyTypeParticipatesIn,
+				Type:          DependencyTypeParticipatesIn,
 				Criticality:   0.68,
 				Amplification: 0.97,
 				Reason:        "Informal traders compete in retail channels and absorb part of demand migration",
@@ -1021,7 +1021,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/consumer/food",
 				TargetPath:    "/loc/kz",
-				Type:          horizonmodels.DependencyTypeOperatesIn,
+				Type:          DependencyTypeOperatesIn,
 				Criticality:   0.74,
 				Amplification: 1.00,
 				Reason:        "Food market operates in Kazakhstan national geo scope",
@@ -1032,7 +1032,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/consumer/retail",
 				TargetPath:    "/loc/kz",
-				Type:          horizonmodels.DependencyTypeOperatesIn,
+				Type:          DependencyTypeOperatesIn,
 				Criticality:   0.74,
 				Amplification: 1.00,
 				Reason:        "Retail market operates in Kazakhstan national geo scope",
@@ -1043,7 +1043,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/industrial/import-distribution",
 				TargetPath:    "/loc/kz",
-				Type:          horizonmodels.DependencyTypeOperatesIn,
+				Type:          DependencyTypeOperatesIn,
 				Criticality:   0.74,
 				Amplification: 1.00,
 				Reason:        "Import distribution market operates in Kazakhstan national geo scope",
@@ -1054,7 +1054,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/finance/working-capital",
 				TargetPath:    "/loc/kz",
-				Type:          horizonmodels.DependencyTypeOperatesIn,
+				Type:          DependencyTypeOperatesIn,
 				Criticality:   0.70,
 				Amplification: 1.00,
 				Reason:        "Working-capital financing pressure is national in scope",
@@ -1065,7 +1065,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/public-sector/budget-revenue",
 				TargetPath:    "/loc/kz",
-				Type:          horizonmodels.DependencyTypeOperatesIn,
+				Type:          DependencyTypeOperatesIn,
 				Criticality:   0.70,
 				Amplification: 1.00,
 				Reason:        "Budget revenue base is national in scope.",
@@ -1076,7 +1076,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/finance/investment-climate",
 				TargetPath:    "/loc/kz",
-				Type:          horizonmodels.DependencyTypeOperatesIn,
+				Type:          DependencyTypeOperatesIn,
 				Criticality:   0.68,
 				Amplification: 1.00,
 				Reason:        "Investment climate is evaluated at the national Kazakhstan scope.",
@@ -1087,7 +1087,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/industrial/internal-production",
 				TargetPath:    "/loc/kz",
-				Type:          horizonmodels.DependencyTypeOperatesIn,
+				Type:          DependencyTypeOperatesIn,
 				Criticality:   0.72,
 				Amplification: 1.00,
 				Reason:        "Internal production base operates in the Kazakhstan national economy.",
@@ -1098,7 +1098,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/healthcare/healthcare-public",
 				TargetPath:    "/loc/kz",
-				Type:          horizonmodels.DependencyTypeOperatesIn,
+				Type:          DependencyTypeOperatesIn,
 				Criticality:   0.66,
 				Amplification: 1.00,
 				Reason:        "Public healthcare system is national in scope.",
@@ -1109,7 +1109,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/healthcare/healthcare-private",
 				TargetPath:    "/loc/kz",
-				Type:          horizonmodels.DependencyTypeOperatesIn,
+				Type:          DependencyTypeOperatesIn,
 				Criticality:   0.64,
 				Amplification: 1.00,
 				Reason:        "Private healthcare segment is national in scope.",
@@ -1120,7 +1120,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/construction/engineering-services",
 				TargetPath:    "/loc/kz",
-				Type:          horizonmodels.DependencyTypeOperatesIn,
+				Type:          DependencyTypeOperatesIn,
 				Criticality:   0.67,
 				Amplification: 1.00,
 				Reason:        "Engineering infrastructure services are national in scope.",
@@ -1131,7 +1131,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/market/kz/education/education-system",
 				TargetPath:    "/loc/kz",
-				Type:          horizonmodels.DependencyTypeOperatesIn,
+				Type:          DependencyTypeOperatesIn,
 				Criticality:   0.65,
 				Amplification: 1.00,
 				Reason:        "Education system is national in scope.",
@@ -1142,7 +1142,7 @@ func Spec(projectID string) HotPathSpec {
 			{
 				SourcePath:    "/community/kz/trade/bazaar-traders",
 				TargetPath:    "/loc/kz",
-				Type:          horizonmodels.DependencyTypeOperatesIn,
+				Type:          DependencyTypeOperatesIn,
 				Criticality:   0.66,
 				Amplification: 1.00,
 				Reason:        "Bazaar trader community is Kazakhstan-scoped",

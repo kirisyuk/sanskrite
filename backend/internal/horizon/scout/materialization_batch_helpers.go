@@ -26,7 +26,7 @@ type preparedSupplyChainEdgeCandidate struct {
 	originalDstPath string
 }
 
-func buildSupplyChainEdgeDedupKey(sourceID, targetID string, edgeType models.DependencyType, qualifiers map[string]interface{}) string {
+func buildSupplyChainEdgeDedupKey(sourceID, targetID string, edgeType DependencyType, qualifiers map[string]interface{}) string {
 	return strings.Join([]string{
 		strings.TrimSpace(sourceID),
 		strings.TrimSpace(targetID),
@@ -38,7 +38,7 @@ func buildSupplyChainEdgeDedupKey(sourceID, targetID string, edgeType models.Dep
 func collectExistingSupplyChainEdgeDedupKeys(
 	ctx context.Context,
 	edgesRepo interface {
-		ListBySourceIDsAndType(context.Context, string, []string, models.DependencyType) ([]*models.DependencyEdge, error)
+		ListBySourceIDsAndType(context.Context, string, []string, DependencyType) ([]*models.DependencyEdge, error)
 	},
 	tenantID string,
 	candidates []*preparedSupplyChainEdgeCandidate,
@@ -47,23 +47,23 @@ func collectExistingSupplyChainEdgeDedupKeys(
 	if edgesRepo == nil || len(candidates) == 0 {
 		return out
 	}
-	typeToSources := make(map[models.DependencyType]map[string]struct{})
-	typeToTargets := make(map[models.DependencyType]map[string]map[string]struct{})
+	typeToSources := make(map[DependencyType]map[string]struct{})
+	typeToTargets := make(map[DependencyType]map[string]map[string]struct{})
 	for _, candidate := range candidates {
 		if candidate == nil || candidate.edge == nil {
 			continue
 		}
-		if _, ok := typeToSources[candidate.edge.Type]; !ok {
-			typeToSources[candidate.edge.Type] = map[string]struct{}{}
+		if _, ok := typeToSources[candidate.edge.Relation]; !ok {
+			typeToSources[candidate.edge.Relation] = map[string]struct{}{}
 		}
-		typeToSources[candidate.edge.Type][candidate.sourceID] = struct{}{}
-		if _, ok := typeToTargets[candidate.edge.Type]; !ok {
-			typeToTargets[candidate.edge.Type] = map[string]map[string]struct{}{}
+		typeToSources[candidate.edge.Relation][candidate.sourceID] = struct{}{}
+		if _, ok := typeToTargets[candidate.edge.Relation]; !ok {
+			typeToTargets[candidate.edge.Relation] = map[string]map[string]struct{}{}
 		}
-		if _, ok := typeToTargets[candidate.edge.Type][candidate.sourceID]; !ok {
-			typeToTargets[candidate.edge.Type][candidate.sourceID] = map[string]struct{}{}
+		if _, ok := typeToTargets[candidate.edge.Relation][candidate.sourceID]; !ok {
+			typeToTargets[candidate.edge.Relation][candidate.sourceID] = map[string]struct{}{}
 		}
-		typeToTargets[candidate.edge.Type][candidate.sourceID][candidate.targetID] = struct{}{}
+		typeToTargets[candidate.edge.Relation][candidate.sourceID][candidate.targetID] = struct{}{}
 	}
 	for edgeType, sourceSet := range typeToSources {
 		sourceIDs := make([]string, 0, len(sourceSet))
@@ -86,7 +86,7 @@ func collectExistingSupplyChainEdgeDedupKeys(
 			if _, ok := targets[strings.TrimSpace(edge.TargetFragmentID)]; !ok {
 				continue
 			}
-			out[buildSupplyChainEdgeDedupKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, edge.Qualifiers)] = struct{}{}
+			out[buildSupplyChainEdgeDedupKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation, edge.Qualifiers)] = struct{}{}
 		}
 	}
 	return out

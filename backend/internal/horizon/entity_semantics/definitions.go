@@ -5,6 +5,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/graphenrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // All definitions preserve the full taxonomy and verified prompt fragments.
@@ -15,8 +16,8 @@ func init() {
 	models.RegisterProfileSectionsResolver(profileSectionsResolverImpl)
 }
 
-func profileSectionsResolverImpl(fragmentType models.FragmentType, canonicalPath string, communityType string) []models.ProfileSectionSpec {
-	return ProfileSectionsForType(fragmentType, canonicalPath, communityType)
+func profileSectionsResolverImpl(class ah.FragmentClass, canonicalPath string, communityType string) []models.ProfileSectionSpec {
+	return ProfileSectionsForType(class, canonicalPath, communityType)
 }
 
 func registerAll() {

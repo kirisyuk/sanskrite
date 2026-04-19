@@ -464,7 +464,7 @@ func (e *Engine) simulateHypothetical(
 						name = en
 					}
 				}
-				typ = string(frag.Type)
+				typ = string(frag.Class)
 			}
 			allNodeImpacts = append(allNodeImpacts, horizonmodels.NodeImpact{
 				FragmentID:     fragID,
@@ -659,7 +659,7 @@ func (e *Engine) collectCurrentState(
 			FragmentID:     frag.ID,
 			CanonicalPath:  frag.CanonicalPath,
 			Name:           name,
-			Type:           string(frag.Type),
+			Type:           string(frag.Class),
 			AxisAmplitudes: axisAmps,
 			TotalAmplitude: total,
 		})

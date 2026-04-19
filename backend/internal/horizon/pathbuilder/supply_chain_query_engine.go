@@ -11,6 +11,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/supplysemantics"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type ProductClosureMode string
@@ -258,9 +259,16 @@ func (e *SupplyChainQueryEngine) loadSupplyLinksForQuery(ctx context.Context, op
 
 	loaded := make([]tenantLoad, 0, len(loadOrder))
 	for _, tenantID := range loadOrder {
-		links, err := e.fragmentsRepo.ListByTypeAndTenant(ctx, tenantID, models.FragmentTypeSupplyLink, opts.MaxLinks)
+		raw, err := e.fragmentsRepo.ListByClassSubtypeAndTenant(ctx, tenantID, ah.FragmentClassSite, "supply_link", opts.MaxLinks)
 		if err != nil {
 			return nil, err
+		}
+		links := make([]*models.HorizonFragment, 0, len(raw))
+		for _, link := range raw {
+			if link == nil || !link.IsLegacySupplyLink() {
+				continue
+			}
+			links = append(links, link)
 		}
 		loaded = append(loaded, tenantLoad{tenantID: tenantID, links: links})
 	}
@@ -316,7 +324,7 @@ func (e *SupplyChainQueryEngine) snapshotFromLinks(links []*models.HorizonFragme
 }
 
 func normalizeSupplyChainQueryLinks(raw *models.HorizonFragment) []*supplyChainQueryLink {
-	if raw == nil || raw.Type != models.FragmentTypeSupplyLink || raw.ProductRef == nil {
+	if raw == nil || !raw.IsLegacySupplyLink() || raw.ProductRef == nil {
 		return nil
 	}
 	productRef := canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(*raw.ProductRef))
@@ -460,7 +468,7 @@ func (e *SupplyChainQueryEngine) populateProductAdjacency(ctx context.Context, s
 	}
 	downstreamEdges := make([]*models.DependencyEdge, 0)
 	upstreamEdges := make([]*models.DependencyEdge, 0)
-	for _, edgeType := range models.ProductTransitionEdgeTypes() {
+	for _, edgeType := range ProductTransitionEdgeTypes() {
 		typedDownstream, err := e.edgesRepo.ListBySourceIDsAndType(ctx, tenantID, sourceIDs, edgeType)
 		if err != nil {
 			return err
@@ -585,7 +593,7 @@ func (e *SupplyChainQueryEngine) resolveProductClosure(
 	for depth := 0; depth < opts.MaxProductClosureDepth && len(frontier) > 0; depth++ {
 		nextIDs := make(map[string]struct{})
 		if opts.ClosureMode == ProductClosureDownstream || opts.ClosureMode == ProductClosureBoth {
-			for _, edgeType := range models.ProductTransitionEdgeTypes() {
+			for _, edgeType := range ProductTransitionEdgeTypes() {
 				edges, err := e.edgesRepo.ListBySourceIDsAndType(ctx, "global", frontier, edgeType)
 				if err != nil {
 					return nil, err
@@ -602,7 +610,7 @@ func (e *SupplyChainQueryEngine) resolveProductClosure(
 			}
 		}
 		if opts.ClosureMode == ProductClosureUpstream || opts.ClosureMode == ProductClosureBoth {
-			for _, edgeType := range models.ProductTransitionEdgeTypes() {
+			for _, edgeType := range ProductTransitionEdgeTypes() {
 				edges, err := e.edgesRepo.ListByTargetIDsAndType(ctx, "global", frontier, edgeType)
 				if err != nil {
 					return nil, err

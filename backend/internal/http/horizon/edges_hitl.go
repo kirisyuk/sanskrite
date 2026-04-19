@@ -74,10 +74,15 @@ func (h *HorizonHandlers) HumanInTheLoopEdge(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	// Apply edits (type + optional swap)
-	newType := edge.Type
-	if strings.TrimSpace(req.Type) != "" {
-		newType = models.DependencyType(strings.ToUpper(strings.TrimSpace(req.Type)))
+	// Apply edits (type + optional swap). Wire input may be legacy
+	// UPPER_SNAKE or AH lower_snake — normalise to AH.
+	newType := edge.Relation
+	if raw := strings.TrimSpace(req.Type); raw != "" {
+		if rel, ok := models.NormalizeWireRelationStrict(raw); ok {
+			newType = rel
+		} else {
+			newType = DependencyType(strings.ToLower(raw))
+		}
 	}
 	newSource := strings.TrimSpace(edge.SourceFragmentID)
 	newTarget := strings.TrimSpace(edge.TargetFragmentID)
@@ -99,8 +104,8 @@ func (h *HorizonHandlers) HumanInTheLoopEdge(w http.ResponseWriter, r *http.Requ
 	if sourceFrag != nil && targetFrag != nil {
 		isValid, shouldReverse, rule := horizonscout.ValidateEdgeDirection(
 			newType,
-			sourceFrag.Type,
-			targetFrag.Type,
+			sourceFrag.Class,
+			targetFrag.Class,
 		)
 		if !isValid {
 			// If the reverse direction would be valid, guide the client instead of silently changing.
@@ -113,7 +118,7 @@ func (h *HorizonHandlers) HumanInTheLoopEdge(w http.ResponseWriter, r *http.Requ
 		}
 	}
 
-	edge.Type = newType
+	edge.Relation = newType
 	edge.SourceFragmentID = newSource
 	edge.TargetFragmentID = newTarget
 

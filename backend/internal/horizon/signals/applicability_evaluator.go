@@ -598,28 +598,31 @@ func newRedisApplicabilityClient() *redis.Client {
 
 func axisTypeFit(axis string, fragment *horizonmodels.HorizonFragment) (float64, string) {
 	axis = strings.TrimSpace(axis)
-	ft := horizonmodels.FragmentType("")
+	ft := FragmentType("")
 	if fragment != nil {
-		ft = fragment.Type
+		ft = fragment.Class
 	}
 	switch axis {
 	case horizonmodels.AxisGeoConflict:
-		if ft == horizonmodels.FragmentTypeGeoRegion || ft == horizonmodels.FragmentTypeOrganization || ft == horizonmodels.FragmentTypeFacility || ft == horizonmodels.FragmentTypeMarket {
+		if ft == FragmentTypeGeoRegion || ft == FragmentTypeOrganization || ft == FragmentTypeFacility || ft == FragmentTypeMarket {
 			return 1, "geo_conflict_type_fit"
 		}
 	case horizonmodels.AxisLogisticsCapacity, horizonmodels.AxisLogisticsLatency, horizonmodels.AxisPhysicalFlowSupply, horizonmodels.AxisPhysicalFlowDemand:
-		if ft == horizonmodels.FragmentTypeOrganization || ft == horizonmodels.FragmentTypeFacility || ft == horizonmodels.FragmentTypeProduct || ft == horizonmodels.FragmentTypeMarket || ft == horizonmodels.FragmentTypeDeposit {
+		// FragmentTypeFacility (=site) already covers legacy DEPOSIT (site/deposit
+		// subtype) and FragmentTypeOrganization (=org) covers legacy PROGRAM
+		// (org/program) under the AH taxonomy.
+		if ft == FragmentTypeOrganization || ft == FragmentTypeFacility || ft == FragmentTypeProduct || ft == FragmentTypeMarket {
 			return 1, "flow_logistics_type_fit"
 		}
-		if ft == horizonmodels.FragmentTypeGeoRegion && fragmentActsAsTransitChokepoint(fragment) {
+		if ft == FragmentTypeGeoRegion && fragmentActsAsTransitChokepoint(fragment) {
 			return 0.95, "flow_logistics_chokepoint_geo_fit"
 		}
 	case horizonmodels.AxisLegalAccess, horizonmodels.AxisLegalCompliance:
-		if ft == horizonmodels.FragmentTypeOrganization || ft == horizonmodels.FragmentTypeFacility || ft == horizonmodels.FragmentTypeMarket || ft == horizonmodels.FragmentTypeProgram {
+		if ft == FragmentTypeOrganization || ft == FragmentTypeFacility || ft == FragmentTypeMarket {
 			return 1, "legal_type_fit"
 		}
 	case horizonmodels.AxisFinancialSettlement, horizonmodels.AxisFinancialCredit:
-		if ft == horizonmodels.FragmentTypeOrganization || ft == horizonmodels.FragmentTypeMarket || ft == horizonmodels.FragmentTypeProgram {
+		if ft == FragmentTypeOrganization || ft == FragmentTypeMarket {
 			return 1, "financial_type_fit"
 		}
 	case horizonmodels.AxisInfoUncertainty, horizonmodels.AxisInfoReputation, horizonmodels.AxisOperationalContinuity:

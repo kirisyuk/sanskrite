@@ -4,7 +4,6 @@ import (
 	"strings"
 	"testing"
 
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -17,7 +16,7 @@ func TestSpecPathsAndEdgesAreTaxonomySafe(t *testing.T) {
 		t.Fatalf("spec must contain fragments, edges, and simulations")
 	}
 
-	paths := map[string]horizonmodels.FragmentType{}
+	paths := map[string]FragmentType{}
 	for _, fragment := range spec.Fragments {
 		if err := taxonomy.ValidateCanonicalPath(fragment.CanonicalPath); err != nil {
 			t.Fatalf("invalid canonical path %q: %v", fragment.CanonicalPath, err)
@@ -35,7 +34,7 @@ func TestSpecPathsAndEdgesAreTaxonomySafe(t *testing.T) {
 	for _, edgeType := range taxonomy.SupplyChainEdgeTypes {
 		allowedEdges[strings.TrimSpace(edgeType)] = struct{}{}
 	}
-	allowedEdges[string(horizonmodels.DependencyTypeUsedIn)] = struct{}{}
+	allowedEdges[string(DependencyTypeUsedIn)] = struct{}{}
 
 	foundDecisionMechanism := false
 	foundSupplierFlow := false
@@ -52,17 +51,17 @@ func TestSpecPathsAndEdgesAreTaxonomySafe(t *testing.T) {
 		}
 		if edge.SourcePath == "/decision/trade/restrict-battery-material-and-cell-flows-to-us-2026" &&
 			edge.TargetPath == "/mechanism/regulatory/export-controls-and-logistics-delays" &&
-			edge.Type == horizonmodels.DependencyTypeUsesMechanism {
+			edge.Type == DependencyTypeUsesMechanism {
 			foundDecisionMechanism = true
 		}
 		if edge.SourcePath == "/fac/jp/panasonic-giga-nevada-lines" &&
 			edge.TargetPath == "/fac/us/gigafactory-nevada" &&
-			edge.Type == horizonmodels.DependencyTypeSuppliesTo {
+			edge.Type == DependencyTypeSuppliesTo {
 			foundSupplierFlow = true
 		}
 		if edge.SourcePath == "/product/component/electronic/manufacturing/ev-battery-cells" &&
 			edge.TargetPath == "/product/component/electronic/assembly/ev-battery-module" &&
-			edge.Type == horizonmodels.DependencyTypeAssemblesInto {
+			edge.Type == DependencyTypeAssemblesInto {
 			foundProductTransition = true
 		}
 	}

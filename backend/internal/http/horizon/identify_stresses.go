@@ -1778,7 +1778,8 @@ func (c *IdentifyStressesCanvas) upsertAffectedZoneFragment(ctx context.Context,
 		Labels:        map[string]string{"en": label},
 		Status:        string(horizonmodels.FragmentStatusActive),
 		CanonicalPath: canonicalPath,
-		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Class:         horizonmodels.ClassSubtypeAffectedZone.Class,
+		Subtype:       horizonmodels.ClassSubtypeAffectedZone.Subtype,
 		EntityPath:    "/AffectedZone",
 		State:         map[string]horizonmodels.MetricValue{},
 		Qualifiers: map[string]interface{}{
@@ -2024,21 +2025,21 @@ func (c *IdentifyStressesCanvas) applyFindingToArtifact(ctx context.Context, ten
 		}
 		if segmentIndex >= 0 && segmentIndex < len(parsed.Legs) {
 			leg := parsed.Legs[segmentIndex]
-			edge.Qualifiers[horizonmodels.QualifierRouteMode] = leg.Mode
-			edge.Qualifiers[horizonmodels.QualifierGeoRefs] = append([]string(nil), leg.GeoRefs...)
-			edge.Qualifiers[horizonmodels.QualifierFlowRefs] = append([]string(nil), leg.FlowRefs...)
-			edge.Qualifiers[horizonmodels.QualifierAlternateFlowRefs] = append([]string(nil), leg.AlternateFlowRefs...)
-			edge.Qualifiers[horizonmodels.QualifierZoneRefs] = append([]string(nil), leg.ZoneRefs...)
-			edge.Qualifiers[horizonmodels.QualifierAffectedZoneRefs] = append([]string(nil), leg.AffectedZoneRefs...)
-			edge.Qualifiers[horizonmodels.QualifierSpatialSemantics] = append([]string(nil), leg.SpatialSemantics...)
-			edge.Qualifiers[horizonmodels.QualifierBindingConfidence] = leg.BindingConfidence
+			edge.Qualifiers[QualifierRouteMode] = leg.Mode
+			edge.Qualifiers[QualifierGeoRefs] = append([]string(nil), leg.GeoRefs...)
+			edge.Qualifiers[QualifierFlowRefs] = append([]string(nil), leg.FlowRefs...)
+			edge.Qualifiers[QualifierAlternateFlowRefs] = append([]string(nil), leg.AlternateFlowRefs...)
+			edge.Qualifiers[QualifierZoneRefs] = append([]string(nil), leg.ZoneRefs...)
+			edge.Qualifiers[QualifierAffectedZoneRefs] = append([]string(nil), leg.AffectedZoneRefs...)
+			edge.Qualifiers[QualifierSpatialSemantics] = append([]string(nil), leg.SpatialSemantics...)
+			edge.Qualifiers[QualifierBindingConfidence] = leg.BindingConfidence
 			if leg.Stress != nil {
-				edge.Qualifiers[horizonmodels.QualifierPathStressScore] = leg.Stress.StressScore
-				edge.Qualifiers[horizonmodels.QualifierPathFragility] = leg.Stress.Fragility
-				edge.Qualifiers[horizonmodels.QualifierPathRerouteability] = leg.Stress.Rerouteability
-				edge.Qualifiers[horizonmodels.QualifierPathZonePressure] = leg.Stress.ZonePressure
-				edge.Qualifiers[horizonmodels.QualifierPathAffectedPressure] = leg.Stress.AffectedZonePressure
-				edge.Qualifiers[horizonmodels.QualifierRecoveryLatencyHours] = leg.Stress.RecoveryLatencyHrs
+				edge.Qualifiers[QualifierPathStressScore] = leg.Stress.StressScore
+				edge.Qualifiers[QualifierPathFragility] = leg.Stress.Fragility
+				edge.Qualifiers[QualifierPathRerouteability] = leg.Stress.Rerouteability
+				edge.Qualifiers[QualifierPathZonePressure] = leg.Stress.ZonePressure
+				edge.Qualifiers[QualifierPathAffectedPressure] = leg.Stress.AffectedZonePressure
+				edge.Qualifiers[QualifierRecoveryLatencyHours] = leg.Stress.RecoveryLatencyHrs
 			}
 		}
 		if strings.TrimSpace(edge.SupplyLinkID) != "" {
@@ -2203,7 +2204,7 @@ func (c *IdentifyStressesCanvas) buildGroundedSynthesisPrompt(lens *horizonmodel
 			continue
 		}
 		label := fragmentDisplayName(frag)
-		b.WriteString(fmt.Sprintf("- %s | type=%s | label=%s | supply_chain_criticality=%.3f\n", strings.TrimSpace(frag.CanonicalPath), frag.Type, label, metricValue(frag.State, "supply_chain_criticality")))
+		b.WriteString(fmt.Sprintf("- %s | type=%s | label=%s | supply_chain_criticality=%.3f\n", strings.TrimSpace(frag.CanonicalPath), frag.Class, label, metricValue(frag.State, "supply_chain_criticality")))
 	}
 	b.WriteString("\nAllowed supply path artifacts:\n")
 	for _, artifact := range scope.Artifacts {
@@ -2298,7 +2299,7 @@ func (c *IdentifyStressesCanvas) publishNodeUpsert(ctx context.Context, tenantID
 		"tenantId":        tenantID,
 		"fragmentId":      strings.TrimSpace(fragment.ID),
 		"canonicalPath":   strings.TrimSpace(fragment.CanonicalPath),
-		"type":            string(fragment.Type),
+		"type":            string(fragment.Class),
 		"label":           fragmentDisplayName(fragment),
 		"status":          strings.TrimSpace(fragment.Status),
 		"epistemicStatus": strings.TrimSpace(string(fragment.Metadata.EpistemicStatus)),
@@ -2344,7 +2345,7 @@ func (c *IdentifyStressesCanvas) publishEdgeUpsert(ctx context.Context, tenantID
 		"targetFragmentId":    strings.TrimSpace(edge.TargetFragmentID),
 		"sourceCanonicalPath": src,
 		"targetCanonicalPath": dst,
-		"type":                string(edge.Type),
+		"type":                string(edge.Relation),
 		"qualifiers":          cloneInterfaceMap(edge.Qualifiers),
 		"properties":          edge.Properties,
 	})
@@ -2705,42 +2706,42 @@ func buildIdentifyPathEdgeQualifiers(metrics map[string]horizonmodels.MetricValu
 		"legOrder":          legOrder,
 	}
 	if leg.Mode != "" {
-		qualifiers[horizonmodels.QualifierRouteMode] = leg.Mode
+		qualifiers[QualifierRouteMode] = leg.Mode
 	}
 	if len(leg.GeoRefs) > 0 {
-		qualifiers[horizonmodels.QualifierGeoRefs] = append([]string(nil), leg.GeoRefs...)
+		qualifiers[QualifierGeoRefs] = append([]string(nil), leg.GeoRefs...)
 	}
 	if len(leg.FlowRefs) > 0 {
-		qualifiers[horizonmodels.QualifierFlowRefs] = append([]string(nil), leg.FlowRefs...)
+		qualifiers[QualifierFlowRefs] = append([]string(nil), leg.FlowRefs...)
 	}
 	if len(leg.AlternateFlowRefs) > 0 {
-		qualifiers[horizonmodels.QualifierAlternateFlowRefs] = append([]string(nil), leg.AlternateFlowRefs...)
+		qualifiers[QualifierAlternateFlowRefs] = append([]string(nil), leg.AlternateFlowRefs...)
 	}
 	if len(leg.ZoneRefs) > 0 {
-		qualifiers[horizonmodels.QualifierZoneRefs] = append([]string(nil), leg.ZoneRefs...)
+		qualifiers[QualifierZoneRefs] = append([]string(nil), leg.ZoneRefs...)
 	}
 	if len(leg.AffectedZoneRefs) > 0 {
-		qualifiers[horizonmodels.QualifierAffectedZoneRefs] = append([]string(nil), leg.AffectedZoneRefs...)
+		qualifiers[QualifierAffectedZoneRefs] = append([]string(nil), leg.AffectedZoneRefs...)
 	}
 	if len(leg.SpatialSemantics) > 0 {
-		qualifiers[horizonmodels.QualifierSpatialSemantics] = append([]string(nil), leg.SpatialSemantics...)
+		qualifiers[QualifierSpatialSemantics] = append([]string(nil), leg.SpatialSemantics...)
 	}
 	if leg.BindingConfidence > 0 {
-		qualifiers[horizonmodels.QualifierBindingConfidence] = leg.BindingConfidence
+		qualifiers[QualifierBindingConfidence] = leg.BindingConfidence
 	}
 	if leg.Stress != nil {
-		qualifiers[horizonmodels.QualifierPathStressScore] = leg.Stress.StressScore
-		qualifiers[horizonmodels.QualifierPathFragility] = leg.Stress.Fragility
-		qualifiers[horizonmodels.QualifierPathRerouteability] = leg.Stress.Rerouteability
-		qualifiers[horizonmodels.QualifierPathZonePressure] = leg.Stress.ZonePressure
-		qualifiers[horizonmodels.QualifierPathAffectedPressure] = leg.Stress.AffectedZonePressure
-		qualifiers[horizonmodels.QualifierRecoveryLatencyHours] = leg.Stress.RecoveryLatencyHrs
+		qualifiers[QualifierPathStressScore] = leg.Stress.StressScore
+		qualifiers[QualifierPathFragility] = leg.Stress.Fragility
+		qualifiers[QualifierPathRerouteability] = leg.Stress.Rerouteability
+		qualifiers[QualifierPathZonePressure] = leg.Stress.ZonePressure
+		qualifiers[QualifierPathAffectedPressure] = leg.Stress.AffectedZonePressure
+		qualifiers[QualifierRecoveryLatencyHours] = leg.Stress.RecoveryLatencyHrs
 		if len(leg.Stress.DominantFactors) > 0 {
 			qualifiers["dominantFactors"] = append([]string(nil), leg.Stress.DominantFactors...)
 		}
 	}
 	if len(leg.TransportViaRefs) > 0 {
-		qualifiers[horizonmodels.QualifierTransportVia] = append([]string(nil), leg.TransportViaRefs...)
+		qualifiers[QualifierTransportVia] = append([]string(nil), leg.TransportViaRefs...)
 	}
 	if leg.VesselType != "" {
 		qualifiers["vesselType"] = leg.VesselType

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // FragmentPatch represents partial output from Research/Critic agents.
@@ -12,8 +13,13 @@ import (
 // (Governance, TenantID, Metadata, Provenance) are NOT included and must be
 // applied by ContractNormalizer before persistence.
 type FragmentPatch struct {
-	CanonicalPath     string                 `json:"canonicalPath,omitempty"`
-	Type              FragmentType           `json:"type,omitempty"`
+	CanonicalPath string `json:"canonicalPath,omitempty"`
+	// Class replaces the legacy `Type FragmentType` field. Agents emit
+	// the new lowercase AH class (org/site/product/decision/...). For
+	// transitional reads, ApplyPatchToFragment also accepts a non-empty
+	// Subtype to refine the class.
+	Class             ah.FragmentClass       `json:"class,omitempty"`
+	Subtype           string                 `json:"subtype,omitempty"`
 	Labels            map[string]string      `json:"labels,omitempty"`
 	State             map[string]MetricValue `json:"state,omitempty"`
 	Identifiers       map[string]string      `json:"identifiers,omitempty"`
@@ -47,8 +53,11 @@ func (f *HorizonFragment) ToPatch() *FragmentPatch {
 	if v := strings.TrimSpace(f.CanonicalPath); v != "" {
 		p.CanonicalPath = v
 	}
-	if f.Type != "" {
-		p.Type = f.Type
+	if f.Class != "" {
+		p.Class = f.Class
+	}
+	if v := strings.TrimSpace(f.Subtype); v != "" {
+		p.Subtype = v
 	}
 	if len(f.Labels) > 0 {
 		p.Labels = f.Labels
@@ -145,8 +154,11 @@ func ApplyPatchToFragment(base *HorizonFragment, patch *FragmentPatch, effective
 		base.CanonicalPath = strings.TrimSpace(effectivePath)
 	}
 
-	if patch.Type != "" {
-		base.Type = patch.Type
+	if patch.Class != "" {
+		base.Class = patch.Class
+	}
+	if v := strings.TrimSpace(patch.Subtype); v != "" {
+		base.Subtype = v
 	}
 	if v := strings.TrimSpace(patch.EntityPath); v != "" {
 		base.EntityPath = v

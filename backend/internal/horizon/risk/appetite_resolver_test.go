@@ -9,7 +9,7 @@ import (
 func TestPrimaryScope_NilHomeLocation_NoPanic(t *testing.T) {
 	r := &AppetiteResolver{}
 	frag := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 		CanonicalPath: "/org/sa/saudi-aramco-jsc",
 		HomeLocation:  nil,
 	}
@@ -24,7 +24,7 @@ func TestPrimaryScope_HomeLocationISO_ResolvesLocScope(t *testing.T) {
 	r := &AppetiteResolver{}
 	cc := "SA"
 	frag := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 		CanonicalPath: "/org/sa/saudi-aramco-jsc",
 		HomeLocation: &horizonmodels.Location{
 			ISO3166_1: &cc,

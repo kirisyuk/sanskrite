@@ -8,6 +8,7 @@ import (
 	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type lensDiagnosticRelation struct {
@@ -280,8 +281,8 @@ func buildLensDiagnosticRelation(
 		RelatedFragmentID:    strings.TrimSpace(neighbor.ID),
 		RelatedCanonicalPath: strings.TrimSpace(neighbor.CanonicalPath),
 		RelatedLabel:         relatedLabel,
-		RelatedType:          strings.TrimSpace(string(neighbor.Type)),
-		Type:                 strings.TrimSpace(string(edge.Type)),
+		RelatedType:          strings.TrimSpace(string(neighbor.Class)),
+		Type:                 strings.TrimSpace(string(edge.Relation)),
 		Hop:                  hop,
 		Criticality:          edge.Properties.Criticality,
 	}
@@ -426,21 +427,16 @@ func buildGraphProductItems(graph *lensDiagnosticGraph, now time.Time) []horizon
 		}
 		product.score += maxFloat(0.6, 2.5-float64(maxInt(1, relation.Hop))/2)
 		product.backings = compactUnique(append(product.backings, relation.EdgeID, relation.RelatedFragmentID))
-		switch relation.Type {
-		case string(horizonmodels.DependencyTypeConsumes):
-			if actor := graph.Nodes[relation.SourceFragmentID]; actor != nil {
-				product.consumers = compactUnique(append(product.consumers, lensDiagnosticFragmentLabel(actor)))
-			}
-		case string(horizonmodels.DependencyTypeProduces):
+		// In AH the only edge that directly touches a product fragment is `produces`
+		// (org/site → product). Legacy CONSUMES / TRANSFORMS_INTO / ASSEMBLES_INTO no
+		// longer manifest as product-edges: CONSUMES collapses into `supplies` between
+		// sites/orgs (with the carried product on attributes), and the transform chain
+		// lives as siteTransforms[] attributes on site fragments. The lens-diagnostic
+		// product surface therefore only enriches via `produces`; richer consumer /
+		// transform context is reconstructed by upstream lens analytics, not here.
+		if relation.Type == string(ah.RelationNameProduces) {
 			if actor := graph.Nodes[relation.SourceFragmentID]; actor != nil {
 				product.producers = compactUnique(append(product.producers, lensDiagnosticFragmentLabel(actor)))
-			}
-		case string(horizonmodels.DependencyTypeTransformsInto), string(horizonmodels.DependencyTypeAssemblesInto):
-			if downstream := graph.Nodes[relation.TargetFragmentID]; downstream != nil && downstream.ID != related.ID {
-				product.transformedInto = compactUnique(append(product.transformedInto, lensDiagnosticFragmentLabel(downstream)))
-			}
-			if upstream := graph.Nodes[relation.SourceFragmentID]; upstream != nil && upstream.ID != related.ID {
-				product.transformedFrom = compactUnique(append(product.transformedFrom, lensDiagnosticFragmentLabel(upstream)))
 			}
 		}
 	}
@@ -984,73 +980,76 @@ func lensDiagnosticFragmentLabel(fragment *horizonmodels.HorizonFragment) string
 	return labelFromCanonicalPath(fragment.CanonicalPath)
 }
 
+// isLensDiagnosticContextRelation marks edges that carry contextual framing
+// (regulatory, geographic, market participation) rather than direct supply
+// pressure. After AH migration, geographic context (legacy LOCATED_IN /
+// OPERATES_IN / BASED_IN / HEADQUARTERED_IN) is no longer represented as edges
+// — it lives on canonical_path and attributes.operating_geos — so those legacy
+// branches drop out entirely.
 func isLensDiagnosticContextRelation(edgeType string) bool {
 	switch strings.TrimSpace(edgeType) {
-	case string(horizonmodels.DependencyTypeRegulates),
-		string(horizonmodels.DependencyTypeAssures),
-		string(horizonmodels.DependencyTypeAuditedBy),
-		string(horizonmodels.DependencyTypeLocatedIn),
-		string(horizonmodels.DependencyTypeOperatesIn),
-		"BASED_IN",
-		"HEADQUARTERED_IN",
-		string(horizonmodels.DependencyTypeParticipatesIn),
-		string(horizonmodels.DependencyTypeTradedIn):
+	case string(ah.RelationNameRegulates),
+		string(ah.RelationNameAssures),
+		string(ah.RelationNameImposes),    // legacy IMPOSES_CONDITION / APPLIES_TO / CONTROLS_ACCESS
+		string(ah.RelationNameSubjectTo),  // org/site is subject to a regime
+		string(ah.RelationNameMemberOf),   // legacy PARTICIPATES_IN (org/person ↔ community)
+		string(ah.RelationNameListedOn):   // legacy TRADED_IN (org → market)
 		return true
 	default:
 		return false
 	}
 }
 
+// describeLensDiagnosticRelation produces a human-readable narrative for an
+// edge in the lens diagnostic graph. All cases are AH RelationNames; legacy
+// UPPER_SNAKE values that no longer exist as graph edges (LOCATED_IN /
+// OPERATES_IN / TRANSFORMS_INTO / ASSEMBLES_INTO / CONSUMES / DEPENDS_ON)
+// have been folded into attributes/canonical_path/siteTransforms or expanded
+// per-pair upstream and so never reach this switch.
 func describeLensDiagnosticRelation(centerLabel string, relation lensDiagnosticRelation) string {
 	other := firstNonEmpty(relation.RelatedLabel, labelFromCanonicalPath(relation.RelatedCanonicalPath), "this object")
 	switch relation.Type {
-	case string(horizonmodels.DependencyTypeSuppliesTo):
+	case string(ah.RelationNameSupplies):
 		return fmt.Sprintf("%s supplies into the current lens graph, so downstream availability depends on that link.", other)
-	case string(horizonmodels.DependencyTypeDependsOn), "REQUIRES", "USES":
-		return fmt.Sprintf("The current lens graph depends on %s, making it an immediate operational dependency.", other)
-	case string(horizonmodels.DependencyTypeControls), string(horizonmodels.DependencyTypeManages), string(horizonmodels.DependencyTypeOwns), string(horizonmodels.DependencyTypeInvestsIn):
+	case string(ah.RelationNameLegConnects), string(ah.RelationNamePassesThrough), string(ah.RelationNameTransshipsAt):
+		return fmt.Sprintf("%s is part of the logistics chain feeding the current lens graph.", other)
+	case string(ah.RelationNameRequiresCapability):
+		return fmt.Sprintf("The current lens graph requires capability provided by %s.", other)
+	case string(ah.RelationNameControlsVia), string(ah.RelationNameManagedBy), string(ah.RelationNameBeneficiallyOwns), string(ah.RelationNameInvestedIn), string(ah.RelationNameSubsidiaryOf), string(ah.RelationNameOperates), string(ah.RelationNameHoldsBoardSeat):
 		return fmt.Sprintf("%s sits in the control chain around %s.", other, firstNonEmpty(centerLabel, "the current seed"))
-	case string(horizonmodels.DependencyTypeRegulates), string(horizonmodels.DependencyTypeAssures), string(horizonmodels.DependencyTypeAuditedBy):
+	case string(ah.RelationNameRegulates), string(ah.RelationNameAssures), string(ah.RelationNameImposes), string(ah.RelationNameSubjectTo), string(ah.RelationNameGatekeeps):
 		return fmt.Sprintf("%s shapes the operating conditions and oversight around %s.", other, firstNonEmpty(centerLabel, "the current seed"))
-	case string(horizonmodels.DependencyTypeLocatedIn), string(horizonmodels.DependencyTypeOperatesIn), "BASED_IN", "HEADQUARTERED_IN":
-		return fmt.Sprintf("%s defines the geographic operating context around %s.", other, firstNonEmpty(centerLabel, "the current seed"))
-	case string(horizonmodels.DependencyTypeParticipatesIn), string(horizonmodels.DependencyTypeTradedIn):
-		return fmt.Sprintf("%s places the lens graph inside the market context where pressure is transmitted.", other)
-	case string(horizonmodels.DependencyTypeConsumes):
-		return fmt.Sprintf("%s directly consumes a product already inside the lens graph.", other)
-	case string(horizonmodels.DependencyTypeProduces):
+	case string(ah.RelationNameMemberOf), string(ah.RelationNameListedOn), string(ah.RelationNameJointVentureWith):
+		return fmt.Sprintf("%s places the lens graph inside the market or community context where pressure is transmitted.", other)
+	case string(ah.RelationNameProduces):
 		return fmt.Sprintf("%s produces one of the products carrying current exposure.", other)
-	case string(horizonmodels.DependencyTypeTransformsInto):
-		return fmt.Sprintf("%s appears in the transformed downstream product chain surfaced by the lens.", other)
-	case string(horizonmodels.DependencyTypeAssemblesInto):
-		return fmt.Sprintf("%s appears in the assembled downstream product chain surfaced by the lens.", other)
-	case string(horizonmodels.DependencyTypeAffects):
+	case string(ah.RelationNameDisrupts):
 		return fmt.Sprintf("%s is a direct affected node or zone feeding pressure into the lens.", other)
+	case string(ah.RelationNameInfluences), string(ah.RelationNameExposesTo):
+		return fmt.Sprintf("%s influences the trajectory of %s through indirect pressure.", other, firstNonEmpty(centerLabel, "the current seed"))
 	default:
 		return fmt.Sprintf("%s is part of the immediate relationship logic around %s.", other, firstNonEmpty(centerLabel, "the current seed"))
 	}
 }
 
+// lensDiagnosticRelationPriority orders relations by surface impact for the
+// lens diagnostic UI. AH RelationNames only; legacy values (CONSUMES,
+// TRANSFORMS_INTO, ASSEMBLES_INTO, LOCATED_IN, OPERATES_IN, DEPENDS_ON) no
+// longer exist as edges in the AH graph and so don't appear here.
 func lensDiagnosticRelationPriority(edgeType string) int {
 	switch strings.TrimSpace(edgeType) {
-	case string(horizonmodels.DependencyTypeSuppliesTo):
+	case string(ah.RelationNameSupplies):
 		return 100
-	case string(horizonmodels.DependencyTypeDependsOn):
+	case string(ah.RelationNameRequiresCapability):
 		return 99
-	case string(horizonmodels.DependencyTypeProduces):
+	case string(ah.RelationNameProduces):
 		return 97
-	case string(horizonmodels.DependencyTypeConsumes):
+	case string(ah.RelationNameLegConnects), string(ah.RelationNamePassesThrough), string(ah.RelationNameTransshipsAt):
 		return 96
-	case string(horizonmodels.DependencyTypeTransformsInto):
-		return 95
-	case string(horizonmodels.DependencyTypeAssemblesInto):
-		return 95
-	case string(horizonmodels.DependencyTypeAffects):
+	case string(ah.RelationNameDisrupts):
 		return 94
-	case string(horizonmodels.DependencyTypeRegulates):
+	case string(ah.RelationNameRegulates), string(ah.RelationNameImposes), string(ah.RelationNameSubjectTo):
 		return 90
-	case string(horizonmodels.DependencyTypeLocatedIn), string(horizonmodels.DependencyTypeOperatesIn):
-		return 86
 	default:
 		return 70
 	}
@@ -1059,37 +1058,44 @@ func lensDiagnosticRelationPriority(edgeType string) int {
 func lensDiagnosticSignalTitle(relation lensDiagnosticRelation) string {
 	other := firstNonEmpty(relation.RelatedLabel, labelFromCanonicalPath(relation.RelatedCanonicalPath), "related node")
 	switch relation.Type {
-	case string(horizonmodels.DependencyTypeSuppliesTo):
+	case string(ah.RelationNameSupplies):
 		return other + " supply dependency"
-	case string(horizonmodels.DependencyTypeDependsOn):
-		return "Operational dependency on " + other
-	case string(horizonmodels.DependencyTypeConsumes):
-		return other + " consumer dependency"
-	case string(horizonmodels.DependencyTypeAffects):
+	case string(ah.RelationNameRequiresCapability):
+		return "Capability dependency on " + other
+	case string(ah.RelationNameDisrupts):
 		return "Pressure originating in " + other
-	case string(horizonmodels.DependencyTypeTransformsInto):
-		return other + " transformed output chain"
-	case string(horizonmodels.DependencyTypeAssemblesInto):
-		return other + " assembled output chain"
+	case string(ah.RelationNameLegConnects), string(ah.RelationNamePassesThrough), string(ah.RelationNameTransshipsAt):
+		return other + " logistics chain"
+	case string(ah.RelationNameProduces):
+		return other + " production link"
 	default:
 		return other + " is shaping the current diagnosis"
 	}
 }
 
+// isLensSupplyRelevantRelation returns true for AH RelationNames that carry
+// supply-chain pressure into the lens diagnostic. The legacy set spanned
+// SUPPLIES_TO, CONSUMES, EXTRACTS_FROM, AFFECTS, DEPENDS_ON, TRANSFORMS_INTO,
+// ASSEMBLES_INTO, LOCATED_IN, OPERATES_IN, PARTICIPATES_IN, TRADED_IN. Under
+// AH most of those collapse: the transform/assemble pair lives on
+// siteTransforms[] (no edge), CONSUMES reverses into `supplies`, EXTRACTS_FROM
+// renames to `produces`, AFFECTS becomes `disrupts`, geographic context moves
+// to canonical_path/attributes, market/community participation surfaces as
+// `member_of` / `listed_on`, and DEPENDS_ON expands per-pair (site<->site to
+// `supplies`, product->site to `requires_capability`). Logistics overlays
+// (`leg_connects`, `passes_through`, `transships_at`) are now first-class
+// supply-relevant edges.
 func isLensSupplyRelevantRelation(edgeType string) bool {
 	switch strings.TrimSpace(edgeType) {
-	case string(horizonmodels.DependencyTypeSuppliesTo),
-		string(horizonmodels.DependencyTypeProduces),
-		string(horizonmodels.DependencyTypeConsumes),
-		string(horizonmodels.DependencyTypeTransformsInto),
-		string(horizonmodels.DependencyTypeAssemblesInto),
-		string(horizonmodels.DependencyTypeDependsOn),
-		string(horizonmodels.DependencyTypeExtractsFrom),
-		string(horizonmodels.DependencyTypeAffects),
-		string(horizonmodels.DependencyTypeLocatedIn),
-		string(horizonmodels.DependencyTypeOperatesIn),
-		string(horizonmodels.DependencyTypeParticipatesIn),
-		string(horizonmodels.DependencyTypeTradedIn):
+	case string(ah.RelationNameSupplies),
+		string(ah.RelationNameProduces),
+		string(ah.RelationNameRequiresCapability),
+		string(ah.RelationNameDisrupts),
+		string(ah.RelationNameLegConnects),
+		string(ah.RelationNamePassesThrough),
+		string(ah.RelationNameTransshipsAt),
+		string(ah.RelationNameMemberOf),
+		string(ah.RelationNameListedOn):
 		return true
 	default:
 		return false
@@ -1106,18 +1112,23 @@ func filterSupplyRelevantRelations(in []lensDiagnosticRelation) []lensDiagnostic
 	return out
 }
 
+// isLensGraphSignalRelation gates whether an edge contributes a graph-derived
+// signal item to the lens diagnostic. AH RelationNames only; legacy CONSUMES /
+// TRANSFORMS_INTO / ASSEMBLES_INTO collapse onto attributes (not edges) so
+// they no longer reach this gate, and DEPENDS_ON expands per-pair into
+// supplies / requires_capability / subject_to / etc.
 func isLensGraphSignalRelation(graph *lensDiagnosticGraph, relation lensDiagnosticRelation) bool {
 	if graph == nil || !isLensSupplyRelevantRelation(relation.Type) {
 		return false
 	}
 	path := strings.TrimSpace(relation.RelatedCanonicalPath)
 	switch relation.Type {
-	case string(horizonmodels.DependencyTypeConsumes), string(horizonmodels.DependencyTypeTransformsInto), string(horizonmodels.DependencyTypeAssemblesInto):
-		return true
-	case string(horizonmodels.DependencyTypeAffects), string(horizonmodels.DependencyTypeDependsOn):
+	case string(ah.RelationNameDisrupts), string(ah.RelationNameRequiresCapability):
 		return canonicalPathImpactPriority(path) >= 2
-	case string(horizonmodels.DependencyTypeSuppliesTo):
+	case string(ah.RelationNameSupplies), string(ah.RelationNameProduces):
 		return strings.HasPrefix(path, "/product/") || strings.HasPrefix(path, "/route/") || strings.HasPrefix(path, "/flow/")
+	case string(ah.RelationNameLegConnects), string(ah.RelationNamePassesThrough), string(ah.RelationNameTransshipsAt):
+		return strings.HasPrefix(path, "/route/") || strings.HasPrefix(path, "/flow/") || strings.HasPrefix(path, "/zone/")
 	default:
 		return strings.HasPrefix(path, "/route/") ||
 			strings.HasPrefix(path, "/flow/") ||

@@ -36,8 +36,8 @@ func (s policyEdgeAxisSemantics) factorForAxis(axis string) (float64, bool) {
 	return base * s.DefaultAxisFactor, true
 }
 
-var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxisSemantics{
-	horizonmodels.DependencyTypeRegulates: {
+var policyImpactEdgeAxisMatrix = map[DependencyType]policyEdgeAxisSemantics{
+	DependencyTypeRegulates: {
 		BaseFactor:        1.08,
 		DefaultAxisFactor: 0,
 		AxisFactor: map[string]float64{
@@ -48,7 +48,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisPhysicalFlowDemand:  0.85,
 		},
 	},
-	horizonmodels.DependencyTypeAppliesTo: {
+	DependencyTypeAppliesTo: {
 		BaseFactor:        1.05,
 		DefaultAxisFactor: 0,
 		AxisFactor: map[string]float64{
@@ -58,7 +58,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoUncertainty:     1.05,
 		},
 	},
-	horizonmodels.DependencyTypeImposesCondition: {
+	DependencyTypeImposesCondition: {
 		BaseFactor:        1.10,
 		DefaultAxisFactor: 0,
 		AxisFactor: map[string]float64{
@@ -69,7 +69,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisPhysicalFlowDemand:  0.90,
 		},
 	},
-	horizonmodels.DependencyTypeControlsAccess: {
+	DependencyTypeControlsAccess: {
 		BaseFactor:        1.12,
 		DefaultAxisFactor: 0,
 		AxisFactor: map[string]float64{
@@ -79,7 +79,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoUncertainty:     1.05,
 		},
 	},
-	horizonmodels.DependencyTypeAdministers: {
+	DependencyTypeAdministers: {
 		BaseFactor:        1.02,
 		DefaultAxisFactor: 0.75,
 		AxisFactor: map[string]float64{
@@ -88,7 +88,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoUncertainty:     0.95,
 		},
 	},
-	horizonmodels.DependencyTypeDependsOn: {
+	DependencyTypeDependsOn: {
 		BaseFactor:        0.97,
 		DefaultAxisFactor: 0.70,
 		AxisFactor: map[string]float64{
@@ -103,7 +103,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoUncertainty:       0.80,
 		},
 	},
-	horizonmodels.DependencyTypeSuppliesTo: {
+	DependencyTypeSuppliesTo: {
 		BaseFactor:        0.95,
 		DefaultAxisFactor: 0.65,
 		AxisFactor: map[string]float64{
@@ -115,7 +115,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisOperationalContinuity: 0.90,
 		},
 	},
-	horizonmodels.DependencyTypeParticipatesIn: {
+	DependencyTypeParticipatesIn: {
 		BaseFactor:        0.90,
 		DefaultAxisFactor: 0.65,
 		AxisFactor: map[string]float64{
@@ -125,7 +125,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoReputation:      0.90,
 		},
 	},
-	horizonmodels.DependencyTypeTradedIn: {
+	DependencyTypeTradedIn: {
 		BaseFactor:        0.96,
 		DefaultAxisFactor: 0.70,
 		AxisFactor: map[string]float64{
@@ -135,7 +135,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoReputation:      0.92,
 		},
 	},
-	horizonmodels.DependencyTypeOperatesIn: {
+	DependencyTypeOperatesIn: {
 		BaseFactor:        0.88,
 		DefaultAxisFactor: 0.60,
 		AxisFactor: map[string]float64{
@@ -146,7 +146,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoUncertainty:     0.85,
 		},
 	},
-	horizonmodels.DependencyTypeLocatedIn: {
+	DependencyTypeLocatedIn: {
 		BaseFactor:        0.88,
 		DefaultAxisFactor: 0.60,
 		AxisFactor: map[string]float64{
@@ -158,7 +158,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisOperationalContinuity: 0.90,
 		},
 	},
-	horizonmodels.DependencyTypeTriggeredBy: {
+	DependencyTypeTriggeredBy: {
 		BaseFactor:        0.95,
 		DefaultAxisFactor: 0.75,
 		AxisFactor: map[string]float64{
@@ -167,7 +167,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoUncertainty:       1.05,
 		},
 	},
-	horizonmodels.DependencyTypeInfluences: {
+	DependencyTypeInfluences: {
 		BaseFactor:        0.80,
 		DefaultAxisFactor: 0.50,
 		AxisFactor: map[string]float64{
@@ -178,7 +178,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisFinancialSettlement: 0.85,
 		},
 	},
-	horizonmodels.DependencyTypePartnersWith: {
+	DependencyTypePartnersWith: {
 		BaseFactor:        0.80,
 		DefaultAxisFactor: 0.55,
 		AxisFactor: map[string]float64{
@@ -188,7 +188,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisFinancialSettlement: 0.80,
 		},
 	},
-	horizonmodels.DependencyTypeAssociatedWith: {
+	DependencyTypeAssociatedWith: {
 		BaseFactor:        0.75,
 		DefaultAxisFactor: 0.55,
 		AxisFactor: map[string]float64{
@@ -196,7 +196,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoUncertainty: 1.00,
 		},
 	},
-	horizonmodels.DependencyTypeOwns: {
+	DependencyTypeOwns: {
 		BaseFactor:        0.92,
 		DefaultAxisFactor: 0.60,
 		AxisFactor: map[string]float64{
@@ -206,7 +206,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisOperationalContinuity: 0.90,
 		},
 	},
-	horizonmodels.DependencyTypeControls: {
+	DependencyTypeControls: {
 		BaseFactor:        0.95,
 		DefaultAxisFactor: 0.65,
 		AxisFactor: map[string]float64{
@@ -216,7 +216,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisOperationalContinuity: 0.90,
 		},
 	},
-	horizonmodels.DependencyTypeManages: {
+	DependencyTypeManages: {
 		BaseFactor:        0.92,
 		DefaultAxisFactor: 0.60,
 		AxisFactor: map[string]float64{
@@ -225,7 +225,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisFinancialSettlement:   0.85,
 		},
 	},
-	horizonmodels.DependencyTypeInvestsIn: {
+	DependencyTypeInvestsIn: {
 		BaseFactor:        0.85,
 		DefaultAxisFactor: 0.60,
 		AxisFactor: map[string]float64{
@@ -234,7 +234,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoReputation:      0.85,
 		},
 	},
-	horizonmodels.DependencyTypeUsesMechanism: {
+	DependencyTypeUsesMechanism: {
 		BaseFactor:        0.90,
 		DefaultAxisFactor: 0.60,
 		AxisFactor: map[string]float64{
@@ -243,7 +243,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisFinancialSettlement: 0.90,
 		},
 	},
-	horizonmodels.DependencyTypeAffects: {
+	DependencyTypeAffects: {
 		BaseFactor:        0.92,
 		DefaultAxisFactor: 0.70,
 		AxisFactor: map[string]float64{
@@ -256,7 +256,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisLogisticsCapacity:     0.85,
 		},
 	},
-	horizonmodels.DependencyTypeInGeoScope: {
+	DependencyTypeInGeoScope: {
 		BaseFactor:        0.95,
 		DefaultAxisFactor: 0.70,
 		AxisFactor: map[string]float64{
@@ -267,7 +267,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoReputation:  0.90,
 		},
 	},
-	horizonmodels.DependencyTypeAbout: {
+	DependencyTypeAbout: {
 		BaseFactor:        0.80,
 		DefaultAxisFactor: 0.55,
 		AxisFactor: map[string]float64{
@@ -275,7 +275,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoReputation:  1.00,
 		},
 	},
-	horizonmodels.DependencyTypeGatekeepsDecision: {
+	DependencyTypeGatekeepsDecision: {
 		BaseFactor:        1.06,
 		DefaultAxisFactor: 0,
 		AxisFactor: map[string]float64{
@@ -285,7 +285,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisInfoUncertainty:     1.08,
 		},
 	},
-	horizonmodels.DependencyTypeOperatesVia: {
+	DependencyTypeOperatesVia: {
 		BaseFactor:        0.94,
 		DefaultAxisFactor: 0.65,
 		AxisFactor: map[string]float64{
@@ -294,7 +294,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisFinancialSettlement:   0.95,
 		},
 	},
-	horizonmodels.DependencyTypeProduces: {
+	DependencyTypeProduces: {
 		BaseFactor:        0.96,
 		DefaultAxisFactor: 0.70,
 		AxisFactor: map[string]float64{
@@ -305,7 +305,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisFinancialSettlement:   1.00,
 		},
 	},
-	horizonmodels.DependencyTypeTransformsInto: {
+	DependencyTypeTransformsInto: {
 		BaseFactor:        0.95,
 		DefaultAxisFactor: 0.68,
 		AxisFactor: map[string]float64{
@@ -315,7 +315,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisLegalCompliance:       0.86,
 		},
 	},
-	horizonmodels.DependencyTypeAssemblesInto: {
+	DependencyTypeAssemblesInto: {
 		BaseFactor:        0.95,
 		DefaultAxisFactor: 0.68,
 		AxisFactor: map[string]float64{
@@ -325,7 +325,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisLegalCompliance:       0.86,
 		},
 	},
-	horizonmodels.DependencyTypeUsedIn: {
+	DependencyTypeUsedIn: {
 		BaseFactor:        0.95,
 		DefaultAxisFactor: 0.68,
 		AxisFactor: map[string]float64{
@@ -335,7 +335,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisLegalCompliance:       0.86,
 		},
 	},
-	horizonmodels.DependencyTypeExtractsFrom: {
+	DependencyTypeExtractsFrom: {
 		BaseFactor:        0.94,
 		DefaultAxisFactor: 0.65,
 		AxisFactor: map[string]float64{
@@ -344,7 +344,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 			horizonmodels.AxisLegalCompliance:       0.85,
 		},
 	},
-	horizonmodels.DependencyTypeHasMarketSegment: {
+	DependencyTypeHasMarketSegment: {
 		BaseFactor:        0.90,
 		DefaultAxisFactor: 0.62,
 		AxisFactor: map[string]float64{
@@ -355,7 +355,7 @@ var policyImpactEdgeAxisMatrix = map[horizonmodels.DependencyType]policyEdgeAxis
 	},
 }
 
-func policyImpactTransferFactor(edgeType horizonmodels.DependencyType, axis string) (float64, bool) {
+func policyImpactTransferFactor(edgeType DependencyType, axis string) (float64, bool) {
 	sem, ok := policyImpactEdgeAxisMatrix[edgeType]
 	if !ok {
 		return 0, false
@@ -372,19 +372,21 @@ func policyImpactTransferNodeFactor(node *horizonmodels.HorizonFragment, axis st
 		return 1.0
 	}
 	cp := strings.TrimSpace(node.CanonicalPath)
-	switch node.Type {
-	case horizonmodels.FragmentTypeAffectedZone:
-		switch axis {
-		case horizonmodels.AxisGeoConflict:
-			return 1.25
-		case horizonmodels.AxisOperationalContinuity:
-			return 1.15
-		case horizonmodels.AxisInfoUncertainty:
-			return 1.08
-		default:
-			return 0.90
+	subtype := strings.TrimSpace(node.Subtype)
+	switch node.Class {
+	case FragmentTypeGeoRegion:
+		if subtype == "affected_zone" {
+			switch axis {
+			case horizonmodels.AxisGeoConflict:
+				return 1.25
+			case horizonmodels.AxisOperationalContinuity:
+				return 1.15
+			case horizonmodels.AxisInfoUncertainty:
+				return 1.08
+			default:
+				return 0.90
+			}
 		}
-	case horizonmodels.FragmentTypeGeoRegion:
 		switch axis {
 		case horizonmodels.AxisGeoConflict:
 			return 1.15
@@ -395,7 +397,7 @@ func policyImpactTransferNodeFactor(node *horizonmodels.HorizonFragment, axis st
 		default:
 			return 0.85
 		}
-	case horizonmodels.FragmentTypeMarket:
+	case FragmentTypeMarket:
 		switch axis {
 		case horizonmodels.AxisPhysicalFlowDemand:
 			return 1.10
@@ -406,7 +408,7 @@ func policyImpactTransferNodeFactor(node *horizonmodels.HorizonFragment, axis st
 		default:
 			return 0.90
 		}
-	case horizonmodels.FragmentTypeDecisionPoint:
+	case FragmentTypeDecisionPoint:
 		lifecycle := ""
 		if node.Identifiers != nil {
 			lifecycle = strings.ToLower(strings.TrimSpace(node.Identifiers["decisionLifecycle"]))
@@ -440,7 +442,7 @@ func policyImpactTransferNodeFactor(node *horizonmodels.HorizonFragment, axis st
 				return 0.85
 			}
 		}
-	case horizonmodels.FragmentTypeMechanism:
+	case FragmentTypeMechanism:
 		mult := 1.0
 		if node.Identifiers != nil {
 			switch strings.ToLower(strings.TrimSpace(node.Identifiers["severity"])) {
@@ -460,16 +462,7 @@ func policyImpactTransferNodeFactor(node *horizonmodels.HorizonFragment, axis st
 			base = 0.86
 		}
 		return base * mult
-	case horizonmodels.FragmentTypeProgram, horizonmodels.FragmentTypeDomain:
-		switch axis {
-		case horizonmodels.AxisLegalAccess, horizonmodels.AxisLegalCompliance:
-			return 1.12
-		case horizonmodels.AxisInfoUncertainty:
-			return 1.08
-		default:
-			return 0.85
-		}
-	case horizonmodels.FragmentTypeCommunity, horizonmodels.FragmentTypePerson, horizonmodels.FragmentTypeMediaChannel:
+	case FragmentTypeCommunity, FragmentTypePerson:
 		switch axis {
 		case horizonmodels.AxisInfoReputation:
 			return 1.12
@@ -480,7 +473,29 @@ func policyImpactTransferNodeFactor(node *horizonmodels.HorizonFragment, axis st
 		default:
 			return 0.70
 		}
-	case horizonmodels.FragmentTypeOrganization, horizonmodels.FragmentTypeFacility:
+	case FragmentTypeOrganization, FragmentTypeFacility:
+		if subtype == "media_channel" {
+			switch axis {
+			case horizonmodels.AxisInfoReputation:
+				return 1.12
+			case horizonmodels.AxisInfoUncertainty:
+				return 1.05
+			case horizonmodels.AxisPhysicalFlowDemand:
+				return 0.92
+			default:
+				return 0.70
+			}
+		}
+		if subtype == "program" || subtype == "domain" {
+			switch axis {
+			case horizonmodels.AxisLegalAccess, horizonmodels.AxisLegalCompliance:
+				return 1.12
+			case horizonmodels.AxisInfoUncertainty:
+				return 1.08
+			default:
+				return 0.85
+			}
+		}
 		if strings.HasPrefix(cp, "/gov/") {
 			switch axis {
 			case horizonmodels.AxisLegalAccess, horizonmodels.AxisLegalCompliance:
@@ -519,12 +534,15 @@ func policyImpactDecodeScopeFactor(node *horizonmodels.HorizonFragment, scenario
 	}
 	nodeGeo, hasNodeGeo := policyImpactCanonicalGeo(node.CanonicalPath)
 	if !hasNodeGeo {
-		switch node.Type {
-		case horizonmodels.FragmentTypeMechanism, horizonmodels.FragmentTypeDecisionPoint, horizonmodels.FragmentTypeDomain:
+		nodeSubtype := strings.TrimSpace(node.Subtype)
+		switch node.Class {
+		case FragmentTypeMechanism, FragmentTypeDecisionPoint:
 			return policyImpactDecodeNodeFactor(node) * 0.75, true
-		default:
-			return 0, false
 		}
+		if nodeSubtype == "domain" {
+			return policyImpactDecodeNodeFactor(node) * 0.75, true
+		}
+		return 0, false
 	}
 	if !policyGeoOverlap(scopeGeo, nodeGeo) {
 		return 0, false
@@ -540,19 +558,16 @@ func policyImpactDecodeTypeAllowed(node *horizonmodels.HorizonFragment) bool {
 	if node == nil {
 		return false
 	}
-	switch node.Type {
-	case horizonmodels.FragmentTypeGeoRegion,
-		horizonmodels.FragmentTypeMarket,
-		horizonmodels.FragmentTypeProduct,
-		horizonmodels.FragmentTypeProgram,
-		horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeFacility,
-		horizonmodels.FragmentTypeCommunity,
-		horizonmodels.FragmentTypePerson,
-		horizonmodels.FragmentTypeMediaChannel,
-		horizonmodels.FragmentTypeDecisionPoint,
-		horizonmodels.FragmentTypeMechanism,
-		horizonmodels.FragmentTypeDomain:
+	switch node.Class {
+	case FragmentTypeGeoRegion,
+		FragmentTypeMarket,
+		FragmentTypeProduct,
+		FragmentTypeOrganization,
+		FragmentTypeFacility,
+		FragmentTypeCommunity,
+		FragmentTypePerson,
+		FragmentTypeDecisionPoint,
+		FragmentTypeMechanism:
 		return true
 	default:
 		return false
@@ -564,32 +579,36 @@ func policyImpactDecodeNodeFactor(node *horizonmodels.HorizonFragment) float64 {
 		return 0
 	}
 	cp := strings.TrimSpace(node.CanonicalPath)
-	switch node.Type {
-	case horizonmodels.FragmentTypeGeoRegion:
+	subtype := strings.TrimSpace(node.Subtype)
+	switch node.Class {
+	case FragmentTypeGeoRegion:
 		return 1.00
-	case horizonmodels.FragmentTypeMarket:
+	case FragmentTypeMarket:
 		return 1.00
-	case horizonmodels.FragmentTypeProduct:
+	case FragmentTypeProduct:
 		return 0.90
-	case horizonmodels.FragmentTypeProgram:
-		return 0.95
-	case horizonmodels.FragmentTypeOrganization:
+	case FragmentTypeOrganization:
+		if subtype == "program" {
+			return 0.95
+		}
+		if subtype == "media_channel" {
+			return 0.72
+		}
+		if subtype == "domain" {
+			return 0.70
+		}
 		if strings.HasPrefix(cp, "/gov/") {
 			return 0.92
 		}
 		return 0.88
-	case horizonmodels.FragmentTypeFacility:
+	case FragmentTypeFacility:
 		return 0.82
-	case horizonmodels.FragmentTypeCommunity:
+	case FragmentTypeCommunity:
 		return 0.78
-	case horizonmodels.FragmentTypeMediaChannel:
-		return 0.72
-	case horizonmodels.FragmentTypePerson:
+	case FragmentTypePerson:
 		return 0.68
-	case horizonmodels.FragmentTypeDecisionPoint, horizonmodels.FragmentTypeMechanism:
+	case FragmentTypeDecisionPoint, FragmentTypeMechanism:
 		return 0.72
-	case horizonmodels.FragmentTypeDomain:
-		return 0.70
 	default:
 		return 0
 	}

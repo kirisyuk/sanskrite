@@ -4,23 +4,32 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
-// NormalizeFragmentTypeToken maps type labels/aliases (and accidental canonical paths)
-// to Horizon FragmentType. It never returns empty.
-func NormalizeFragmentTypeToken(raw string) models.FragmentType {
+// NormalizeFragmentClassToken maps assorted type labels (modern AH
+// classes, legacy UPPER_SNAKE FragmentType values, and human shorthands
+// like "FAC" / "PLANT") onto an AH FragmentClass, plus an optional
+// subtype hint when the legacy alias collapses into (class, subtype).
+//
+// The function NEVER returns an empty class: when nothing matches it
+// falls back to ah.FragmentClassOrg with ok=false so callers can warn.
+func NormalizeFragmentClassToken(raw string) (ah.FragmentClass, string, bool) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" {
-		return models.FragmentTypeOrganization
+		return ah.FragmentClassOrg, "", false
 	}
-	if inferred, ok := ExpectedTypeFromCanonicalPath(strings.ToLower(raw)); ok && inferred != "" {
-		return inferred
+	if class, sub, ok := ExpectedClassFromCanonicalPath(strings.ToLower(raw)); ok {
+		return class, sub, true
 	}
 	token := normalizeTypeToken(raw)
-	if typ, ok := fragmentTypeAliases[token]; ok {
-		return typ
+	if entry, ok := fragmentClassAliases[token]; ok {
+		return entry.class, entry.subtype, true
 	}
-	return models.FragmentTypeOrganization
+	if class, sub, ok := models.NormalizeFragmentClassName(token, ""); ok {
+		return class, sub, true
+	}
+	return ah.FragmentClassOrg, "", false
 }
 
 func normalizeTypeToken(raw string) string {
@@ -34,59 +43,90 @@ func normalizeTypeToken(raw string) string {
 	return strings.Trim(token, "_")
 }
 
-var fragmentTypeAliases = map[string]models.FragmentType{
-	// ORGANIZATION (+ GOV aliases)
-	string(models.FragmentTypeOrganization): models.FragmentTypeOrganization,
-	"ORG":                                   models.FragmentTypeOrganization,
-	"GOV":                                   models.FragmentTypeOrganization,
-	"GOVERNMENT":                            models.FragmentTypeOrganization,
-	"GOVERNMENT_BODY":                       models.FragmentTypeOrganization,
-	"PUBLIC_BODY":                           models.FragmentTypeOrganization,
+type fragmentClassAlias struct {
+	class   ah.FragmentClass
+	subtype string
+}
 
-	// Core entity types
-	string(models.FragmentTypeFacility):     models.FragmentTypeFacility,
-	"FAC":                                   models.FragmentTypeFacility,
-	"PLANT":                                 models.FragmentTypeFacility,
-	"SITE":                                  models.FragmentTypeFacility,
-	string(models.FragmentTypeGeoRegion):    models.FragmentTypeGeoRegion,
-	"REGION":                                models.FragmentTypeGeoRegion,
-	"GEO":                                   models.FragmentTypeGeoRegion,
-	"GEOREGION":                             models.FragmentTypeGeoRegion,
-	"LOCATION":                              models.FragmentTypeGeoRegion,
-	"LOC":                                   models.FragmentTypeGeoRegion,
-	string(models.FragmentTypeProduct):      models.FragmentTypeProduct,
-	string(models.FragmentTypeProgram):      models.FragmentTypeProgram,
-	string(models.FragmentTypeMarket):       models.FragmentTypeMarket,
-	string(models.FragmentTypeEvent):        models.FragmentTypeEvent,
-	string(models.FragmentTypePerson):       models.FragmentTypePerson,
-	"HUMAN":                                 models.FragmentTypePerson,
-	"INDIVIDUAL":                            models.FragmentTypePerson,
-	string(models.FragmentTypeMediaChannel): models.FragmentTypeMediaChannel,
-	"MEDIA":                                 models.FragmentTypeMediaChannel,
-	"CHANNEL":                               models.FragmentTypeMediaChannel,
-	"MEDIACHANNEL":                          models.FragmentTypeMediaChannel,
-	string(models.FragmentTypeDeposit):      models.FragmentTypeDeposit,
-	"MINE":                                  models.FragmentTypeDeposit,
-	"FIELD":                                 models.FragmentTypeDeposit,
-	"BASIN":                                 models.FragmentTypeDeposit,
-	"RESERVOIR":                             models.FragmentTypeDeposit,
+// fragmentClassAliases is the closed set of human-shorthand aliases.
+// Every legacy UPPER_SNAKE FragmentType is normalised via the
+// migration-map-derived models.NormalizeFragmentClassName fallback
+// (see relation_alias.go); this map only adds the colloquial aliases
+// (FAC / PLANT / NETWORK / etc.) that aren't part of the legacy enum
+// but appear in LLM output and tool input.
+var fragmentClassAliases = map[string]fragmentClassAlias{
+	"ORG":             {ah.FragmentClassOrg, ""},
+	"ORGANISATION":    {ah.FragmentClassOrg, ""},
+	"GOV":             {ah.FragmentClassOrg, "gov"},
+	"GOVERNMENT":      {ah.FragmentClassOrg, "gov"},
+	"GOVERNMENT_BODY": {ah.FragmentClassOrg, "gov"},
+	"PUBLIC_BODY":     {ah.FragmentClassOrg, "gov"},
 
-	// Strategic / contract overlay types
-	string(models.FragmentTypeDomain):        models.FragmentTypeDomain,
-	string(models.FragmentTypeSphere):        models.FragmentTypeSphere,
-	string(models.FragmentTypeDecisionPoint): models.FragmentTypeDecisionPoint,
-	"DECISION":                               models.FragmentTypeDecisionPoint,
-	"DECISIONPOINT":                          models.FragmentTypeDecisionPoint,
-	string(models.FragmentTypeMechanism):     models.FragmentTypeMechanism,
+	"FAC":   {ah.FragmentClassSite, ""},
+	"PLANT": {ah.FragmentClassSite, ""},
+	"SITE":  {ah.FragmentClassSite, ""},
 
-	// Runtime-specific types
-	string(models.FragmentTypeSupplyLink): models.FragmentTypeSupplyLink,
-	"SUPPLYLINK":                          models.FragmentTypeSupplyLink,
-	string(models.FragmentTypeCommunity):  models.FragmentTypeCommunity,
-	"NETWORK":                             models.FragmentTypeCommunity,
-	"GROUP":                               models.FragmentTypeCommunity,
-	"COLLECTIVE":                          models.FragmentTypeCommunity,
-	string(models.FragmentTypeAffectedZone): models.FragmentTypeAffectedZone,
-	"ZONE":                                models.FragmentTypeAffectedZone,
-	"AFFECTEDZONE":                        models.FragmentTypeAffectedZone,
+	"REGION":     {ah.FragmentClassGeo, ""},
+	"GEO":        {ah.FragmentClassGeo, ""},
+	"GEOREGION":  {ah.FragmentClassGeo, ""},
+	"GEO_REGION": {ah.FragmentClassGeo, ""},
+	"LOCATION":   {ah.FragmentClassGeo, ""},
+	"LOC":        {ah.FragmentClassGeo, ""},
+
+	"PRODUCT": {ah.FragmentClassProduct, ""},
+
+	"PROGRAM": {ah.FragmentClassOrg, "program"},
+	"MARKET":  {ah.FragmentClassMarket, ""},
+
+	"EVENT":    {ah.FragmentClassEvidence, "event"},
+	"EVIDENCE": {ah.FragmentClassEvidence, ""},
+
+	"PERSON":     {ah.FragmentClassPerson, ""},
+	"HUMAN":      {ah.FragmentClassPerson, ""},
+	"INDIVIDUAL": {ah.FragmentClassPerson, ""},
+
+	"MEDIA_CHANNEL": {ah.FragmentClassOrg, "media_channel"},
+	"MEDIA":         {ah.FragmentClassOrg, "media_channel"},
+	"CHANNEL":       {ah.FragmentClassOrg, "media_channel"},
+	"MEDIACHANNEL":  {ah.FragmentClassOrg, "media_channel"},
+
+	"DEPOSIT":   {ah.FragmentClassSite, "deposit"},
+	"MINE":      {ah.FragmentClassSite, "deposit"},
+	"FIELD":     {ah.FragmentClassSite, "deposit"},
+	"BASIN":     {ah.FragmentClassSite, "deposit"},
+	"RESERVOIR": {ah.FragmentClassSite, "deposit"},
+
+	"DECISION":       {ah.FragmentClassDecision, ""},
+	"DECISIONPOINT":  {ah.FragmentClassDecision, ""},
+	"DECISION_POINT": {ah.FragmentClassDecision, ""},
+	"MECHANISM":      {ah.FragmentClassMechanism, ""},
+
+	"COMMUNITY":  {ah.FragmentClassCommunity, ""},
+	"NETWORK":    {ah.FragmentClassCommunity, ""},
+	"GROUP":      {ah.FragmentClassCommunity, ""},
+	"COLLECTIVE": {ah.FragmentClassCommunity, ""},
+
+	"AFFECTED_ZONE": {ah.FragmentClassGeo, "affected_zone"},
+	"AFFECTEDZONE":  {ah.FragmentClassGeo, "affected_zone"},
+	"ZONE":          {ah.FragmentClassGeo, "affected_zone"},
+
+	"REGIME":  {ah.FragmentClassRegime, ""},
+	"ROUTE":   {ah.FragmentClassRoute, ""},
+	"PROJECT": {ah.FragmentClassProject, ""},
+
+	"VESSEL_CLASS": {ah.FragmentClassVesselClass, ""},
+	"VESSELCLASS":  {ah.FragmentClassVesselClass, ""},
+
+	"MOBILE_ASSET": {ah.FragmentClassMobileAsset, ""},
+	"MOBILEASSET":  {ah.FragmentClassMobileAsset, ""},
+	"VESSEL":       {ah.FragmentClassMobileAsset, ""},
+	"AIRCRAFT":     {ah.FragmentClassMobileAsset, ""},
+	"TRACK":        {ah.FragmentClassMobileAsset, ""},
+
+	// Legacy strategic overlays — folded but recognised so legacy LLM
+	// output still resolves to a valid class for normalisation.
+	"DOMAIN":      {ah.FragmentClassEvidence, "domain_legacy"},
+	"SPHERE":      {ah.FragmentClassEvidence, "sphere_legacy"},
+	"SUPPLY_LINK": {ah.FragmentClassSite, "supply_link"},
+	"SUPPLYLINK":  {ah.FragmentClassSite, "supply_link"},
 }

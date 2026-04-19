@@ -272,7 +272,7 @@ func (b *DomainArtifactBuilder) UpsertRegulatoryCascadeArtifact(
 		indirect[path] = indRec{path: path, att: att, origin: origin, hops: hops}
 	}
 
-	supplies := models.DependencyTypeSuppliesTo
+	supplies := DependencyTypeSuppliesTo
 	for _, seed := range directAffected {
 		seed = strings.TrimSpace(seed)
 		if seed == "" {
@@ -513,8 +513,8 @@ func (b *DomainArtifactBuilder) linkedProductPathsForEntity(ctx context.Context,
 	if limit <= 0 {
 		limit = 40
 	}
-	produces := models.DependencyTypeProduces
-	supplies := models.DependencyTypeSuppliesTo
+	produces := DependencyTypeProduces
+	supplies := DependencyTypeSuppliesTo
 	seen := map[string]struct{}{}
 	var out []string
 	add := func(cp string) {

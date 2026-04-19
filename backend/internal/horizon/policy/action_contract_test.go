@@ -35,12 +35,12 @@ func TestMergePolicyStatusMonotonic(t *testing.T) {
 
 func TestApplyEdgeCanonicalizationPolicyTransitionFallback(t *testing.T) {
 	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
-		EdgeType:        horizonmodels.DependencyTypeDependsOn,
-		SourceType:      horizonmodels.FragmentTypeOrganization,
-		TargetType:      horizonmodels.FragmentTypeOrganization,
+		EdgeType:        relDependsOn,
+		SourceType:      classOrganization,
+		TargetType:      classOrganization,
 		RawRelationType: "formerly_known_as",
 	})
-	if got.EdgeType != horizonmodels.DependencyTypeInfluences {
+	if got.EdgeType != relInfluences {
 		t.Fatalf("expected transition fallback to INFLUENCES, got %s", got.EdgeType)
 	}
 	if got.PolicyReason != "transition_unclassified" {
@@ -53,16 +53,16 @@ func TestApplyEdgeCanonicalizationPolicyTransitionFallback(t *testing.T) {
 
 func TestApplyEdgeCanonicalizationPolicyTransformsIntoStageOrderSwap(t *testing.T) {
 	got := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
-		EdgeType:   horizonmodels.DependencyTypeTransformsInto,
-		SourceType: horizonmodels.FragmentTypeProduct,
-		TargetType: horizonmodels.FragmentTypeProduct,
+		EdgeType:   relTransformsInto,
+		SourceType: classProduct,
+		TargetType: classProduct,
 		SourcePath: "/product/finished/mineral/processing/iron-pellet",
 		TargetPath: "/product/raw/mineral/extraction/iron-ore",
 	})
 	if !got.Changed {
 		t.Fatalf("expected canonicalization change for reversed TRANSFORMS_INTO stage order")
 	}
-	if got.EdgeType != horizonmodels.DependencyTypeTransformsInto {
+	if got.EdgeType != relTransformsInto {
 		t.Fatalf("expected edge type to stay TRANSFORMS_INTO, got %s", got.EdgeType)
 	}
 	if !got.ShouldSwap {

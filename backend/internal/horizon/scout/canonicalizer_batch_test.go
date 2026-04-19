@@ -68,7 +68,7 @@ func TestResolveCanonicalPathsBatch_SessionGraphHit(t *testing.T) {
 	sg.Add(&models.HorizonFragment{
 		ID:            "frag-123",
 		CanonicalPath: "/org/tr/botas",
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		Labels:        map[string]string{"en": "BOTAS"},
 	})
 

@@ -79,11 +79,14 @@
   ],
   "edges": [
     {
-      "id": "edge-euro-market",
+      "id": "edge-market-influences-euro",
       "tenantId": "global",
-      "sourceFragmentId": "frag-euro-mobility",
-      "targetFragmentId": "frag-eu-ev-market",
-      "type": "HAS_MARKET_SEGMENT",
+      "sourceFragmentId": "frag-eu-ev-market",
+      "targetFragmentId": "frag-euro-mobility",
+      "relation": "influences",
+      "qualifiers": {
+        "influence_kind": "market_segment"
+      },
       "properties": {
         "criticality": 0.96,
         "amplification": 1.18,

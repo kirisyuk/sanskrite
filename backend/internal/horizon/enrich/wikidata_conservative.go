@@ -123,7 +123,7 @@ func EnrichFragmentFromEntityData(
 		changed = true
 	}
 
-	if fragment.Type == hmodels.FragmentTypePerson || fragment.Type == hmodels.FragmentTypeOrganization {
+	if fragment.Class == FragmentTypePerson || fragment.Class == FragmentTypeOrganization {
 		// Type-gating (avoid applying human data to orgs and vice versa).
 		p31 := extractEntityIDs(ed.PropertiesRaw, "P31")
 		isHuman := false
@@ -133,10 +133,10 @@ func EnrichFragmentFromEntityData(
 				break
 			}
 		}
-		if fragment.Type == hmodels.FragmentTypePerson && !isHuman {
+		if fragment.Class == FragmentTypePerson && !isHuman {
 			return false, fmt.Errorf("qid %s is not a human (P31=%v)", qid, p31)
 		}
-		if fragment.Type == hmodels.FragmentTypeOrganization && isHuman {
+		if fragment.Class == FragmentTypeOrganization && isHuman {
 			return false, fmt.Errorf("qid %s is a human (unexpected for org)", qid)
 		}
 
@@ -187,12 +187,12 @@ func EnrichFragmentFromEntityData(
 		}
 
 		// IndustryPaths from P452 (ORG only).
-		if fragment.Type == hmodels.FragmentTypeOrganization {
+		if fragment.Class == FragmentTypeOrganization {
 			inds := extractEntityIDs(ed.PropertiesRaw, "P452")
 			if len(inds) > 0 {
 				paths := taxonomy.NormalizeIndustryPaths(
 					taxonomy.MapIndustryQIDsToPaths(inds),
-					string(fragment.Type),
+					string(fragment.Class),
 				)
 				if len(paths) > 0 {
 					// Overwrite is fine; these are derived.

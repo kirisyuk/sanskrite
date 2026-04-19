@@ -26,48 +26,70 @@ func dedupNamespaceFamilyFromPath(canonicalPath string) string {
 	}
 }
 
-func dedupExpectedFamilyForType(fragType models.FragmentType) string {
+// dedupExpectedFamilyForType maps an AH FragmentClass to its canonical
+// namespace family token (the leading segment of canonical paths under that
+// class). Subtype-bearing legacy classes (program/media_channel/deposit/
+// supply_link/affected_zone/domain/sphere) cannot be distinguished from
+// their parent class via this Class-only API; callers needing that
+// distinction should call dedupExpectedFamilyForClassSubtype with both
+// Class and Subtype.
+func dedupExpectedFamilyForType(fragType FragmentType) string {
 	switch fragType {
-	case models.FragmentTypeOrganization:
+	case FragmentTypeOrganization:
 		return "org"
-	case models.FragmentTypeFacility:
+	case FragmentTypeFacility:
 		return "fac"
-	case models.FragmentTypeGeoRegion:
+	case FragmentTypeGeoRegion:
 		return "loc"
-	case models.FragmentTypeProduct:
+	case FragmentTypeProduct:
 		return "product"
-	case models.FragmentTypePerson:
+	case FragmentTypePerson:
 		return "person"
-	case models.FragmentTypeMediaChannel:
-		return "media"
-	case models.FragmentTypeMarket:
+	case FragmentTypeMarket:
 		return "market"
-	case models.FragmentTypeDecisionPoint:
+	case FragmentTypeDecisionPoint:
 		return "decision"
-	case models.FragmentTypeMechanism:
+	case FragmentTypeMechanism:
 		return "mechanism"
-	case models.FragmentTypeProgram:
-		return "program"
-	case models.FragmentTypeDomain:
-		return "domain"
-	case models.FragmentTypeDeposit:
-		return "deposit"
-	case models.FragmentTypeCommunity:
+	case FragmentTypeCommunity:
 		return "community"
-	case models.FragmentTypeEvent:
+	case FragmentTypeEvent:
 		return "event"
-	case models.FragmentTypeSphere:
-		return "sphere"
-	case models.FragmentTypeSupplyLink:
-		return "supply-link"
-	case models.FragmentTypeTrack:
+	case FragmentTypeTrack:
 		return "track"
 	default:
 		return ""
 	}
 }
 
-func dedupFamilyForRequest(fragType models.FragmentType, canonicalPath string) string {
+// dedupExpectedFamilyForClassSubtype returns the canonical namespace family
+// for the given (Class, Subtype) tuple, including the legacy subtype-bearing
+// values (program → "program", media_channel → "media", deposit → "deposit",
+// supply_link → "supply-link", affected_zone → "zone", domain → "domain",
+// sphere → "sphere"). Falls back to dedupExpectedFamilyForType for plain
+// classes.
+func dedupExpectedFamilyForClassSubtype(class FragmentType, subtype string) string {
+	switch {
+	case class == FragmentTypeOrganization && subtype == "program":
+		return "program"
+	case class == FragmentTypeOrganization && subtype == "media_channel":
+		return "media"
+	case class == FragmentTypeFacility && subtype == "deposit":
+		return "deposit"
+	case class == FragmentTypeFacility && subtype == "supply_link":
+		return "supply-link"
+	case class == FragmentTypeGeoRegion && subtype == "affected_zone":
+		return "zone"
+	case class == FragmentTypeEvent && subtype == "domain":
+		return "domain"
+	case class == FragmentTypeEvent && subtype == "sphere":
+		return "sphere"
+	default:
+		return dedupExpectedFamilyForType(class)
+	}
+}
+
+func dedupFamilyForRequest(fragType FragmentType, canonicalPath string) string {
 	if fam := dedupNamespaceFamilyFromPath(canonicalPath); fam != "" {
 		return fam
 	}
@@ -81,7 +103,7 @@ func dedupFamilyForFragment(f *models.HorizonFragment) string {
 	if fam := dedupNamespaceFamilyFromPath(f.CanonicalPath); fam != "" {
 		return fam
 	}
-	return dedupExpectedFamilyForType(f.Type)
+	return dedupExpectedFamilyForClassSubtype(f.Class, f.Subtype)
 }
 
 func dedupHasHierarchyConflict(requestedCanonicalPath, replacementCanonicalPath string) bool {
@@ -98,11 +120,11 @@ func dedupHasHierarchyConflict(requestedCanonicalPath, replacementCanonicalPath 
 // - same FragmentType when both are known;
 // - same canonical namespace family (gov->org, region->loc) when both are known.
 // - no strict parent/child canonical-path hierarchy replacement.
-func isDedupReplacementCompatible(requestedType models.FragmentType, requestedCanonicalPath string, replacement *models.HorizonFragment) bool {
+func isDedupReplacementCompatible(requestedType FragmentType, requestedCanonicalPath string, replacement *models.HorizonFragment) bool {
 	if replacement == nil {
 		return false
 	}
-	if requestedType != "" && replacement.Type != "" && requestedType != replacement.Type {
+	if requestedType != "" && replacement.Class != "" && requestedType != replacement.Class {
 		return false
 	}
 	reqFam := dedupFamilyForRequest(requestedType, requestedCanonicalPath)

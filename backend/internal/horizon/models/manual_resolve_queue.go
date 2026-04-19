@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // Manual resolve queue: human-in-the-loop items (geo enrichment, future kinds).
@@ -29,10 +31,13 @@ type ManualResolveQueueItem struct {
 	ProjectID string `json:"projectId,omitempty" firestore:"projectId,omitempty"`
 	LensID    string `json:"lensId,omitempty" firestore:"lensId,omitempty"`
 
-	FragmentID      string       `json:"fragmentId,omitempty" firestore:"fragmentId,omitempty"`
-	CanonicalPath   string       `json:"canonicalPath" firestore:"canonicalPath"`
-	FragmentType    FragmentType `json:"fragmentType,omitempty" firestore:"fragmentType,omitempty"`
-	EnrichmentKinds []string     `json:"enrichmentKinds" firestore:"enrichmentKinds"`
+	FragmentID    string           `json:"fragmentId,omitempty" firestore:"fragmentId,omitempty"`
+	CanonicalPath string           `json:"canonicalPath" firestore:"canonicalPath"`
+	FragmentClass ah.FragmentClass `json:"fragmentClass,omitempty" firestore:"fragmentClass,omitempty"`
+	// FragmentSubtype mirrors HorizonFragment.Subtype on enqueue so the
+	// FE can render the correct icon without reloading the fragment.
+	FragmentSubtype string   `json:"fragmentSubtype,omitempty" firestore:"fragmentSubtype,omitempty"`
+	EnrichmentKinds []string `json:"enrichmentKinds" firestore:"enrichmentKinds"`
 
 	Status   ManualResolveQueueStatus `json:"status" firestore:"status"`
 	Priority int                      `json:"priority" firestore:"priority"`

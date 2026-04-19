@@ -54,13 +54,17 @@ func (a *ConcentrationAnalyzer) Snapshot(ctx context.Context, tenantID, polarity
 		limit = 10
 	}
 	frags := make([]*horizonmodels.HorizonFragment, 0, 1000)
-	types := []horizonmodels.FragmentType{
-		horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeFacility,
-		horizonmodels.FragmentTypeMarket,
-		horizonmodels.FragmentTypeProduct,
-		horizonmodels.FragmentTypeGeoRegion,
-		horizonmodels.FragmentTypeProgram,
+	// Legacy PROGRAM folds onto Class=org/Subtype=program; it is enumerated
+	// implicitly via FragmentTypeOrganization (Class=org) below — there is
+	// no separate ListByTypeAndTenant call for the subtype because the
+	// repository keys on Class only and the concentration aggregator does
+	// not need to distinguish subtypes.
+	types := []FragmentType{
+		FragmentTypeOrganization,
+		FragmentTypeFacility,
+		FragmentTypeMarket,
+		FragmentTypeProduct,
+		FragmentTypeGeoRegion,
 	}
 	for _, t := range types {
 		items, err := a.fragmentsRepo.ListByTypeAndTenant(ctx, strings.TrimSpace(tenantID), t, 300)

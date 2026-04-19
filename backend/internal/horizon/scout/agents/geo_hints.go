@@ -11,7 +11,7 @@ func applyInferredHomeLocationHint(fragment *models.HorizonFragment) {
 	if fragment == nil {
 		return
 	}
-	if fragment.Type != models.FragmentTypeFacility && fragment.Type != models.FragmentTypeOrganization {
+	if fragment.Class != FragmentTypeFacility && fragment.Class != FragmentTypeOrganization {
 		return
 	}
 	if fragment.HomeLocation == nil {

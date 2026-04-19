@@ -7,6 +7,7 @@ import (
 	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestNormalizedWatchInterestUsesDefaultsAndOverrides(t *testing.T) {
@@ -195,25 +196,26 @@ func TestBuildWatchPageSignalsKeepsGraphSignalsLensSpecificAndSupplemental(t *te
 	graph := &lensDiagnosticGraph{
 		Nodes: map[string]*horizonmodels.HorizonFragment{
 			"product":  {ID: "product", CanonicalPath: "/product/crude-palm-oil", Labels: map[string]string{"en": "Crude Palm Oil"}},
+			"producer": {ID: "producer", CanonicalPath: "/org/id/golden-agri", Labels: map[string]string{"en": "Golden Agri"}},
 			"consumer": {ID: "consumer", CanonicalPath: "/org/ye/ycgsi", Labels: map[string]string{"en": "YCGSI"}},
 		},
 		DirectRelations: []lensDiagnosticRelation{
 			{
-				EdgeID:               "edge-consumes",
-				SourceFragmentID:     "consumer",
+				EdgeID:               "edge-produces",
+				SourceFragmentID:     "producer",
 				TargetFragmentID:     "product",
 				RelatedFragmentID:    "product",
 				RelatedCanonicalPath: "/product/crude-palm-oil",
 				RelatedLabel:         "Crude Palm Oil",
-				Type:                 string(horizonmodels.DependencyTypeConsumes),
-				WhyRelevant:          "YCGSI directly consumes a product already inside the lens graph.",
+				Type:                 string(ah.RelationNameProduces),
+				WhyRelevant:          "Golden Agri produces one of the products carrying current exposure.",
 			},
 			{
 				EdgeID:               "edge-supplies",
 				RelatedFragmentID:    "refinery",
 				RelatedCanonicalPath: "/fac/ye/aden-refinery",
 				RelatedLabel:         "Aden Refinery",
-				Type:                 string(horizonmodels.DependencyTypeSuppliesTo),
+				Type:                 string(ah.RelationNameSupplies),
 				WhyRelevant:          "Aden Refinery supplies into the current lens graph, so downstream availability depends on that link.",
 			},
 		},

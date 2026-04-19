@@ -80,7 +80,7 @@ func (b *ProductHierarchyBuilder) EnsureProductHierarchy(
 	if b == nil || b.fragmentsRepo == nil || b.edgesRepo == nil {
 		return nil
 	}
-	if fragment == nil || fragment.Type != models.FragmentTypeProduct {
+	if fragment == nil || fragment.Class != FragmentTypeProduct {
 		return nil
 	}
 	if fragmentID == "" {
@@ -391,7 +391,7 @@ func (b *ProductHierarchyBuilder) ensureProductFromWikidata(
 	existing, err := b.fragmentsRepo.FindByIdentifier(ctx, "wikidataId", qID)
 	if err == nil && len(existing) > 0 {
 		for _, frag := range existing {
-			if frag.Type == models.FragmentTypeProduct {
+			if frag.Class == FragmentTypeProduct {
 				fmt.Printf("[ProductHierarchyBuilder] Reusing existing product by wikidataId: qID=%s id=%s canonicalPath=%s\n", qID, frag.ID, frag.CanonicalPath)
 				// Cache for this session
 				if cache != nil {
@@ -424,7 +424,7 @@ func (b *ProductHierarchyBuilder) ensureProductFromWikidata(
 		CreatedBy:     "system",
 		UpdatedBy:     "system",
 		CanonicalPath: canonicalizeResult.CanonicalPath,
-		Type:          models.FragmentTypeProduct,
+		Class:          FragmentTypeProduct,
 		Labels: map[string]string{
 			"en": productData.Label,
 		},
@@ -477,7 +477,7 @@ func (b *ProductHierarchyBuilder) ensureProductFromWikidata(
 	// Deduplicate before creating
 	deduplicated, err := b.deduplicator.DeduplicateProduct(ctx, f)
 	if err == nil && deduplicated != nil && deduplicated.ID != "" && deduplicated.ID != f.ID &&
-		isDedupReplacementCompatible(f.Type, f.CanonicalPath, deduplicated) {
+		isDedupReplacementCompatible(f.Class, f.CanonicalPath, deduplicated) {
 		fmt.Printf("[ProductHierarchyBuilder] Deduplicated product from Wikidata: qID=%s candidateCP=%s -> existing id=%s canonicalPath=%s\n",
 			qID, f.CanonicalPath, deduplicated.ID, deduplicated.CanonicalPath)
 		return deduplicated, nil
@@ -510,7 +510,7 @@ func (b *ProductHierarchyBuilder) ensureTransformsIntoEdge(
 	}
 
 	// Check if edge already exists
-	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceID, targetID, models.DependencyTypeTransformsInto)
+	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceID, targetID, DependencyTypeTransformsInto)
 	if err == nil {
 		return nil // Already exists
 	}
@@ -523,7 +523,7 @@ func (b *ProductHierarchyBuilder) ensureTransformsIntoEdge(
 		TenantID:         "global",
 		SourceFragmentID: sourceID,
 		TargetFragmentID: targetID,
-		Type:             models.DependencyTypeTransformsInto,
+		Relation:             DependencyTypeTransformsInto,
 		Properties: models.EdgeProperties{
 			Criticality:   0.7,
 			Amplification: 1.0,
@@ -723,7 +723,7 @@ func (b *ProductHierarchyBuilder) ensureProducerFromWikidata(
 	existing, err := b.fragmentsRepo.FindByIdentifier(ctx, "wikidataId", qID)
 	if err == nil && len(existing) > 0 {
 		for _, frag := range existing {
-			if frag.Type == models.FragmentTypeOrganization {
+			if frag.Class == FragmentTypeOrganization {
 				fmt.Printf("[ProductHierarchyBuilder] Producer re-use (DB): qID=%s path=%s id=%s\n", qID, frag.CanonicalPath, frag.ID)
 				// Cache for this session
 				if cache != nil {
@@ -751,7 +751,7 @@ func (b *ProductHierarchyBuilder) ensureProducerFromWikidata(
 
 	// Build canonical path for organization in canonical /org/{geo}/{slug} shape.
 	canonicalPath := inferOrgCanonicalPathFromHints(&models.HorizonFragment{
-		Type: models.FragmentTypeOrganization,
+		Class: FragmentTypeOrganization,
 		Labels: map[string]string{
 			"en": label,
 		},
@@ -770,7 +770,7 @@ func (b *ProductHierarchyBuilder) ensureProducerFromWikidata(
 		CreatedBy:     "system",
 		UpdatedBy:     "system",
 		CanonicalPath: canonicalPath,
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		Labels: map[string]string{
 			"en": label,
 		},
@@ -819,7 +819,7 @@ func (b *ProductHierarchyBuilder) ensureProducerFromWikidata(
 	if b.orgDeduplicator != nil {
 		deduplicated, err := b.orgDeduplicator.DeduplicateOrg(ctx, f)
 		if err == nil && deduplicated != nil && deduplicated.ID != "" && deduplicated.ID != f.ID &&
-			isDedupReplacementCompatible(f.Type, f.CanonicalPath, deduplicated) {
+			isDedupReplacementCompatible(f.Class, f.CanonicalPath, deduplicated) {
 			fmt.Printf("[ProductHierarchyBuilder] Producer dedup hit: qID=%s -> existing id=%s path=%s\n",
 				qID, deduplicated.ID, deduplicated.CanonicalPath)
 			// Cache for this session
@@ -858,7 +858,7 @@ func (b *ProductHierarchyBuilder) ensureProducesEdge(
 	}
 
 	// Check if edge already exists
-	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", orgID, productID, models.DependencyTypeProduces)
+	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", orgID, productID, DependencyTypeProduces)
 	if err == nil {
 		return nil // Already exists
 	}
@@ -871,7 +871,7 @@ func (b *ProductHierarchyBuilder) ensureProducesEdge(
 		TenantID:         "global",
 		SourceFragmentID: orgID,
 		TargetFragmentID: productID,
-		Type:             models.DependencyTypeProduces,
+		Relation:             DependencyTypeProduces,
 		Properties: models.EdgeProperties{
 			Criticality:   0.7,
 			Amplification: 1.0,

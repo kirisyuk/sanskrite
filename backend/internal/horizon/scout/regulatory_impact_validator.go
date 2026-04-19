@@ -3,7 +3,6 @@ package scout
 import (
 	"strings"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -45,35 +44,35 @@ func regulatoryImpactEdgeStructurallyValid(rel agents.DiscoveredRelation) (bool,
 	if tgt == "" {
 		return false, "empty_target"
 	}
-	dt := models.DependencyType(strings.ToUpper(rt))
+	dt := DependencyType(strings.ToUpper(rt))
 	switch dt {
-	case models.DependencyTypeRegulates:
+	case DependencyTypeRegulates:
 		return prefixAny(src, "/gov/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/"), "regulates"
-	case models.DependencyTypeControlsAccess:
+	case DependencyTypeControlsAccess:
 		return prefixAny(src, "/gov/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/", "/program/"), "controls_access"
-	case models.DependencyTypeGatekeepsDecision:
+	case DependencyTypeGatekeepsDecision:
 		return prefixAny(src, "/gov/", "/org/") && strings.HasPrefix(tgt, "/decision/"), "gatekeeps_decision"
-	case models.DependencyTypeUsesMechanism:
+	case DependencyTypeUsesMechanism:
 		return strings.HasPrefix(src, "/decision/") && strings.HasPrefix(tgt, "/mechanism/"), "uses_mechanism"
-	case models.DependencyTypeAppliesTo:
+	case DependencyTypeAppliesTo:
 		return strings.HasPrefix(src, "/mechanism/") && prefixAny(tgt, "/market/", "/org/", "/fac/", "/product/", "/community/", "/program/"), "applies_to"
-	case models.DependencyTypeImposesCondition:
+	case DependencyTypeImposesCondition:
 		return prefixAny(src, "/mechanism/", "/gov/", "/program/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/", "/program/"), "imposes_condition"
-	case models.DependencyTypeInGeoScope:
+	case DependencyTypeInGeoScope:
 		return prefixAny(src, "/mechanism/", "/decision/", "/program/", "/gov/") && prefixAny(tgt, "/loc/"), "in_geo_scope"
-	case models.DependencyTypeAffects:
+	case DependencyTypeAffects:
 		return prefixAny(src, "/mechanism/", "/program/", "/gov/", "/community/", "/market/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/", "/program/", "/loc/", "/media/"), "affects"
-	case models.DependencyTypeInfluences:
+	case DependencyTypeInfluences:
 		return src != "" && tgt != "", "influences"
-	case models.DependencyTypeAdministers:
+	case DependencyTypeAdministers:
 		return prefixAny(src, "/gov/", "/org/") && prefixAny(tgt, "/program/", "/org/"), "administers"
-	case models.DependencyTypeHasSubgroup:
+	case DependencyTypeHasSubgroup:
 		return strings.HasPrefix(src, "/community/") && strings.HasPrefix(tgt, "/community/"), "has_subgroup"
-	case models.DependencyTypeMemberOf:
+	case DependencyTypeMemberOf:
 		return strings.HasPrefix(src, "/person/") && strings.HasPrefix(tgt, "/community/"), "member_of"
-	case models.DependencyTypeAffiliatedWith:
+	case DependencyTypeAffiliatedWith:
 		return prefixAny(src, "/community/", "/person/") && prefixAny(tgt, "/org/", "/gov/", "/program/"), "affiliated_with"
-	case models.DependencyTypeOperatesVia:
+	case DependencyTypeOperatesVia:
 		return prefixAny(src, "/community/", "/org/") && prefixAny(tgt, "/media/"), "operates_via"
 	default:
 		return true, "unlisted_type_ok"

@@ -6,6 +6,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // EvaluateMode specifies how to evaluate rules.
@@ -161,9 +162,11 @@ func isMiningOrExtractive(path string) bool {
 		strings.Contains(p, "/mineral/") || strings.Contains(p, "/deposit/")
 }
 
-// MissingInfoRulesForPath returns MissingInfoRules for the entity at the given path.
-func MissingInfoRulesForPath(canonicalPath string, fragmentType models.FragmentType, communityType string) []MissingInfoRule {
-	def := GetDefinitionByPath(canonicalPath, fragmentType, communityType)
+// MissingInfoRulesForPath returns MissingInfoRules for the entity at
+// the given path. `class` and `subtype` are AH hints used when path
+// prefix resolution doesn't bind.
+func MissingInfoRulesForPath(canonicalPath string, class ah.FragmentClass, subtype string, communityType string) []MissingInfoRule {
+	def := GetDefinitionByPath(canonicalPath, class, subtype, communityType)
 	if def == nil || len(def.MissingInfoRules) == 0 {
 		return nil
 	}

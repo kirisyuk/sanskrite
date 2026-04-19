@@ -3,7 +3,6 @@ package scout
 import (
 	"testing"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 func TestNormalizeGeoPathToStrict(t *testing.T) {
@@ -30,19 +29,19 @@ func TestNormalizeGeoPathToStrict(t *testing.T) {
 }
 
 func TestValidateRedirectCompatibility_MarketSameDomain(t *testing.T) {
-	if !ValidateRedirectCompatibility("/market/sa/finance/banking", "/market/sa/finance/islamic-banking", models.FragmentTypeMarket) {
+	if !ValidateRedirectCompatibility("/market/sa/finance/banking", "/market/sa/finance/islamic-banking", FragmentTypeMarket) {
 		t.Fatalf("same domain (finance) redirect should be compatible")
 	}
 }
 
 func TestValidateRedirectCompatibility_MarketCrossDomainRejected(t *testing.T) {
-	if ValidateRedirectCompatibility("/market/sa/finance/banking", "/market/sa/technology/banking", models.FragmentTypeMarket) {
+	if ValidateRedirectCompatibility("/market/sa/finance/banking", "/market/sa/technology/banking", FragmentTypeMarket) {
 		t.Fatalf("cross-domain redirect (finance->technology) should be rejected")
 	}
 }
 
 func TestValidateRedirectCompatibility_NonMarketAllowed(t *testing.T) {
-	if !ValidateRedirectCompatibility("/org/na/foo", "/org/us/foo-inc", models.FragmentTypeOrganization) {
+	if !ValidateRedirectCompatibility("/org/na/foo", "/org/us/foo-inc", FragmentTypeOrganization) {
 		t.Fatalf("non-MARKET redirect should be allowed")
 	}
 }
@@ -62,25 +61,27 @@ func TestExtractMarketDomain(t *testing.T) {
 func TestInferFragmentTypeFromCanonicalPath(t *testing.T) {
 	cases := []struct {
 		in   string
-		want string
+		want FragmentType
 	}{
-		{in: "/gov/sa/sfda", want: string(models.FragmentTypeOrganization)},
-		{in: "/org/us/tesla", want: string(models.FragmentTypeOrganization)},
-		{in: "/product/raw/mineral/extraction/lithium-ore", want: string(models.FragmentTypeProduct)},
-		{in: "/fac/us/gigafactory-texas", want: string(models.FragmentTypeFacility)},
-		{in: "/loc/us/tx/austin", want: string(models.FragmentTypeGeoRegion)},
-		{in: "/region/na/us/tx/austin", want: string(models.FragmentTypeGeoRegion)},
-		{in: "/event/ces-2026", want: string(models.FragmentTypeEvent)},
-		{in: "/person/elon-musk", want: string(models.FragmentTypePerson)},
-		{in: "/media/telegram/v-kazani-poymut", want: string(models.FragmentTypeMediaChannel)},
-		{in: "/deposit/oil/gawar", want: string(models.FragmentTypeDeposit)},
-		{in: "/community/global/interest/osint-researchers", want: string(models.FragmentTypeCommunity)},
+		{in: "/gov/sa/sfda", want: FragmentTypeOrganization},
+		{in: "/org/us/tesla", want: FragmentTypeOrganization},
+		{in: "/product/raw/mineral/extraction/lithium-ore", want: FragmentTypeProduct},
+		{in: "/fac/us/gigafactory-texas", want: FragmentTypeFacility},
+		{in: "/loc/us/tx/austin", want: FragmentTypeGeoRegion},
+		{in: "/region/na/us/tx/austin", want: FragmentTypeGeoRegion},
+		{in: "/event/ces-2026", want: FragmentTypeEvent},
+		{in: "/person/elon-musk", want: FragmentTypePerson},
+		// Legacy collapsed types fold to parent class. Subtype info is checked
+		// via InferClassSubtypeFromCanonicalPath in canonical_path_utils_domain_test.go.
+		{in: "/media/telegram/v-kazani-poymut", want: FragmentTypeOrganization},
+		{in: "/deposit/oil/gawar", want: FragmentTypeFacility},
+		{in: "/community/global/interest/osint-researchers", want: FragmentTypeCommunity},
 	}
 
 	for _, tc := range cases {
 		got := InferFragmentTypeFromCanonicalPath(tc.in)
-		if string(got) != tc.want {
-			t.Fatalf("InferFragmentTypeFromCanonicalPath(%q) = %q, want %q", tc.in, string(got), tc.want)
+		if got != tc.want {
+			t.Fatalf("InferFragmentTypeFromCanonicalPath(%q) = %q, want %q", tc.in, got, tc.want)
 		}
 	}
 }

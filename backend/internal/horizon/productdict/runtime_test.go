@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestNormalizeRelationKind(t *testing.T) {
@@ -20,29 +20,29 @@ func TestNormalizeRelationKind(t *testing.T) {
 }
 
 func TestDesiredEdgeTypeForKind(t *testing.T) {
-	if got := desiredEdgeTypeForKind("assembly"); got != models.DependencyTypeAssemblesInto {
+	if got := desiredEdgeTypeForKind("assembly"); got != ProductEdgeAssemblesInto {
 		t.Fatalf("desiredEdgeTypeForKind(assembly) = %q", got)
 	}
-	if got := desiredEdgeTypeForKind("usage"); got != models.DependencyTypeUsedIn {
+	if got := desiredEdgeTypeForKind("usage"); got != ProductEdgeUsedIn {
 		t.Fatalf("desiredEdgeTypeForKind(usage) = %q", got)
 	}
-	if got := desiredEdgeTypeForKind("transformation"); got != models.DependencyTypeTransformsInto {
+	if got := desiredEdgeTypeForKind("transformation"); got != ProductEdgeTransformsInto {
 		t.Fatalf("desiredEdgeTypeForKind(transformation) = %q", got)
 	}
 }
 
 func TestSupportsProductRelationDictionary(t *testing.T) {
-	for _, edgeType := range []models.DependencyType{
-		models.DependencyTypeDependsOn,
-		models.DependencyTypeTransformsInto,
-		models.DependencyTypeAssemblesInto,
-		models.DependencyTypeUsedIn,
+	for _, edgeType := range []ah.RelationName{
+		ProductEdgeDependsOn,
+		ProductEdgeTransformsInto,
+		ProductEdgeAssemblesInto,
+		ProductEdgeUsedIn,
 	} {
 		if !supportsProductRelationDictionary(edgeType) {
 			t.Fatalf("expected edgeType=%q to be supported", edgeType)
 		}
 	}
-	if supportsProductRelationDictionary(models.DependencyTypeProduces) {
+	if supportsProductRelationDictionary(ah.RelationNameProduces) {
 		t.Fatalf("did not expect PRODUCES to be supported")
 	}
 }
@@ -195,8 +195,8 @@ func TestResolveProductRelationForTenantExactAndReverse(t *testing.T) {
 	if !exact.Known || exact.Swapped {
 		t.Fatalf("expected exact resolution without swap, got %+v", exact)
 	}
-	if exact.EdgeType != models.DependencyTypeTransformsInto {
-		t.Fatalf("expected TRANSFORMS_INTO, got %+v", exact)
+	if exact.EdgeType != ProductEdgeTransformsInto {
+		t.Fatalf("expected transforms_into, got %+v", exact)
 	}
 
 	reverse, err := rt.ResolveProductRelation(context.Background(), "/product/finished/chemical/processing/alumina", "/product/raw/mineral/extraction/bauxite")

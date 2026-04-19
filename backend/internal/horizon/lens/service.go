@@ -273,32 +273,32 @@ func scopeAutoAddCountFromViewConfig(viewConfig map[string]interface{}, key stri
 	return 0, false
 }
 
-func inferFragmentTypeFromPath(path string) models.FragmentType {
+func inferFragmentTypeFromPath(path string) FragmentType {
 	switch {
 	case strings.HasPrefix(path, "/product/"):
-		return models.FragmentTypeProduct
+		return FragmentTypeProduct
 	case strings.HasPrefix(path, "/program/"):
-		return models.FragmentTypeProgram
+		return FragmentTypeProgram
 	case strings.HasPrefix(path, "/market/"):
-		return models.FragmentTypeMarket
+		return FragmentTypeMarket
 	case strings.HasPrefix(path, "/fac/"):
-		return models.FragmentTypeFacility
+		return FragmentTypeFacility
 	case strings.HasPrefix(path, "/loc/"), strings.HasPrefix(path, "/region/"):
-		return models.FragmentTypeGeoRegion
+		return FragmentTypeGeoRegion
 	case strings.HasPrefix(path, "/event/"):
-		return models.FragmentTypeEvent
+		return FragmentTypeEvent
 	case strings.HasPrefix(path, "/person/"):
-		return models.FragmentTypePerson
+		return FragmentTypePerson
 	case strings.HasPrefix(path, "/media/"):
-		return models.FragmentTypeMediaChannel
+		return FragmentTypeMediaChannel
 	case strings.HasPrefix(path, "/org/"), strings.HasPrefix(path, "/gov/"):
-		return models.FragmentTypeOrganization
+		return FragmentTypeOrganization
 	case strings.HasPrefix(path, "/domain/"):
-		return models.FragmentTypeDomain
+		return FragmentTypeDomain
 	case strings.HasPrefix(path, "/zone/"):
-		return models.FragmentTypeAffectedZone
+		return FragmentTypeAffectedZone
 	default:
-		return models.FragmentTypeOrganization
+		return FragmentTypeOrganization
 	}
 }
 
@@ -2318,7 +2318,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				if s.canonicalPathResolver != nil {
 					// Best-effort: normalize alias paths so we don't miss unsubscribes.
 					// We assume ORGANIZATION by default; resolver will still apply canonization policy for canonical_path.
-					if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, path, models.FragmentTypeOrganization); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+					if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, path, FragmentTypeOrganization); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 						lookupPath = resolved.CanonicalPath
 					}
 				}
@@ -2426,28 +2426,28 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				// Normalize job path so we dedupe even if older jobs were created under alias paths.
 				if s.canonicalPathResolver != nil && p != "" {
 					// Best-effort: infer fragment type from path prefix.
-					ft := models.FragmentTypeOrganization
+					ft := FragmentTypeOrganization
 					switch {
 					case strings.HasPrefix(p, "/product/"):
-						ft = models.FragmentTypeProduct
+						ft = FragmentTypeProduct
 					case strings.HasPrefix(p, "/program/"):
-						ft = models.FragmentTypeProgram
+						ft = FragmentTypeProgram
 					case strings.HasPrefix(p, "/market/"):
-						ft = models.FragmentTypeMarket
+						ft = FragmentTypeMarket
 					case strings.HasPrefix(p, "/fac/"):
-						ft = models.FragmentTypeFacility
+						ft = FragmentTypeFacility
 					case strings.HasPrefix(p, "/loc/") || strings.HasPrefix(p, "/region/"):
-						ft = models.FragmentTypeGeoRegion
+						ft = FragmentTypeGeoRegion
 					case strings.HasPrefix(p, "/event/"):
-						ft = models.FragmentTypeEvent
+						ft = FragmentTypeEvent
 					case strings.HasPrefix(p, "/person/"):
-						ft = models.FragmentTypePerson
+						ft = FragmentTypePerson
 					case strings.HasPrefix(p, "/media/"):
-						ft = models.FragmentTypeMediaChannel
+						ft = FragmentTypeMediaChannel
 					case strings.HasPrefix(p, "/org/"):
-						ft = models.FragmentTypeOrganization
+						ft = FragmentTypeOrganization
 					case strings.HasPrefix(p, "/gov/"):
-						ft = models.FragmentTypeOrganization
+						ft = FragmentTypeOrganization
 					}
 					if resolved, rerr := s.canonicalPathResolver.Resolve(ctx, p, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 						p = resolved.CanonicalPath
@@ -2471,28 +2471,28 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 			var isCacheHit bool
 
 			if s.canonicalPathResolver != nil {
-				fragmentType := models.FragmentTypeOrganization
+				fragmentType := FragmentTypeOrganization
 				switch {
 				case strings.HasPrefix(inputPath, "/product/"):
-					fragmentType = models.FragmentTypeProduct
+					fragmentType = FragmentTypeProduct
 				case strings.HasPrefix(inputPath, "/program/"):
-					fragmentType = models.FragmentTypeProgram
+					fragmentType = FragmentTypeProgram
 				case strings.HasPrefix(inputPath, "/market/"):
-					fragmentType = models.FragmentTypeMarket
+					fragmentType = FragmentTypeMarket
 				case strings.HasPrefix(inputPath, "/fac/"):
-					fragmentType = models.FragmentTypeFacility
+					fragmentType = FragmentTypeFacility
 				case strings.HasPrefix(inputPath, "/loc/") || strings.HasPrefix(inputPath, "/region/"):
-					fragmentType = models.FragmentTypeGeoRegion
+					fragmentType = FragmentTypeGeoRegion
 				case strings.HasPrefix(inputPath, "/event/"):
-					fragmentType = models.FragmentTypeEvent
+					fragmentType = FragmentTypeEvent
 				case strings.HasPrefix(inputPath, "/org/"):
-					fragmentType = models.FragmentTypeOrganization
+					fragmentType = FragmentTypeOrganization
 				case strings.HasPrefix(inputPath, "/gov/"):
-					fragmentType = models.FragmentTypeOrganization
+					fragmentType = FragmentTypeOrganization
 				case strings.HasPrefix(inputPath, "/person/"):
-					fragmentType = models.FragmentTypePerson
+					fragmentType = FragmentTypePerson
 				case strings.HasPrefix(inputPath, "/media/"):
-					fragmentType = models.FragmentTypeMediaChannel
+					fragmentType = FragmentTypeMediaChannel
 				}
 
 				resolved, rerr := s.canonicalPathResolver.Resolve(ctx, inputPath, fragmentType)

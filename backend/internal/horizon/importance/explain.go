@@ -18,7 +18,7 @@ type ExplainConfig struct {
 type Explanation struct {
 	FragmentID             string                     `json:"fragmentId"`
 	CanonicalPath          string                     `json:"canonicalPath"`
-	Type                   horizonmodels.FragmentType `json:"type"`
+	Type                   FragmentType `json:"type"`
 	Scorecard              Scorecard                  `json:"scorecard"`
 	StrategicBreakdown     StrategicBreakdown         `json:"strategicBreakdown"`
 	BridgeBreakdown        BridgeBreakdown            `json:"bridgeBreakdown"`
@@ -52,11 +52,11 @@ type BridgeBreakdown struct {
 
 type DirectContributor struct {
 	EdgeID                string                       `json:"edgeId,omitempty"`
-	EdgeType              horizonmodels.DependencyType `json:"edgeType"`
+	EdgeType              DependencyType `json:"edgeType"`
 	Direction             string                       `json:"direction"`
 	NeighborID            string                       `json:"neighborId"`
 	NeighborPath          string                       `json:"neighborPath"`
-	NeighborType          horizonmodels.FragmentType   `json:"neighborType"`
+	NeighborType          FragmentType   `json:"neighborType"`
 	SemanticGroup         string                       `json:"semanticGroup"`
 	Family                string                       `json:"family,omitempty"`
 	Contribution          float64                      `json:"contribution"`
@@ -80,7 +80,7 @@ type AxisComponentExplanation struct {
 type AxisPathExplain struct {
 	TailID     string                     `json:"tailId"`
 	TailPath   string                     `json:"tailPath"`
-	TailType   horizonmodels.FragmentType `json:"tailType"`
+	TailType   FragmentType `json:"tailType"`
 	PathWeight float64                    `json:"pathWeight"`
 	TailWeight float64                    `json:"tailWeight"`
 	Hops       int                        `json:"hops"`
@@ -90,12 +90,12 @@ type AxisPathExplain struct {
 type AxisStepExplain struct {
 	FromID              string                       `json:"fromId"`
 	FromPath            string                       `json:"fromPath"`
-	FromType            horizonmodels.FragmentType   `json:"fromType"`
+	FromType            FragmentType   `json:"fromType"`
 	ToID                string                       `json:"toId"`
 	ToPath              string                       `json:"toPath"`
-	ToType              horizonmodels.FragmentType   `json:"toType"`
+	ToType              FragmentType   `json:"toType"`
 	EdgeID              string                       `json:"edgeId,omitempty"`
-	EdgeType            horizonmodels.DependencyType `json:"edgeType"`
+	EdgeType            DependencyType `json:"edgeType"`
 	Forward             bool                         `json:"forward"`
 	EdgeWeight          float64                      `json:"edgeWeight"`
 	BaseWeight          float64                      `json:"baseWeight"`
@@ -180,7 +180,7 @@ func ExplainSnapshot(snap Snapshot, cfg Config, explainCfg ExplainConfig) Explan
 	directEdges = append(directEdges, snap.In[snap.RootID]...)
 
 	semanticGroups := map[string]struct{}{}
-	neighborTypes := map[horizonmodels.FragmentType]struct{}{}
+	neighborTypes := map[FragmentType]struct{}{}
 	strongFamilies := map[string]struct{}{}
 	businessEdges := 0
 	contextEdges := 0
@@ -195,11 +195,11 @@ func ExplainSnapshot(snap Snapshot, cfg Config, explainCfg ExplainConfig) Explan
 		if neighbor == nil {
 			continue
 		}
-		semanticGroup := horizonmodels.SemanticGroupForEdgeType(edge.Type)
+		semanticGroup := SemanticGroupForEdgeType(edge.Relation)
 		semanticGroups[semanticGroup] = struct{}{}
-		neighborTypes[neighbor.Type] = struct{}{}
-		businessNeighbor := isBusinessType(neighbor.Type)
-		contextNeighbor := isContextType(neighbor.Type)
+		neighborTypes[neighbor.Class] = struct{}{}
+		businessNeighbor := isBusinessType(neighbor)
+		contextNeighbor := isContextType(neighbor)
 		if businessNeighbor {
 			businessEdges++
 		}
@@ -212,11 +212,11 @@ func ExplainSnapshot(snap Snapshot, cfg Config, explainCfg ExplainConfig) Explan
 		}
 		directContributors = append(directContributors, DirectContributor{
 			EdgeID:                strings.TrimSpace(edge.ID),
-			EdgeType:              edge.Type,
+			EdgeType:              edge.Relation,
 			Direction:             directContributorDirection(edge, snap.RootID),
 			NeighborID:            strings.TrimSpace(neighbor.ID),
 			NeighborPath:          strings.TrimSpace(neighbor.CanonicalPath),
-			NeighborType:          neighbor.Type,
+			NeighborType:          neighbor.Class,
 			SemanticGroup:         semanticGroup,
 			Family:                family,
 			Contribution:          contribution,
@@ -294,7 +294,7 @@ func ExplainSnapshot(snap Snapshot, cfg Config, explainCfg ExplainConfig) Explan
 	return Explanation{
 		FragmentID:    strings.TrimSpace(root.ID),
 		CanonicalPath: strings.TrimSpace(root.CanonicalPath),
-		Type:          root.Type,
+		Type:          root.Class,
 		Scorecard:     score,
 		StrategicBreakdown: StrategicBreakdown{
 			StructuralComponent:  0.30 * score.StructuralImportance,
@@ -387,12 +387,12 @@ func traceAxisReach(snap Snapshot, cfg Config, axis string, maxPaths int) axisTr
 			nextSteps := append(append([]AxisStepExplain{}, cur.steps...), AxisStepExplain{
 				FromID:              strings.TrimSpace(currentFrag.ID),
 				FromPath:            strings.TrimSpace(currentFrag.CanonicalPath),
-				FromType:            currentFrag.Type,
+				FromType:            currentFrag.Class,
 				ToID:                strings.TrimSpace(nextFrag.ID),
 				ToPath:              strings.TrimSpace(nextFrag.CanonicalPath),
-				ToType:              nextFrag.Type,
+				ToType:              nextFrag.Class,
 				EdgeID:              strings.TrimSpace(edge.ID),
-				EdgeType:            edge.Type,
+				EdgeType:            edge.Relation,
 				Forward:             step.forward,
 				EdgeWeight:          breakdown.Final,
 				BaseWeight:          breakdown.Base,
@@ -404,14 +404,14 @@ func traceAxisReach(snap Snapshot, cfg Config, axis string, maxPaths int) axisTr
 				PhysicsReasons:      breakdown.PhysicsReasons,
 			})
 			best[step.nextID] = pathWeight
-			if step.nextID != snap.RootID && isBusinessType(nextFrag.Type) {
+			if step.nextID != snap.RootID && isBusinessType(nextFrag) {
 				tailWeight := pathWeight * axisBusinessTailWeight(axis, nextFrag)
 				prevTail, ok := tails[step.nextID]
 				if !ok || prevTail.TailWeight < tailWeight {
 					tails[step.nextID] = AxisPathExplain{
 						TailID:     strings.TrimSpace(nextFrag.ID),
 						TailPath:   strings.TrimSpace(nextFrag.CanonicalPath),
-						TailType:   nextFrag.Type,
+						TailType:   nextFrag.Class,
 						PathWeight: pathWeight,
 						TailWeight: tailWeight,
 						Hops:       len(nextSteps),

@@ -28,6 +28,7 @@ import (
 	horizonrecommendations "github.com/igorkirisyuk/sanskrite/internal/horizon/recommendations"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonsignallanding "github.com/igorkirisyuk/sanskrite/internal/horizon/signallanding"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/zonegeo"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -2991,7 +2992,7 @@ func (p *HorizonMonitorPipeline) upsertTrackFragment(ctx context.Context, tenant
 	incoming := &horizonmodels.HorizonFragment{
 		TenantID:      "global",
 		CanonicalPath: canonicalPath,
-		Type:          horizonmodels.FragmentTypeTrack,
+		Class:         FragmentTypeTrack,
 		Labels:        map[string]string{"en": baseName},
 		Tags: uniqueStrings([]string{
 			"horizon-monitor",
@@ -3060,8 +3061,8 @@ func mergeTrackFragment(dst, src *horizonmodels.HorizonFragment) bool {
 		return false
 	}
 	changed := false
-	if dst.Type != horizonmodels.FragmentTypeTrack {
-		dst.Type = horizonmodels.FragmentTypeTrack
+	if dst.Class != FragmentTypeTrack {
+		dst.Class = FragmentTypeTrack
 		changed = true
 	}
 	if dst.Labels == nil {
@@ -3203,7 +3204,7 @@ func (p *HorizonMonitorPipeline) resolveSignalLandingZoneFragment(ctx context.Co
 	}
 	for _, ref := range signalLandingZoneRefs(result) {
 		frag, err := p.fragmentsRepo.GetByCanonicalPath(ctx, ref)
-		if err == nil && frag != nil && frag.Type == horizonmodels.FragmentTypeAffectedZone {
+		if err == nil && frag != nil && frag.IsLegacyAffectedZone() {
 			return frag
 		}
 	}
@@ -3298,7 +3299,7 @@ func signalLandingZonePriority(ref string) int {
 }
 
 func landingZoneFragmentToCandidate(zone *horizonmodels.HorizonFragment) *affectedZoneCandidate {
-	if zone == nil || zone.Type != horizonmodels.FragmentTypeAffectedZone {
+	if zone == nil || !zone.IsLegacyAffectedZone() {
 		return nil
 	}
 	precision := strings.TrimSpace(asString(zone.Qualifiers["geoPrecision"]))
@@ -3368,7 +3369,7 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneGraphLinks(
 		return nil
 	}
 	zoneID := strings.TrimSpace(zone.ID)
-	if zoneID == "" || zone.Type != horizonmodels.FragmentTypeAffectedZone {
+	if zoneID == "" || !zone.IsLegacyAffectedZone() {
 		return nil
 	}
 	affectsTargets, locatedInTarget := p.resolveAffectedZoneGraphTargets(ctx, candidate)
@@ -3378,12 +3379,12 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneGraphLinks(
 		}
 	}
 	for _, target := range affectsTargets {
-		if err := p.upsertAffectedZoneEdge(ctx, zone, target, horizonmodels.DependencyTypeAffects, sourceID, e, candidate); err != nil {
+		if err := p.upsertAffectedZoneEdge(ctx, zone, target, DependencyTypeAffects, sourceID, e, candidate); err != nil {
 			return err
 		}
 	}
 	if locatedInTarget != nil {
-		if err := p.upsertAffectedZoneEdge(ctx, zone, locatedInTarget, horizonmodels.DependencyTypeLocatedIn, sourceID, e, candidate); err != nil {
+		if err := p.upsertAffectedZoneEdge(ctx, zone, locatedInTarget, DependencyTypeLocatedIn, sourceID, e, candidate); err != nil {
 			return err
 		}
 	}
@@ -3418,8 +3419,8 @@ func (p *HorizonMonitorPipeline) reconcileAffectedZoneGraphEdges(
 		if edge == nil || strings.TrimSpace(edge.ID) == "" {
 			continue
 		}
-		switch edge.Type {
-		case horizonmodels.DependencyTypeAffects:
+		switch edge.Relation {
+		case DependencyTypeAffects:
 			if !isManagedAffectedZoneGraphEdge(edge, zone) {
 				continue
 			}
@@ -3429,7 +3430,7 @@ func (p *HorizonMonitorPipeline) reconcileAffectedZoneGraphEdges(
 			if err := p.edgesRepo.Delete(ctx, strings.TrimSpace(edge.ID)); err != nil {
 				return err
 			}
-		case horizonmodels.DependencyTypeLocatedIn:
+		case DependencyTypeLocatedIn:
 			if !isManagedAffectedZoneGraphEdge(edge, zone) {
 				continue
 			}
@@ -3557,7 +3558,7 @@ func (p *HorizonMonitorPipeline) resolveAffectedZoneGraphTargets(
 		if f == nil || strings.TrimSpace(f.ID) == "" {
 			return
 		}
-		if !isAffectedZoneBindableFragmentType(f.Type) {
+		if !isAffectedZoneBindableFragmentType(f.Class) {
 			return
 		}
 		key := strings.TrimSpace(f.ID)
@@ -3705,7 +3706,7 @@ func (p *HorizonMonitorPipeline) fallbackAffectedZoneLinkTargets(
 	out := make([]*horizonmodels.HorizonFragment, 0, 4)
 	seen := make(map[string]struct{}, 4)
 	add := func(f *horizonmodels.HorizonFragment) {
-		if f == nil || strings.TrimSpace(f.ID) == "" || !isAffectedZoneBindableFragmentType(f.Type) {
+		if f == nil || strings.TrimSpace(f.ID) == "" || !isAffectedZoneBindableFragmentType(f.Class) {
 			return
 		}
 		key := strings.TrimSpace(f.ID)
@@ -3754,7 +3755,7 @@ func (p *HorizonMonitorPipeline) fallbackAffectedZoneLinkTargets(
 			continue
 		}
 		frag, ferr := p.fragmentsRepo.Get(ctx, fragID)
-		if ferr != nil || frag == nil || !isAffectedZoneBindableFragmentType(frag.Type) {
+		if ferr != nil || frag == nil || !isAffectedZoneBindableFragmentType(frag.Class) {
 			continue
 		}
 		scoredResults = append(scoredResults, scored{frag: frag, score: affectedZoneFallbackTargetScore(candidate, frag, score)})
@@ -3805,7 +3806,7 @@ func (p *HorizonMonitorPipeline) directAffectedZoneLocationTargets(
 	seen := make(map[string]struct{}, len(directCandidates))
 	for _, path := range uniqueStrings(directCandidates) {
 		frag, err := p.fragmentsRepo.GetByCanonicalPath(ctx, path)
-		if err == nil && frag != nil && isAffectedZoneBindableFragmentType(frag.Type) {
+		if err == nil && frag != nil && isAffectedZoneBindableFragmentType(frag.Class) {
 			if _, ok := seen[strings.TrimSpace(frag.ID)]; ok {
 				continue
 			}
@@ -3821,19 +3822,21 @@ func affectedZoneFallbackTargetScore(candidate *affectedZoneCandidate, frag *hor
 		return 0
 	}
 	score := base
-	switch frag.Type {
-	case horizonmodels.FragmentTypeFacility:
-		score += 0.22
-	case horizonmodels.FragmentTypeDeposit:
+	// Legacy DEPOSIT is site/deposit and legacy PROGRAM is org/program under the
+	// AH taxonomy; disambiguate via predicates before falling back to the bare class.
+	switch {
+	case frag.IsLegacyDeposit():
 		score += 0.18
-	case horizonmodels.FragmentTypeGeoRegion:
-		score += 0.20
-	case horizonmodels.FragmentTypeOrganization:
-		score += 0.10
-	case horizonmodels.FragmentTypeProduct:
-		score += 0.14
-	case horizonmodels.FragmentTypeProgram:
+	case frag.IsLegacyProgram():
 		score += 0.06
+	case frag.Class == FragmentTypeFacility:
+		score += 0.22
+	case frag.Class == FragmentTypeGeoRegion:
+		score += 0.20
+	case frag.Class == FragmentTypeOrganization:
+		score += 0.10
+	case frag.Class == FragmentTypeProduct:
+		score += 0.14
 	}
 	wantCountry := strings.ToUpper(strings.TrimSpace(candidate.CountryCode))
 	if cc := affectedZoneCountryFromFragment(frag); wantCountry != "" && cc != "" && strings.EqualFold(cc, wantCountry) {
@@ -3841,7 +3844,7 @@ func affectedZoneFallbackTargetScore(candidate *affectedZoneCandidate, frag *hor
 	}
 	if strings.Contains(strings.TrimSpace(frag.CanonicalPath), "/na/") {
 		score -= 0.08
-	} else if frag.Type == horizonmodels.FragmentTypeFacility || frag.Type == horizonmodels.FragmentTypeOrganization {
+	} else if frag.Class == FragmentTypeFacility || frag.Class == FragmentTypeOrganization {
 		score += 0.06
 	}
 	label := normalizePhrase(strings.TrimSpace(frag.Labels["en"]))
@@ -3877,9 +3880,9 @@ func (p *HorizonMonitorPipeline) primaryGeoRelationTarget(
 	if p == nil || p.edgesRepo == nil || p.fragmentsRepo == nil || frag == nil || strings.TrimSpace(frag.ID) == "" {
 		return nil
 	}
-	edgeTypes := []horizonmodels.DependencyType{
-		horizonmodels.DependencyTypeLocatedIn,
-		horizonmodels.DependencyTypeOperatesIn,
+	edgeTypes := []DependencyType{
+		DependencyTypeLocatedIn,
+		DependencyTypeOperatesIn,
 	}
 	for _, edgeType := range edgeTypes {
 		edges, err := p.edgesRepo.ListBySource(ctx, "global", strings.TrimSpace(frag.ID), &edgeType, 16)
@@ -3921,21 +3924,22 @@ func (p *HorizonMonitorPipeline) relatedAffectedZoneFragments(
 		if err != nil || target == nil || strings.TrimSpace(target.ID) == "" {
 			return
 		}
-		if target.Type != horizonmodels.FragmentTypeFacility &&
-			target.Type != horizonmodels.FragmentTypeOrganization &&
-			target.Type != horizonmodels.FragmentTypeDeposit &&
-			target.Type != horizonmodels.FragmentTypeProduct &&
+		// FragmentTypeFacility (=site) already covers legacy DEPOSIT under AH taxonomy.
+		if target.Class != FragmentTypeFacility &&
+			target.Class != FragmentTypeOrganization &&
+			target.Class != FragmentTypeProduct &&
 			!isGeoRegionLikeFragment(target) {
 			return
 		}
 		out = append(out, target)
 	}
-	switch frag.Type {
-	case horizonmodels.FragmentTypeFacility, horizonmodels.FragmentTypeDeposit:
-		for _, edgeType := range []horizonmodels.DependencyType{
-			horizonmodels.DependencyTypeOwns,
-			horizonmodels.DependencyTypeManages,
-			horizonmodels.DependencyTypeControls,
+	switch frag.Class {
+	// FragmentTypeFacility (=site) already covers legacy DEPOSIT under AH taxonomy.
+	case FragmentTypeFacility:
+		for _, edgeType := range []DependencyType{
+			DependencyTypeOwns,
+			DependencyTypeManages,
+			DependencyTypeControls,
 		} {
 			edges, err := p.edgesRepo.ListByTarget(ctx, "global", strings.TrimSpace(frag.ID), &edgeType, 16)
 			if err != nil {
@@ -3947,7 +3951,7 @@ func (p *HorizonMonitorPipeline) relatedAffectedZoneFragments(
 				}
 			}
 		}
-		for _, edgeType := range []horizonmodels.DependencyType{horizonmodels.DependencyTypeProduces} {
+		for _, edgeType := range []DependencyType{DependencyTypeProduces} {
 			edges, err := p.edgesRepo.ListBySource(ctx, "global", strings.TrimSpace(frag.ID), &edgeType, 24)
 			if err != nil {
 				continue
@@ -3958,12 +3962,12 @@ func (p *HorizonMonitorPipeline) relatedAffectedZoneFragments(
 				}
 			}
 		}
-	case horizonmodels.FragmentTypeOrganization:
-		for _, edgeType := range []horizonmodels.DependencyType{
-			horizonmodels.DependencyTypeOwns,
-			horizonmodels.DependencyTypeManages,
-			horizonmodels.DependencyTypeControls,
-			horizonmodels.DependencyTypeProduces,
+	case FragmentTypeOrganization:
+		for _, edgeType := range []DependencyType{
+			DependencyTypeOwns,
+			DependencyTypeManages,
+			DependencyTypeControls,
+			DependencyTypeProduces,
 		} {
 			edges, err := p.edgesRepo.ListBySource(ctx, "global", strings.TrimSpace(frag.ID), &edgeType, 16)
 			if err != nil {
@@ -3975,10 +3979,10 @@ func (p *HorizonMonitorPipeline) relatedAffectedZoneFragments(
 				}
 			}
 		}
-	case horizonmodels.FragmentTypeProduct:
-		for _, edgeType := range []horizonmodels.DependencyType{
-			horizonmodels.DependencyTypeProduces,
-			horizonmodels.DependencyTypeSuppliesTo,
+	case FragmentTypeProduct:
+		for _, edgeType := range []DependencyType{
+			DependencyTypeProduces,
+			DependencyTypeSuppliesTo,
 		} {
 			edges, err := p.edgesRepo.ListByTarget(ctx, "global", strings.TrimSpace(frag.ID), &edgeType, 24)
 			if err != nil {
@@ -3990,10 +3994,10 @@ func (p *HorizonMonitorPipeline) relatedAffectedZoneFragments(
 				}
 			}
 		}
-	case horizonmodels.FragmentTypeGeoRegion:
-		for _, edgeType := range []horizonmodels.DependencyType{
-			horizonmodels.DependencyTypeLocatedIn,
-			horizonmodels.DependencyTypeOperatesIn,
+	case FragmentTypeGeoRegion:
+		for _, edgeType := range []DependencyType{
+			DependencyTypeLocatedIn,
+			DependencyTypeOperatesIn,
 		} {
 			edges, err := p.edgesRepo.ListByTarget(ctx, "global", strings.TrimSpace(frag.ID), &edgeType, 24)
 			if err != nil {
@@ -4013,21 +4017,21 @@ func isGeoRegionLikeFragment(f *horizonmodels.HorizonFragment) bool {
 	if f == nil {
 		return false
 	}
-	if f.Type == horizonmodels.FragmentTypeGeoRegion {
+	if f.Class == FragmentTypeGeoRegion {
 		return true
 	}
 	cp := strings.TrimSpace(f.CanonicalPath)
 	return strings.HasPrefix(cp, "/loc/") || strings.HasPrefix(cp, "/geo/") || strings.HasPrefix(cp, "/region/")
 }
 
-func isAffectedZoneBindableFragmentType(fragmentType horizonmodels.FragmentType) bool {
+func isAffectedZoneBindableFragmentType(fragmentType FragmentType) bool {
+	// Legacy DEPOSIT (=site/deposit) and PROGRAM (=org/program) are folded into
+	// FragmentTypeFacility / FragmentTypeOrganization under the AH taxonomy.
 	switch fragmentType {
-	case horizonmodels.FragmentTypeFacility,
-		horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeDeposit,
-		horizonmodels.FragmentTypeGeoRegion,
-		horizonmodels.FragmentTypeProduct,
-		horizonmodels.FragmentTypeProgram:
+	case FragmentTypeFacility,
+		FragmentTypeOrganization,
+		FragmentTypeGeoRegion,
+		FragmentTypeProduct:
 		return true
 	default:
 		return false
@@ -4038,7 +4042,7 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneEdge(
 	ctx context.Context,
 	zone *horizonmodels.HorizonFragment,
 	target *horizonmodels.HorizonFragment,
-	edgeType horizonmodels.DependencyType,
+	edgeType DependencyType,
 	sourceID string,
 	e *horizonMonitorFeedEvent,
 	candidate *affectedZoneCandidate,
@@ -4070,10 +4074,10 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneEdge(
 		Criticality:   wmClamp01(math.Max(candidate.EventConfidence, candidate.GeoConfidence)),
 		Amplification: 1.0,
 	}
-	if edgeType == horizonmodels.DependencyTypeAffects && strings.TrimSpace(candidate.ConditionType) == "military_conflict" {
+	if edgeType == DependencyTypeAffects && strings.TrimSpace(candidate.ConditionType) == "military_conflict" {
 		properties.Criticality = wmClamp01(math.Max(properties.Criticality, 0.82))
 	}
-	if edgeType == horizonmodels.DependencyTypeLocatedIn {
+	if edgeType == DependencyTypeLocatedIn {
 		properties.Criticality = wmClamp01(math.Max(properties.Criticality, 0.58))
 	}
 	existing, err := p.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceFragmentID, targetFragmentID, edgeType)
@@ -4118,7 +4122,7 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneEdge(
 		TenantID:         "global",
 		SourceFragmentID: sourceFragmentID,
 		TargetFragmentID: targetFragmentID,
-		Type:             edgeType,
+		Relation:         edgeType,
 		Properties:       properties,
 		Qualifiers:       qualifiers,
 		Provenance: horizonmodels.Provenance{
@@ -4160,7 +4164,7 @@ func (p *HorizonMonitorPipeline) applyAffectedZoneRecoveryObservation(
 	now := time.Now().UTC()
 	for _, path := range uniqueStrings(candidates) {
 		frag, err := p.fragmentsRepo.GetByCanonicalPath(ctx, path)
-		if err != nil || frag == nil || frag.Type != horizonmodels.FragmentTypeAffectedZone {
+		if err != nil || frag == nil || !frag.IsLegacyAffectedZone() {
 			continue
 		}
 		if !applyStickyRecoveryObservation(frag, e, now) {
@@ -4233,7 +4237,7 @@ func (p *HorizonMonitorPipeline) findSemanticAffectedZoneMatch(
 		return nil
 	}
 	f, err := p.fragmentsRepo.GetByCanonicalPath(ctx, bestPath)
-	if err != nil || f == nil || f.Type != horizonmodels.FragmentTypeAffectedZone {
+	if err != nil || f == nil || !f.IsLegacyAffectedZone() {
 		return nil
 	}
 	return f
@@ -4306,7 +4310,7 @@ func selectDeterministicAffectedZoneMatch(candidate *affectedZoneCandidate, frag
 	bestScore := 0.0
 	var best *horizonmodels.HorizonFragment
 	for _, frag := range fragments {
-		if frag == nil || frag.Type != horizonmodels.FragmentTypeAffectedZone {
+		if frag == nil || !frag.IsLegacyAffectedZone() {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(frag.Status), string(horizonmodels.FragmentStatusArchived)) {
@@ -4465,7 +4469,8 @@ func buildIncomingAffectedZoneFragment(
 	incoming := &horizonmodels.HorizonFragment{
 		TenantID:      "global",
 		CanonicalPath: c.CanonicalPath,
-		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Class:         FragmentTypeGeoRegion,
+		Subtype:       "affected_zone",
 		Labels:        map[string]string{"en": c.Label},
 		Description:   affectedZoneNarrativeDescription(c),
 		Tags: affectedZoneTags(c, cls, e).
@@ -4514,7 +4519,7 @@ func mergeAffectedZoneFragment(
 	if dst == nil || c == nil {
 		return false
 	}
-	if dst.Type != horizonmodels.FragmentTypeAffectedZone {
+	if !dst.IsLegacyAffectedZone() {
 		return false
 	}
 	changed := false
@@ -4653,7 +4658,7 @@ func (p *HorizonMonitorPipeline) publishAffectedZoneUpsert(
 	sourceID string,
 	operation string,
 ) {
-	if p == nil || p.realtimePublisher == nil || f == nil || f.Type != horizonmodels.FragmentTypeAffectedZone {
+	if p == nil || p.realtimePublisher == nil || f == nil || !f.IsLegacyAffectedZone() {
 		return
 	}
 	tenantID = strings.TrimSpace(tenantID)
@@ -4697,7 +4702,7 @@ func (p *HorizonMonitorPipeline) publishAffectedZoneUpsert(
 		"tenantId":      tenantID,
 		"fragmentId":    strings.TrimSpace(f.ID),
 		"canonicalPath": strings.TrimSpace(f.CanonicalPath),
-		"type":          string(f.Type),
+		"type":          string(f.Class),
 		"label":         strings.TrimSpace(f.Labels["en"]),
 		"status":        strings.TrimSpace(f.Status),
 		"epistemicStatus": func() string {
@@ -4742,7 +4747,7 @@ func (p *HorizonMonitorPipeline) maybeCreateStrategicGapRecommendation(
 	event *horizonMonitorFeedEvent,
 	audit *horizonMonitorSignalFlowAudit,
 ) {
-	if p == nil || p.strategicRecommendations == nil || zone == nil || zone.Type != horizonmodels.FragmentTypeAffectedZone {
+	if p == nil || p.strategicRecommendations == nil || zone == nil || !zone.IsLegacyAffectedZone() {
 		return
 	}
 	input := horizonrecommendations.DetectionInput{
@@ -4791,7 +4796,7 @@ func (p *HorizonMonitorPipeline) emitWatchRuntimeSignals(
 	baseMeta := map[string]any{}
 	if zone != nil {
 		baseMeta["zoneFragmentId"] = strings.TrimSpace(zone.ID)
-		baseMeta["zoneType"] = string(zone.Type)
+		baseMeta["zoneType"] = string(zone.Class)
 	}
 	if event != nil {
 		baseMeta["eventTitle"] = strings.TrimSpace(event.Title)
@@ -4834,7 +4839,7 @@ func (p *HorizonMonitorPipeline) emitWatchRuntimeSignals(
 }
 
 func (p *HorizonMonitorPipeline) watchTriggerAnchorsForZone(ctx context.Context, tenantID string, zone *horizonmodels.HorizonFragment) []string {
-	if zone == nil || zone.Type != horizonmodels.FragmentTypeAffectedZone {
+	if zone == nil || !zone.IsLegacyAffectedZone() {
 		return nil
 	}
 	anchors := make([]string, 0, 12)
@@ -4860,7 +4865,7 @@ func (p *HorizonMonitorPipeline) watchTriggerAnchorsForZone(ctx context.Context,
 		add(path)
 	}
 	if p.edgesRepo != nil && strings.TrimSpace(zone.ID) != "" {
-		edgeType := horizonmodels.DependencyTypeAffects
+		edgeType := DependencyTypeAffects
 		if edges, err := p.edgesRepo.ListBySource(ctx, tenantID, strings.TrimSpace(zone.ID), &edgeType, 12); err == nil {
 			for _, edge := range edges {
 				if edge == nil || strings.TrimSpace(edge.TargetFragmentID) == "" || p.fragmentsRepo == nil {
@@ -4920,13 +4925,13 @@ func (p *HorizonMonitorPipeline) coolAffectedZones(ctx context.Context, tenantID
 	if limit <= 0 {
 		limit = affectedZoneCoolingLimit
 	}
-	items, err := p.fragmentsRepo.ListByTypeAndTenant(ctx, strings.TrimSpace(firstNonEmptyString(tenantID, "global")), horizonmodels.FragmentTypeAffectedZone, limit)
+	items, err := p.fragmentsRepo.ListByClassSubtypeAndTenant(ctx, strings.TrimSpace(firstNonEmptyString(tenantID, "global")), ah.FragmentClassGeo, "affected_zone", limit)
 	if err != nil {
 		return err
 	}
 	now := time.Now().UTC()
 	for _, frag := range items {
-		if frag == nil || frag.Type != horizonmodels.FragmentTypeAffectedZone {
+		if frag == nil || !frag.IsLegacyAffectedZone() {
 			continue
 		}
 		st := parseAffectedZoneState(frag)
@@ -6331,7 +6336,7 @@ func resolveAffectedZoneLinkedFragments(
 				continue
 			}
 			record(strings.TrimSpace(frag.CanonicalPath), score)
-			if frag.Type == horizonmodels.FragmentTypeOrganization {
+			if frag.Class == FragmentTypeOrganization {
 				if fallback, fallbackScore := resolveAffectedZoneOperationalAnchorFromOrg(ctx, p, frag, e, wantCountry); fallbackScore > 0 && strings.TrimSpace(fallback.FragmentPath) != "" {
 					record(strings.TrimSpace(fallback.FragmentPath), score+fallbackScore)
 				}
@@ -6368,7 +6373,7 @@ func resolveAffectedZoneLinkedFragments(
 				continue
 			}
 			record(strings.TrimSpace(frag.CanonicalPath), linkScore)
-			if frag.Type == horizonmodels.FragmentTypeOrganization {
+			if frag.Class == FragmentTypeOrganization {
 				if fallback, fallbackScore := resolveAffectedZoneOperationalAnchorFromOrg(ctx, p, frag, e, wantCountry); fallbackScore > 0 && strings.TrimSpace(fallback.FragmentPath) != "" {
 					record(strings.TrimSpace(fallback.FragmentPath), linkScore+fallbackScore)
 				}
@@ -8245,19 +8250,20 @@ func exactAffectedZoneAnchorFragments(
 	}
 	out := make([]*horizonmodels.HorizonFragment, 0, 6)
 	seen := make(map[string]struct{}, 6)
-	for _, fragmentType := range []horizonmodels.FragmentType{
-		horizonmodels.FragmentTypeFacility,
-		horizonmodels.FragmentTypeDeposit,
-		horizonmodels.FragmentTypeGeoRegion,
-		horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeProduct,
+	// Legacy DEPOSIT (=site/deposit subtype) is covered by FragmentTypeFacility (=site)
+	// queries under the AH taxonomy; do not enumerate it as a separate class.
+	for _, fragmentType := range []FragmentType{
+		FragmentTypeFacility,
+		FragmentTypeGeoRegion,
+		FragmentTypeOrganization,
+		FragmentTypeProduct,
 	} {
 		queries := make([][]*horizonmodels.HorizonFragment, 0, 3)
 		if fragments, err := p.fragmentsRepo.FindByLabel(ctx, "en", seed, fragmentType); err == nil {
 			queries = append(queries, fragments)
 		}
 		switch fragmentType {
-		case horizonmodels.FragmentTypeFacility, horizonmodels.FragmentTypeDeposit, horizonmodels.FragmentTypeOrganization:
+		case FragmentTypeFacility, FragmentTypeOrganization:
 			if fragments, err := p.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", seed, fragmentType); err == nil {
 				queries = append(queries, fragments)
 			}
@@ -8294,16 +8300,18 @@ func affectedZoneExactAnchorFragmentScore(seed string, frag *horizonmodels.Horiz
 		return 0
 	}
 	score := 0.0
-	switch frag.Type {
-	case horizonmodels.FragmentTypeFacility:
-		score += 0.36
-	case horizonmodels.FragmentTypeDeposit:
+	// Legacy DEPOSIT (=site/deposit) gets a slightly different score than a generic
+	// facility/site; disambiguate via predicate before falling back to the bare class.
+	switch {
+	case frag.IsLegacyDeposit():
 		score += 0.32
-	case horizonmodels.FragmentTypeGeoRegion:
+	case frag.Class == FragmentTypeFacility:
+		score += 0.36
+	case frag.Class == FragmentTypeGeoRegion:
 		score += 0.24
-	case horizonmodels.FragmentTypeOrganization:
+	case frag.Class == FragmentTypeOrganization:
 		score += 0.12
-	case horizonmodels.FragmentTypeProduct:
+	case frag.Class == FragmentTypeProduct:
 		score += 0.14
 	default:
 		return 0
@@ -8347,16 +8355,17 @@ func affectedZoneLinkedFragmentScore(
 		return 0
 	}
 	score := baseScore
-	switch frag.Type {
-	case horizonmodels.FragmentTypeFacility:
-		score += 0.28
-	case horizonmodels.FragmentTypeDeposit:
+	// Legacy DEPOSIT (=site/deposit) needs to be matched separately from a generic facility/site.
+	switch {
+	case frag.IsLegacyDeposit():
 		score += 0.26
-	case horizonmodels.FragmentTypeOrganization:
+	case frag.Class == FragmentTypeFacility:
+		score += 0.28
+	case frag.Class == FragmentTypeOrganization:
 		score += 0.24
-	case horizonmodels.FragmentTypeProduct:
+	case frag.Class == FragmentTypeProduct:
 		score += 0.22
-	case horizonmodels.FragmentTypeGeoRegion:
+	case frag.Class == FragmentTypeGeoRegion:
 		score += 0.16
 	default:
 		return 0
@@ -8407,10 +8416,10 @@ func affectedZoneLinkedFragmentScore(
 	if cc := affectedZoneCountryFromFragment(frag); wantCountry != "" && cc != "" && strings.EqualFold(cc, wantCountry) {
 		score += 0.08
 	}
-	if frag.Type == horizonmodels.FragmentTypeProduct && hasAnyKeyword(text, "lng", "helium", "natural gas", "gas", "oil", "crude", "shipping", "freight", "container") {
+	if frag.Class == FragmentTypeProduct && hasAnyKeyword(text, "lng", "helium", "natural gas", "gas", "oil", "crude", "shipping", "freight", "container") {
 		score += 0.08
 	}
-	if frag.Type == horizonmodels.FragmentTypeOrganization && p != nil {
+	if frag.Class == FragmentTypeOrganization && p != nil {
 		if fallback, fallbackScore := resolveAffectedZoneOperationalAnchorFromOrg(ctx, p, frag, e, wantCountry); fallbackScore > 0 && strings.TrimSpace(fallback.FragmentPath) != "" {
 			score += 0.04
 		}
@@ -8450,14 +8459,15 @@ func buildAffectedZoneAnchorFromFragment(
 		label = humanizePathTail(frag.CanonicalPath)
 	}
 	score := baseScore
-	switch frag.Type {
-	case horizonmodels.FragmentTypeFacility:
-		score += 0.30
-	case horizonmodels.FragmentTypeDeposit:
+	// Legacy DEPOSIT (=site/deposit) needs to be matched separately from a generic facility/site.
+	switch {
+	case frag.IsLegacyDeposit():
 		score += 0.28
-	case horizonmodels.FragmentTypeGeoRegion:
+	case frag.Class == FragmentTypeFacility:
+		score += 0.30
+	case frag.Class == FragmentTypeGeoRegion:
 		score += 0.24
-	case horizonmodels.FragmentTypeOrganization:
+	case frag.Class == FragmentTypeOrganization:
 		score += 0.08
 	default:
 		return affectedZoneEntityAnchor{}, 0
@@ -8478,7 +8488,7 @@ func buildAffectedZoneAnchorFromFragment(
 		score += 0.08
 	}
 	score += affectedZoneExactAnchorFragmentScore(seed, frag) * 0.30
-	if frag.Type == horizonmodels.FragmentTypeOrganization {
+	if frag.Class == FragmentTypeOrganization {
 		if fallback, fallbackScore := resolveAffectedZoneOperationalAnchorFromOrg(ctx, p, frag, e, wantCountry); fallbackScore > 0 {
 			return fallback, score + fallbackScore
 		}
@@ -8553,10 +8563,10 @@ func resolveAffectedZoneOperationalAnchorFromOrg(
 	if p == nil || p.edgesRepo == nil || p.fragmentsRepo == nil || org == nil || strings.TrimSpace(org.ID) == "" {
 		return affectedZoneEntityAnchor{}, 0
 	}
-	edgeTypes := []horizonmodels.DependencyType{
-		horizonmodels.DependencyTypeOwns,
-		horizonmodels.DependencyTypeManages,
-		horizonmodels.DependencyTypeControls,
+	edgeTypes := []DependencyType{
+		DependencyTypeOwns,
+		DependencyTypeManages,
+		DependencyTypeControls,
 	}
 	text := normalizeKeywordText(strings.Join([]string{e.Title, e.Summary}, " "))
 	best := affectedZoneEntityAnchor{}
@@ -8574,7 +8584,8 @@ func resolveAffectedZoneOperationalAnchorFromOrg(
 			if ferr != nil || frag == nil {
 				continue
 			}
-			if frag.Type != horizonmodels.FragmentTypeFacility && frag.Type != horizonmodels.FragmentTypeDeposit && frag.Type != horizonmodels.FragmentTypeGeoRegion {
+			// FragmentTypeFacility (=site) already covers legacy DEPOSIT under AH taxonomy.
+			if frag.Class != FragmentTypeFacility && frag.Class != FragmentTypeGeoRegion {
 				continue
 			}
 			cc := affectedZoneCountryFromFragment(frag)

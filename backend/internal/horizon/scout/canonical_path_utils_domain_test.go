@@ -1,16 +1,86 @@
 package scout
 
-import "testing"
+import (
+	"testing"
 
-func TestInferFragmentTypeFromCanonicalPath_Domain(t *testing.T) {
-	if got := InferFragmentTypeFromCanonicalPath("/domain/v1/supply-chain/geo/us/material/lithium"); string(got) != "DOMAIN" {
-		t.Fatalf("InferFragmentTypeFromCanonicalPath(domain) = %q, want %q", got, "DOMAIN")
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+)
+
+func TestInferClassSubtypeFromCanonicalPath_Legacy(t *testing.T) {
+	cases := []struct {
+		name        string
+		path        string
+		wantClass   ah.FragmentClass
+		wantSubtype string
+	}{
+		{
+			name:        "domain folds to evidence/domain",
+			path:        "/domain/v1/supply-chain/geo/us/material/lithium",
+			wantClass:   ah.FragmentClassEvidence,
+			wantSubtype: "domain",
+		},
+		{
+			name:        "decision -> decision",
+			path:        "/decision/ai-chips/euv-export-control",
+			wantClass:   ah.FragmentClassDecision,
+			wantSubtype: "",
+		},
+		{
+			name:        "mechanism -> mechanism",
+			path:        "/mechanism/regulatory/export-control",
+			wantClass:   ah.FragmentClassMechanism,
+			wantSubtype: "",
+		},
+		{
+			name:        "program -> org/program",
+			path:        "/program/oil-for-food",
+			wantClass:   ah.FragmentClassOrg,
+			wantSubtype: "program",
+		},
+		{
+			name:        "media -> org/media_channel",
+			path:        "/media/cnbc",
+			wantClass:   ah.FragmentClassOrg,
+			wantSubtype: "media_channel",
+		},
+		{
+			name:        "deposit -> site/deposit",
+			path:        "/deposit/lithium/atacama-salar",
+			wantClass:   ah.FragmentClassSite,
+			wantSubtype: "deposit",
+		},
+		{
+			name:        "supply-link -> site/supply_link",
+			path:        "/supply-link/cu-andes",
+			wantClass:   ah.FragmentClassSite,
+			wantSubtype: "supply_link",
+		},
+		{
+			name:        "zone -> geo/affected_zone",
+			path:        "/zone/strait-of-hormuz",
+			wantClass:   ah.FragmentClassGeo,
+			wantSubtype: "affected_zone",
+		},
+		{
+			name:        "gov -> org/gov",
+			path:        "/gov/us/treasury/ofac",
+			wantClass:   ah.FragmentClassOrg,
+			wantSubtype: "gov",
+		},
 	}
-	if got := InferFragmentTypeFromCanonicalPath("/decision/ai-chips/euv-export-control"); string(got) != "DECISION_POINT" {
-		t.Fatalf("InferFragmentTypeFromCanonicalPath(decision) = %q, want %q", got, "DECISION_POINT")
-	}
-	if got := InferFragmentTypeFromCanonicalPath("/mechanism/regulatory/export-control"); string(got) != "MECHANISM" {
-		t.Fatalf("InferFragmentTypeFromCanonicalPath(mechanism) = %q, want %q", got, "MECHANISM")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := InferClassSubtypeFromCanonicalPath(tc.path)
+			if got.Class != tc.wantClass {
+				t.Fatalf("class = %q, want %q", got.Class, tc.wantClass)
+			}
+			if got.Subtype != tc.wantSubtype {
+				t.Fatalf("subtype = %q, want %q", got.Subtype, tc.wantSubtype)
+			}
+			if InferFragmentTypeFromCanonicalPath(tc.path) != tc.wantClass {
+				t.Fatalf("InferFragmentTypeFromCanonicalPath drift")
+			}
+		})
 	}
 }
 

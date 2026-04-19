@@ -138,7 +138,7 @@ func (b *GovHierarchyBuilder) EnsureAdministersEdge(
 	}
 
 	// Check if edge already exists
-	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", superiorID, subordinateID, models.DependencyTypeAdministers)
+	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", superiorID, subordinateID, DependencyTypeAdministers)
 	if err == nil {
 		return nil // Already exists
 	}
@@ -151,7 +151,7 @@ func (b *GovHierarchyBuilder) EnsureAdministersEdge(
 		TenantID:         "global",
 		SourceFragmentID: superiorID,
 		TargetFragmentID: subordinateID,
-		Type:             models.DependencyTypeAdministers,
+		Relation:             DependencyTypeAdministers,
 		Properties: models.EdgeProperties{
 			Criticality:   0.6,
 			Amplification: 1.0,

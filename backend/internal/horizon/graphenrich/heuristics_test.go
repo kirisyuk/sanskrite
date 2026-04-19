@@ -4,11 +4,13 @@ import (
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestApplyFragmentHeuristics_InfersGovAndMarketFields(t *testing.T) {
 	frag := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:         ah.FragmentClassOrg,
+		Subtype:       "gov",
 		CanonicalPath: "/gov/sa/ministry-of-energy",
 		Labels:        map[string]string{"en": "Ministry of Energy"},
 		MarketSegments: []string{
@@ -48,7 +50,7 @@ func TestApplyFragmentHeuristics_InfersGovAndMarketFields(t *testing.T) {
 
 func TestApplyFragmentHeuristics_TagsChokepoint(t *testing.T) {
 	frag := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:         ah.FragmentClassGeo,
 		CanonicalPath: "/loc/sea/na/strait-of-hormuz",
 		Labels:        map[string]string{"en": "Strait of Hormuz"},
 	}
@@ -69,8 +71,11 @@ func TestApplyFragmentHeuristics_TagsChokepoint(t *testing.T) {
 }
 
 func TestApplyEdgeHeuristics_NormalizesTransportAndContracts(t *testing.T) {
+	// Under AH, the supplies relation always carries transmission
+	// semantics (see DependencyEdge.IsTransmissionSensitive); legacy
+	// DEPENDS_ON+facet is retired.
 	edge := &models.DependencyEdge{
-		Type: models.DependencyTypeDependsOn,
+		Relation: ah.RelationNameSupplies,
 		Qualifiers: map[string]interface{}{
 			"transportVia":        []interface{}{string("/loc/sea/na/strait-of-hormuz")},
 			"throughputShare":     "0.72",
@@ -83,13 +88,13 @@ func TestApplyEdgeHeuristics_NormalizesTransportAndContracts(t *testing.T) {
 	if !changed {
 		t.Fatalf("expected edge heuristics to change edge")
 	}
-	if got := edge.Qualifiers[models.QualifierTransportVia]; got == nil {
+	if got := edge.Qualifiers[QualifierTransportVia]; got == nil {
 		t.Fatalf("expected canonical transport_via qualifier, qualifiers=%#v", edge.Qualifiers)
 	}
-	if got := edge.Qualifiers["facet"]; got != string(models.FacetLogistics) {
+	if got := edge.Qualifiers[QualifierFacet]; got != string(FacetLogistics) {
 		t.Fatalf("expected logistics facet, got %v", got)
 	}
-	if got := edge.Qualifiers[models.QualifierTransmissionContractStatus]; got != models.TransmissionContractStatusComplete {
+	if got := edge.Qualifiers[QualifierTransmissionContractStatus]; got != TransmissionContractStatusComplete {
 		t.Fatalf("expected complete transmission contract, got %v", got)
 	}
 	if _, ok := edge.Metrics[models.QualifierThroughputShare]; !ok {
@@ -99,7 +104,7 @@ func TestApplyEdgeHeuristics_NormalizesTransportAndContracts(t *testing.T) {
 
 func TestApplyEdgeHeuristics_RouteConstraintAddsDefaults(t *testing.T) {
 	edge := &models.DependencyEdge{
-		Type: models.DependencyTypeSuppliesTo,
+		Relation: ah.RelationNameSupplies,
 		Qualifiers: map[string]interface{}{
 			"via": "/loc/sea/na/strait-of-hormuz",
 		},
@@ -121,7 +126,7 @@ func TestApplyEdgeHeuristics_RouteConstraintAddsDefaults(t *testing.T) {
 
 func TestApplyFragmentHeuristics_HandlesRetailAndFinanceProfiles(t *testing.T) {
 	retail := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:         ah.FragmentClassSite,
 		CanonicalPath: "/fac/us/walmart-supercenter-dallas",
 		Labels:        map[string]string{"en": "Walmart Supercenter Dallas"},
 		Description:   "Grocery retail store and fulfillment location",
@@ -135,7 +140,7 @@ func TestApplyFragmentHeuristics_HandlesRetailAndFinanceProfiles(t *testing.T) {
 	}
 
 	finance := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:         ah.FragmentClassOrg,
 		CanonicalPath: "/org/us/visa-inc",
 		Labels:        map[string]string{"en": "Visa Payment Network"},
 		Description:   "Global digital payments and merchant acquiring services",
@@ -151,20 +156,20 @@ func TestApplyFragmentHeuristics_HandlesRetailAndFinanceProfiles(t *testing.T) {
 
 func TestApplyFragmentHeuristicsWithContext_UsesNearbyOrgAndProduct(t *testing.T) {
 	frag := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:         ah.FragmentClassSite,
 		CanonicalPath: "/fac/na/douai-site",
 		Labels:        map[string]string{"en": "Douai Site"},
 	}
 	ctx := FragmentContext{
 		NearbyFragments: []*models.HorizonFragment{
 			{
-				Type:          models.FragmentTypeOrganization,
+				Class:         ah.FragmentClassOrg,
 				CanonicalPath: "/org/fr/renault",
 				Labels:        map[string]string{"en": "Renault Group"},
 				Description:   "Automotive manufacturer and EV assembly operator",
 			},
 			{
-				Type:          models.FragmentTypeProduct,
+				Class:         ah.FragmentClassProduct,
 				CanonicalPath: "/product/technology/automotive/ev-battery-pack",
 				Labels:        map[string]string{"en": "EV Battery Pack"},
 				Description:   "Battery pack for electric vehicles",
@@ -184,7 +189,7 @@ func TestApplyFragmentHeuristicsWithContext_UsesNearbyOrgAndProduct(t *testing.T
 
 func TestApplyFragmentHeuristics_MultilingualAliases(t *testing.T) {
 	frag := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:         ah.FragmentClassSite,
 		CanonicalPath: "/fac/es/puerto-de-valencia",
 		Labels:        map[string]string{"es": "Puerto de Valencia"},
 		Description:   "Autoridad portuaria y terminal maritimo de contenedores",
@@ -200,7 +205,7 @@ func TestApplyFragmentHeuristics_MultilingualAliases(t *testing.T) {
 
 func TestApplyFragmentHeuristics_QualifierIncludesBucket(t *testing.T) {
 	frag := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:         ah.FragmentClassOrg,
 		CanonicalPath: "/org/us/visa-inc",
 		Labels:        map[string]string{"en": "Visa Payment Network"},
 		Description:   "Global digital payments and merchant acquiring services",

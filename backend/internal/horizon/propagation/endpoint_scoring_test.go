@@ -17,13 +17,13 @@ func TestScoreEndpointConflictRemoteFacilityBeatsLocalOrganization(t *testing.T)
 	remoteFacility := &horizonmodels.HorizonFragment{
 		ID:            "fac-cn-1",
 		CanonicalPath: "/fac/cn/lng-intensive-plant",
-		Type:          horizonmodels.FragmentTypeFacility,
+		Class:         FragmentTypeFacility,
 		IndexPaths:    []string{"/industry/lng", "/replaceability-low"},
 	}
 	localOrg := &horizonmodels.HorizonFragment{
 		ID:            "org-ir-1",
 		CanonicalPath: "/org/ir/shipping-association",
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 	}
 
 	facScore := scoreEndpoint(signal, "ir", remoteFacility, []string{"seed", "mid", "tail"}, nil, map[string]*horizonmodels.HorizonFragment{}, context.Background(), profile)
@@ -49,10 +49,10 @@ func TestEndpointSigmoidMonotonic(t *testing.T) {
 func TestRerankDiverseEndpointsAvoidsSameCountrySameTypeFlood(t *testing.T) {
 	profile := DefaultEndpointScoringProfile()
 	candidates := []EndpointInterestingness{
-		{FragmentID: "a", CanonicalPath: "/fac/ir/a", FragmentType: horizonmodels.FragmentTypeFacility, Country: "ir", Interestingness: 0.96},
-		{FragmentID: "b", CanonicalPath: "/fac/ir/b", FragmentType: horizonmodels.FragmentTypeFacility, Country: "ir", Interestingness: 0.95},
-		{FragmentID: "c", CanonicalPath: "/market/de/energy/gas", FragmentType: horizonmodels.FragmentTypeMarket, Country: "de", Interestingness: 0.89},
-		{FragmentID: "d", CanonicalPath: "/fac/cn/lng-plant", FragmentType: horizonmodels.FragmentTypeFacility, Country: "cn", Interestingness: 0.88},
+		{FragmentID: "a", CanonicalPath: "/fac/ir/a", FragmentType: FragmentTypeFacility, Country: "ir", Interestingness: 0.96},
+		{FragmentID: "b", CanonicalPath: "/fac/ir/b", FragmentType: FragmentTypeFacility, Country: "ir", Interestingness: 0.95},
+		{FragmentID: "c", CanonicalPath: "/market/de/energy/gas", FragmentType: FragmentTypeMarket, Country: "de", Interestingness: 0.89},
+		{FragmentID: "d", CanonicalPath: "/fac/cn/lng-plant", FragmentType: FragmentTypeFacility, Country: "cn", Interestingness: 0.88},
 	}
 
 	selected := rerankDiverseEndpoints(candidates, 3, profile)
@@ -76,7 +76,7 @@ func TestScoreTraceEndpointRewardsCrossBorderBusinessPhysics(t *testing.T) {
 	remoteFacility := &horizonmodels.HorizonFragment{
 		ID:            "fac-cn-1",
 		CanonicalPath: "/fac/cn/lng-intensive-plant",
-		Type:          horizonmodels.FragmentTypeFacility,
+		Class:         FragmentTypeFacility,
 		IndexPaths:    []string{"/industry/lng", "/replaceability-low"},
 	}
 	trace := SignalPropagationTraceEvent{
@@ -115,12 +115,12 @@ func TestScoreEndpointPenalizesSphereTailAgainstConcreteFacility(t *testing.T) {
 	sphere := &horizonmodels.HorizonFragment{
 		ID:            "sphere-1",
 		CanonicalPath: "/sphere/geopolitics",
-		Type:          horizonmodels.FragmentTypeGeoRegion,
+		Class:         FragmentTypeGeoRegion,
 	}
 	facility := &horizonmodels.HorizonFragment{
 		ID:            "fac-de-1",
 		CanonicalPath: "/fac/de/critical-plant",
-		Type:          horizonmodels.FragmentTypeFacility,
+		Class:         FragmentTypeFacility,
 		IndexPaths:    []string{"/replaceability-low"},
 	}
 	sphereScore := scoreEndpoint(signal, "ir", sphere, []string{"seed", "mid", "tail"}, nil, map[string]*horizonmodels.HorizonFragment{}, context.Background(), profile)
@@ -139,12 +139,12 @@ func TestScoreEndpointPenalizesGenericLocTail(t *testing.T) {
 	genericLoc := &horizonmodels.HorizonFragment{
 		ID:            "loc-1",
 		CanonicalPath: "/loc/ir/na/na",
-		Type:          horizonmodels.FragmentTypeGeoRegion,
+		Class:         FragmentTypeGeoRegion,
 	}
 	facility := &horizonmodels.HorizonFragment{
 		ID:            "fac-cn-1",
 		CanonicalPath: "/fac/cn/lng-plant",
-		Type:          horizonmodels.FragmentTypeFacility,
+		Class:         FragmentTypeFacility,
 	}
 	locScore := scoreEndpoint(signal, "ir", genericLoc, []string{"seed", "tail"}, nil, map[string]*horizonmodels.HorizonFragment{}, context.Background(), profile)
 	facScore := scoreEndpoint(signal, "ir", facility, []string{"seed", "mid", "tail"}, nil, map[string]*horizonmodels.HorizonFragment{}, context.Background(), profile)

@@ -9,7 +9,7 @@ import (
 
 func TestApplyInferredHomeLocationHint_FillsFacilityPlaceFromName(t *testing.T) {
 	fragment := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/il/salt-of-the-earth-eilat",
 		Labels:        map[string]string{"en": "Salt Of The Earth Eilat"},
 	}
@@ -26,7 +26,7 @@ func TestApplyInferredHomeLocationHint_FillsFacilityPlaceFromName(t *testing.T) 
 
 func TestApplyInferredHomeLocationHint_FillsOrgPlaceFromSlug(t *testing.T) {
 	fragment := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/cn/jabil-circuit-wuxi",
 		Labels:        map[string]string{"en": "Jabil Circuit Wuxi"},
 	}
@@ -44,7 +44,7 @@ func TestApplyInferredHomeLocationHint_FillsOrgPlaceFromSlug(t *testing.T) {
 func TestApplyInferredHomeLocationHint_DoesNotOverrideExistingPlace(t *testing.T) {
 	iso2 := "SA"
 	fragment := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/sa/al-rajhi-bank-pjsc",
 		Labels:        map[string]string{"en": "Al Rajhi Bank Pjsc"},
 		HomeLocation: &models.Location{

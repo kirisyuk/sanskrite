@@ -3,19 +3,27 @@ package regulatorytransform
 import (
 	"strings"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
-// Pair describes an authoritative decision→mechanism or mechanism→condition edge from the regulatory transform dictionary.
+// Pair describes an authoritative decision→mechanism or mechanism→condition
+// edge from the regulatory transform dictionary.
+//
+// Under the AgentHorde taxonomy:
+//   - "uses_mechanism" maps to ah.RelationNameWields (decision → mechanism).
+//   - "imposes_condition" maps to ah.RelationNameImposes (mechanism → target).
+//
+// CanonicalType, when set, overrides the inferred relation. Empty CanonicalType
+// triggers RelationKind-based inference.
 type Pair struct {
 	FromPath      string
 	ToPath        string
 	RelationKind  string
-	CanonicalType models.DependencyType
+	CanonicalType ah.RelationName
 }
 
-// Registry is an in-memory transform pair source (Firestore wiring can populate this at runtime).
+// Registry is an in-memory transform pair source (Firestore wiring can populate
+// this at runtime).
 type Registry struct {
 	byKey map[string]Pair
 }
@@ -29,7 +37,8 @@ func NewRegistry() *Registry {
 	return &Registry{byKey: make(map[string]Pair)}
 }
 
-// RegisterPair registers a transform pair. Duplicate from+to keys overwrite the previous entry (last write wins).
+// RegisterPair registers a transform pair. Duplicate from+to keys overwrite the
+// previous entry (last write wins).
 func (r *Registry) RegisterPair(p Pair) {
 	if r == nil {
 		return
@@ -53,8 +62,9 @@ func (r *Registry) PairCount() int {
 	return len(r.byKey)
 }
 
-// NormalizeRegulatoryEdgeType adjusts edge type when both endpoints match a registered pair.
-func (r *Registry) NormalizeRegulatoryEdgeType(sourcePath, targetPath string, edgeType models.DependencyType) (models.DependencyType, bool) {
+// NormalizeRegulatoryEdgeType adjusts the edge relation when both endpoints
+// match a registered pair.
+func (r *Registry) NormalizeRegulatoryEdgeType(sourcePath, targetPath string, edgeType ah.RelationName) (ah.RelationName, bool) {
 	if r == nil || len(r.byKey) == 0 {
 		return edgeType, false
 	}
@@ -62,18 +72,16 @@ func (r *Registry) NormalizeRegulatoryEdgeType(sourcePath, targetPath string, ed
 	tp := strings.TrimSpace(targetPath)
 	p, ok := r.byKey[pairKey(sp, tp)]
 	if !ok {
-		_ = taxonomy.NormalizeRelationType(string(edgeType))
 		return edgeType, false
 	}
 	if p.CanonicalType != "" {
 		return p.CanonicalType, true
 	}
 	switch strings.ToLower(strings.TrimSpace(p.RelationKind)) {
-	case "uses_mechanism", "uses-mechanism":
-		return models.DependencyTypeUsesMechanism, true
-	case "imposes_condition", "imposes-condition":
-		return models.DependencyTypeImposesCondition, true
+	case "uses_mechanism", "uses-mechanism", "wields":
+		return ah.RelationNameWields, true
+	case "imposes_condition", "imposes-condition", "imposes":
+		return ah.RelationNameImposes, true
 	}
-	_ = taxonomy.NormalizeRelationType(string(edgeType))
 	return edgeType, false
 }

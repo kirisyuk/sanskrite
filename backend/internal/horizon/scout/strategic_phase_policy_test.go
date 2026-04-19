@@ -110,10 +110,10 @@ func TestSanitizeDomainResearchRelations_StripsCrossModeNoise(t *testing.T) {
 	if len(out) != 2 {
 		t.Fatalf("expected 2 sanitized relations, got %d", len(out))
 	}
-	if out[0].RelationType != string(models.DependencyTypeFocusesOn) {
+	if out[0].RelationType != string(DependencyTypeFocusesOn) {
 		t.Fatalf("domain-sourced non-scaffold relation must normalize to FOCUSES_ON, got %s", out[0].RelationType)
 	}
-	if out[1].RelationType != string(models.DependencyTypeSuppliesTo) {
+	if out[1].RelationType != string(DependencyTypeSuppliesTo) {
 		t.Fatalf("explicit org-sourced SUPPLIES_TO must be preserved, got %s", out[1].RelationType)
 	}
 }
@@ -139,7 +139,7 @@ func TestSanitizeDomainResearchRelations_RewritesIncomingToDomain(t *testing.T) 
 	if got.TargetCanonicalPath != "/market/kz/logistics/cold-chain" {
 		t.Fatalf("expected targetCanonicalPath to be rewritten to previous source, got %q", got.TargetCanonicalPath)
 	}
-	if got.RelationType != string(models.DependencyTypeFocusesOn) {
+	if got.RelationType != string(DependencyTypeFocusesOn) {
 		t.Fatalf("incoming-to-domain relation must normalize to FOCUSES_ON, got %s", got.RelationType)
 	}
 }

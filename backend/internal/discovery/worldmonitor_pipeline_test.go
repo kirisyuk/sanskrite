@@ -13,6 +13,7 @@ import (
 	horizonsignallanding "github.com/igorkirisyuk/sanskrite/internal/horizon/signallanding"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestNormalizeHorizonMonitorIngestMode(t *testing.T) {
@@ -257,7 +258,8 @@ func TestSignalLandingZoneRefsPrefersSpecificZones(t *testing.T) {
 func TestLandingZoneFragmentToCandidate(t *testing.T) {
 	frag := &horizonmodels.HorizonFragment{
 		CanonicalPath:  "/zone/ae/military_conflict/dubai",
-		Type:           horizonmodels.FragmentTypeAffectedZone,
+		Class:           ah.FragmentClassGeo,
+		Subtype:           "affected_zone",
 		GeoSlug:        "ae",
 		RadiusKm:       24,
 		HasCoordinates: true,
@@ -858,7 +860,7 @@ func TestBuildAffectedZoneAnchorFromFragment_AllowsPlaceholderFacilityWithCoordi
 	}
 	frag := &horizonmodels.HorizonFragment{
 		ID:            "fac-ras-laffan",
-		Type:          horizonmodels.FragmentTypeFacility,
+		Class:         FragmentTypeFacility,
 		CanonicalPath: "/fac/na/ras-laffan",
 		Labels:        map[string]string{"en": "Ras Laffan"},
 		Coordinates:   &horizonmodels.Coordinates{Lat: 25.8976567, Lon: 51.5331527},
@@ -881,14 +883,14 @@ func TestBuildAffectedZoneAnchorFromFragment_AllowsPlaceholderFacilityWithCoordi
 func TestAffectedZoneExactAnchorFragmentScore_PrefersOperationalFacilityVariant(t *testing.T) {
 	plain := &horizonmodels.HorizonFragment{
 		ID:            "fac-ras-laffan",
-		Type:          horizonmodels.FragmentTypeFacility,
+		Class:         FragmentTypeFacility,
 		CanonicalPath: "/fac/na/ras-laffan",
 		Labels:        map[string]string{"en": "Ras Laffan"},
 		Coordinates:   &horizonmodels.Coordinates{Lat: 25.8976567, Lon: 51.5331527},
 	}
 	richer := &horizonmodels.HorizonFragment{
 		ID:            "fac-ras-laffan-industrial-city",
-		Type:          horizonmodels.FragmentTypeFacility,
+		Class:         FragmentTypeFacility,
 		CanonicalPath: "/fac/na/ras-laffan-industrial-city",
 		Labels:        map[string]string{"en": "Ras Laffan Industrial City"},
 		Coordinates:   &horizonmodels.Coordinates{Lat: 25.8976567, Lon: 51.5331527},
@@ -901,7 +903,7 @@ func TestAffectedZoneExactAnchorFragmentScore_PrefersOperationalFacilityVariant(
 func TestAffectedZoneCountryFromFragment_IgnoresPlaceholderNAForFacility(t *testing.T) {
 	frag := &horizonmodels.HorizonFragment{
 		ID:            "fac-ras-laffan",
-		Type:          horizonmodels.FragmentTypeFacility,
+		Class:         FragmentTypeFacility,
 		CanonicalPath: "/fac/na/ras-laffan",
 	}
 	if got := affectedZoneCountryFromFragment(frag); got != "" {
@@ -1302,11 +1304,11 @@ func TestShouldAttemptAffectedZoneEntityAnchor_ForSpecificIndustrialSiteOnCountr
 
 func TestFilterRedundantAffectedZoneTargets_DropsBroaderGeoAncestor(t *testing.T) {
 	targets := []*horizonmodels.HorizonFragment{
-		{ID: "country", Type: horizonmodels.FragmentTypeGeoRegion, CanonicalPath: "/loc/ae"},
-		{ID: "city", Type: horizonmodels.FragmentTypeGeoRegion, CanonicalPath: "/loc/ae/na/fujairah"},
-		{ID: "org", Type: horizonmodels.FragmentTypeOrganization, CanonicalPath: "/org/bm/frontline"},
+		{ID: "country", Class: FragmentTypeGeoRegion, CanonicalPath: "/loc/ae"},
+		{ID: "city", Class: FragmentTypeGeoRegion, CanonicalPath: "/loc/ae/na/fujairah"},
+		{ID: "org", Class: FragmentTypeOrganization, CanonicalPath: "/org/bm/frontline"},
 	}
-	got := filterRedundantAffectedZoneTargets(targets, &horizonmodels.HorizonFragment{ID: "city", Type: horizonmodels.FragmentTypeGeoRegion, CanonicalPath: "/loc/ae/na/fujairah"})
+	got := filterRedundantAffectedZoneTargets(targets, &horizonmodels.HorizonFragment{ID: "city", Class: FragmentTypeGeoRegion, CanonicalPath: "/loc/ae/na/fujairah"})
 	if len(got) != 2 {
 		t.Fatalf("expected 2 targets after pruning, got %d: %#v", len(got), got)
 	}
@@ -1342,7 +1344,8 @@ func TestMaintainStickyAffectedZoneActivity_HoldsOperationalOutage(t *testing.T)
 	now := time.Now().UTC()
 	frag := &horizonmodels.HorizonFragment{
 		CanonicalPath: "/zone/qa/infrastructure_disruption/ras-laffan",
-		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Class:          ah.FragmentClassGeo,
+		Subtype:          "affected_zone",
 		Qualifiers: map[string]interface{}{
 			"requiresExplicitRecovery": true,
 			"recoveryStatus":           affectedZoneRecoveryStatusActive,
@@ -1366,7 +1369,8 @@ func TestApplyStickyRecoveryObservation_ClearsStickyOutage(t *testing.T) {
 	now := time.Now().UTC()
 	frag := &horizonmodels.HorizonFragment{
 		CanonicalPath: "/zone/qa/infrastructure_disruption/ras-laffan",
-		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Class:          ah.FragmentClassGeo,
+		Subtype:          "affected_zone",
 		Qualifiers: map[string]interface{}{
 			"requiresExplicitRecovery": true,
 			"recoveryStatus":           affectedZoneRecoveryStatusActive,
@@ -1594,7 +1598,8 @@ func TestShouldPreferSpecificAffectedZoneCreation_ReplacesGenericOperationalSlug
 	}
 	existing := &horizonmodels.HorizonFragment{
 		ID:            "zone-port",
-		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Class:          ah.FragmentClassGeo,
+		Subtype:          "affected_zone",
 		CanonicalPath: "/zone/ca/infrastructure_disruption/port",
 		Qualifiers:    map[string]interface{}{"geoPrecision": "precise"},
 	}
@@ -1630,7 +1635,8 @@ func TestShouldPreferSpecificAffectedZoneCreation(t *testing.T) {
 	}
 	existing := &horizonmodels.HorizonFragment{
 		CanonicalPath: "/zone/ae/infrastructure_disruption/united-arab-emirates",
-		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Class:          ah.FragmentClassGeo,
+		Subtype:          "affected_zone",
 		Status:        string(horizonmodels.FragmentStatusActive),
 		Qualifiers: map[string]interface{}{
 			"geoPrecision": "approximate_country",
@@ -1719,8 +1725,8 @@ func TestBuildIncomingAffectedZoneFragment_MapReadyCoordinates(t *testing.T) {
 	if fragment == nil {
 		t.Fatal("expected fragment")
 	}
-	if fragment.Type != horizonmodels.FragmentTypeAffectedZone {
-		t.Fatalf("expected affected zone fragment, got %q", fragment.Type)
+	if !fragment.IsLegacyAffectedZone() {
+		t.Fatalf("expected affected zone fragment, got class=%q subtype=%q", fragment.Class, fragment.Subtype)
 	}
 	if !fragment.HasCoordinates || fragment.Coordinates == nil {
 		t.Fatalf("expected map-ready coordinates, got %+v", fragment.Coordinates)
@@ -1935,7 +1941,8 @@ func TestSelectDeterministicAffectedZoneMatch(t *testing.T) {
 	fragments := []*horizonmodels.HorizonFragment{
 		{
 			CanonicalPath: "/zone/ir/military_conflict/tehran-armed-tension",
-			Type:          horizonmodels.FragmentTypeAffectedZone,
+			Class:          ah.FragmentClassGeo,
+			Subtype:          "affected_zone",
 			Labels:        map[string]string{"en": "Tehran Armed Tension"},
 			Qualifiers: map[string]interface{}{
 				"zoneSubType":  "armed_tension",
@@ -1945,7 +1952,8 @@ func TestSelectDeterministicAffectedZoneMatch(t *testing.T) {
 		},
 		{
 			CanonicalPath: "/zone/ir/military_conflict/iran-wide-alert",
-			Type:          horizonmodels.FragmentTypeAffectedZone,
+			Class:          ah.FragmentClassGeo,
+			Subtype:          "affected_zone",
 			Labels:        map[string]string{"en": "Iran Wide Alert"},
 			Qualifiers: map[string]interface{}{
 				"zoneSubType":  "terror_threat",
@@ -2050,7 +2058,8 @@ func TestShouldSuppressWeakAffectedZoneInference_DiseaseTrendArticle(t *testing.
 
 func TestShouldPromoteAffectedZonePrimaryEvidence_RejectsWeakAnalysisOverwrite(t *testing.T) {
 	f := &horizonmodels.HorizonFragment{
-		Type: horizonmodels.FragmentTypeAffectedZone,
+		Class: ah.FragmentClassGeo,
+		Subtype: "affected_zone",
 		Qualifiers: map[string]interface{}{
 			"sourceTitle":        "Missile strike hits refinery near Bandar Abbas",
 			"sourceOccurredAt":   time.Date(2026, 3, 8, 8, 0, 0, 0, time.UTC).Format(time.RFC3339),
@@ -2073,7 +2082,8 @@ func TestShouldPromoteAffectedZonePrimaryEvidence_RejectsWeakAnalysisOverwrite(t
 
 func TestShouldUseAffectedZoneStoredSourceEvidence_RejectsWeakStoredSource(t *testing.T) {
 	f := &horizonmodels.HorizonFragment{
-		Type: horizonmodels.FragmentTypeAffectedZone,
+		Class: ah.FragmentClassGeo,
+		Subtype: "affected_zone",
 		Qualifiers: map[string]interface{}{
 			"sourceTitle":            "Using the 2026 Winter Olympics to Build Soft Power",
 			"sourceSummary":          "A commentary on soft-power strategy and national image.",
@@ -2094,7 +2104,8 @@ func TestShouldUseAffectedZoneStoredSourceEvidence_RejectsWeakStoredSource(t *te
 
 func TestShouldUseAffectedZoneStoredSourceEvidence_RejectsCountryConflictWithExplicitPlace(t *testing.T) {
 	f := &horizonmodels.HorizonFragment{
-		Type: horizonmodels.FragmentTypeAffectedZone,
+		Class: ah.FragmentClassGeo,
+		Subtype: "affected_zone",
 		Qualifiers: map[string]interface{}{
 			"sourceTitle":            "Tehran shrouded in toxic cloud after US-Israeli strikes on oil deposits",
 			"sourceSummary":          "Huge fires broke out in Tehran after Israeli strikes targeted Iranian oil infrastructure.",

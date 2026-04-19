@@ -119,7 +119,7 @@ func RuleBasedQuickValidation(
 	}
 
 	// Resolve entity type and collect rules
-	key := entity_semantics.ResolveByPath(targetPath, fragmentTypeOrEmpty(fragment), communityType)
+	key := entity_semantics.ResolveByPath(targetPath, fragmentTypeOrEmpty(fragment), fragmentSubtypeOrEmpty(fragment), communityType)
 	def := entity_semantics.GetDefinition(key)
 	rules := make([]entity_semantics.MissingInfoRule, 0)
 	if def != nil && len(def.MissingInfoRules) > 0 {
@@ -185,11 +185,18 @@ func dedupWorkingProductScopeRefs(in []string) []string {
 	return out
 }
 
-func fragmentTypeOrEmpty(f *models.HorizonFragment) models.FragmentType {
+func fragmentTypeOrEmpty(f *models.HorizonFragment) FragmentType {
 	if f == nil {
 		return ""
 	}
-	return f.Type
+	return f.Class
+}
+
+func fragmentSubtypeOrEmpty(f *models.HorizonFragment) string {
+	if f == nil {
+		return ""
+	}
+	return f.Subtype
 }
 
 // ValidateStrategicOverlay validates DECISION_POINT and MECHANISM entities in Phase 2.
@@ -254,10 +261,10 @@ GRAPH CONTEXT (existing Lens graph):
 `, strings.TrimSpace(graphContext))
 	}
 	var entityType string
-	switch fragment.Type {
-	case models.FragmentTypeDecisionPoint:
+	switch fragment.Class {
+	case FragmentTypeDecisionPoint:
 		entityType = "DECISION_POINT"
-	case models.FragmentTypeMechanism:
+	case FragmentTypeMechanism:
 		entityType = "MECHANISM"
 	default:
 		entityType = "UNKNOWN"
@@ -412,8 +419,8 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 	}
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt() + "\n\n"
 	// Object detail: from entity_semantics (unified per type).
-	profileBlock := entity_semantics.ResearchBlockForPath(extractedData.CanonicalPath, extractedData.Type, extractedData.CommunityType) + "\n\n"
-	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlockWithHints(extractedData.CanonicalPath, extractedData.Type, extractedData.CommunityType, extractedData.Qualifiers, extractedData.Identifiers, extractedData.SpherePaths) + "\n"
+	profileBlock := entity_semantics.ResearchBlockForPath(extractedData.CanonicalPath, extractedData.Class, extractedData.Subtype, extractedData.CommunityType) + "\n\n"
+	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlockWithHints(extractedData.CanonicalPath, extractedData.Class, extractedData.CommunityType, extractedData.Qualifiers, extractedData.Identifiers, extractedData.SpherePaths) + "\n"
 	relevanceGateBlock := buildCriticRelevanceGate(extractedData)
 	nameRulesBlock := strings.ReplaceAll(naming.PromptEntityNameNormalizationRules(), "\n", "\n        ")
 
@@ -720,22 +727,22 @@ func buildCriticRelevanceGate(fragment *models.HorizonFragment) string {
 		return ""
 	}
 	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
-	ft := fragment.Type
+	ft := fragment.Class
 
 	switch {
-	case ft == models.FragmentTypePerson || strings.HasPrefix(cp, "/person/"):
+	case ft == FragmentTypePerson || strings.HasPrefix(cp, "/person/"):
 		return `CRITICAL RELEVANCE GATE (PERSON):
 - Focus ONLY on person-relevant completeness: identity, affiliations, roles, relatives, associates, and person-specific relationship evidence.
 - Do NOT request org/fac/market operational packages for PERSON:
   no orgSize, marketSegments, TAM/CAGR/CR4/HHI, supply-chain suppliers/customers, facility lifecycle, audit-assurance, products/services catalogs, ownership cap-table requests.
 - If uncertain, prefer fewer high-quality PERSON questions over broad business checklists.
 `
-	case ft == models.FragmentTypeMarket || strings.HasPrefix(cp, "/market/"):
+	case ft == FragmentTypeMarket || strings.HasPrefix(cp, "/market/"):
 		return `CRITICAL RELEVANCE GATE (MARKET):
 - Focus on market hierarchy, participants, sizing and concentration metrics.
 - Avoid person-family/biography requests unless explicitly evidenced as relevant to this market.
 `
-	case ft == models.FragmentTypeCommunity || strings.HasPrefix(cp, "/community/"):
+	case ft == FragmentTypeCommunity || strings.HasPrefix(cp, "/community/"):
 		return `CRITICAL RELEVANCE GATE (COMMUNITY):
 - Focus on community type, channels, affiliations, subgroup hierarchy, and influence links.
 - Avoid generic corporate audit/market-sizing checklists unless explicitly grounded.
@@ -753,8 +760,8 @@ func enforceValidationRelevance(fragment *models.HorizonFragment, out *Validatio
 		return out
 	}
 	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
-	ft := fragment.Type
-	isPerson := ft == models.FragmentTypePerson || strings.HasPrefix(cp, "/person/")
+	ft := fragment.Class
+	isPerson := ft == FragmentTypePerson || strings.HasPrefix(cp, "/person/")
 	if !isPerson {
 		return out
 	}

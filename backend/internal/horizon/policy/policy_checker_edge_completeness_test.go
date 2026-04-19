@@ -10,7 +10,7 @@ func TestCheckEdgeCompleteness_OwnsMissingPercent(t *testing.T) {
 	pc := &PolicyChecker{}
 	edge := &horizonmodels.DependencyEdge{
 		ID:   "e1",
-		Type: horizonmodels.DependencyTypeOwns,
+		Relation: relOwns,
 	}
 	violations := pc.checkEdgeCompleteness(edge)
 	if len(violations) == 0 {
@@ -32,7 +32,7 @@ func TestCheckEdgeCompleteness_InvestsMissingAmountAndRound(t *testing.T) {
 	pc := &PolicyChecker{}
 	edge := &horizonmodels.DependencyEdge{
 		ID:   "e2",
-		Type: horizonmodels.DependencyTypeInvestsIn,
+		Relation: relInvestsIn,
 	}
 	violations := pc.checkEdgeCompleteness(edge)
 	if len(violations) < 2 {
@@ -44,7 +44,7 @@ func TestCheckEdgeCompleteness_OwnsMissingShareType(t *testing.T) {
 	pc := &PolicyChecker{}
 	edge := &horizonmodels.DependencyEdge{
 		ID:   "e3",
-		Type: horizonmodels.DependencyTypeOwns,
+		Relation: relOwns,
 		Qualifiers: map[string]interface{}{
 			"ownership_percent": 87,
 		},
@@ -66,7 +66,7 @@ func TestCheckEdgeCompleteness_ControlsMissingMechanism(t *testing.T) {
 	pc := &PolicyChecker{}
 	edge := &horizonmodels.DependencyEdge{
 		ID:   "e4",
-		Type: horizonmodels.DependencyTypeControls,
+		Relation: relControls,
 	}
 	violations := pc.checkEdgeCompleteness(edge)
 	found := false
@@ -85,7 +85,7 @@ func TestCheckEdgeCompleteness_AffectsMissingTransmissionQualifiers(t *testing.T
 	pc := &PolicyChecker{}
 	edge := &horizonmodels.DependencyEdge{
 		ID:   "e5",
-		Type: horizonmodels.DependencyTypeAffects,
+		Relation: relAffects,
 	}
 	violations := pc.checkEdgeCompleteness(edge)
 	found := false
@@ -104,7 +104,7 @@ func TestCheckEdgeCompleteness_InGeoScopeMissingScopeBasis(t *testing.T) {
 	pc := &PolicyChecker{}
 	edge := &horizonmodels.DependencyEdge{
 		ID:   "e6",
-		Type: horizonmodels.DependencyTypeInGeoScope,
+		Relation: relInGeoScope,
 	}
 	violations := pc.checkEdgeCompleteness(edge)
 	found := false

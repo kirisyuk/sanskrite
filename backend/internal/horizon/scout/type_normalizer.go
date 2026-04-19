@@ -29,8 +29,8 @@ func NewTypeNormalizer() *TypeNormalizer {
 // NormalizationResult contains the result of type normalization.
 type NormalizationResult struct {
 	ShouldNormalize bool
-	OriginalType    models.FragmentType
-	NormalizedType  models.FragmentType
+	OriginalType    FragmentType
+	NormalizedType  FragmentType
 	CanonicalPath   string // Suggested canonical path (e.g., /loc/us for USA)
 	Reason          string
 	MergeWithPath   string // If should merge with existing fragment at this path
@@ -44,7 +44,7 @@ func (n *TypeNormalizer) NormalizeFragmentType(fragment *models.HorizonFragment)
 	}
 
 	// Rule 1: Check if this is a country incorrectly typed as ORGANIZATION
-	if fragment.Type == models.FragmentTypeOrganization {
+	if fragment.Class == FragmentTypeOrganization {
 		if result := n.checkIfCountry(fragment); result.ShouldNormalize {
 			return result
 		}
@@ -77,8 +77,8 @@ func (n *TypeNormalizer) checkIfCountry(fragment *models.HorizonFragment) Normal
 		if country, ok := KnownCountries[name]; ok {
 			return NormalizationResult{
 				ShouldNormalize: true,
-				OriginalType:    fragment.Type,
-				NormalizedType:  models.FragmentTypeGeoRegion,
+				OriginalType:    fragment.Class,
+				NormalizedType:  FragmentTypeGeoRegion,
 				CanonicalPath:   country.CanonicalPath,
 				Reason:          "legalName/label matches known country: " + country.EnglishName,
 				MergeWithPath:   country.CanonicalPath,
@@ -89,8 +89,8 @@ func (n *TypeNormalizer) checkIfCountry(fragment *models.HorizonFragment) Normal
 			country := KnownCountriesByPath[cp]
 			return NormalizationResult{
 				ShouldNormalize: true,
-				OriginalType:    fragment.Type,
-				NormalizedType:  models.FragmentTypeGeoRegion,
+				OriginalType:    fragment.Class,
+				NormalizedType:  FragmentTypeGeoRegion,
 				CanonicalPath:   cp,
 				Reason:          "legalName/label matches country alias: " + country.EnglishName,
 				MergeWithPath:   cp,
@@ -124,27 +124,35 @@ func (n *TypeNormalizer) checkPathTypeMismatch(fragment *models.HorizonFragment)
 		return NormalizationResult{ShouldNormalize: false}
 	}
 
-	// Map of path prefixes to expected types
-	pathTypeMap := map[string]models.FragmentType{
-		"/loc/":         models.FragmentTypeGeoRegion,
-		"/geo/":         models.FragmentTypeGeoRegion,
-		"/org/":         models.FragmentTypeOrganization,
-		"/fac/":         models.FragmentTypeFacility,
-		"/deposit/":     models.FragmentTypeDeposit, // Natural resource deposits
-		"/product/":     models.FragmentTypeProduct,
-		"/program/":     models.FragmentTypeProgram,
-		"/market/":      models.FragmentTypeMarket,
-		"/event/":       models.FragmentTypeEvent,
-		"/person/":      models.FragmentTypePerson,
-		"/media/":       models.FragmentTypeMediaChannel,
-		"/supply-link/": models.FragmentTypeSupplyLink,
+	// Map of path prefixes to expected AH FragmentClass values.
+	//
+	// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeProgram /
+	// FragmentTypeMediaChannel / FragmentTypeDeposit / FragmentTypeSupplyLink
+	// no longer exist as standalone class values — they collapse onto their
+	// parent class with a Subtype discriminator (org/program, org/media_channel,
+	// site/deposit, site/supply_link). Class-level prefix-vs-type validation
+	// only catches a fragment landing at /program/ with a non-org class; subtype
+	// alignment is validated separately by precreate_validator.
+	pathTypeMap := map[string]FragmentType{
+		"/loc/":         FragmentTypeGeoRegion,
+		"/geo/":         FragmentTypeGeoRegion,
+		"/org/":         FragmentTypeOrganization,
+		"/fac/":         FragmentTypeFacility,
+		"/deposit/":     FragmentTypeFacility, // Natural resource deposits → site/deposit
+		"/product/":     FragmentTypeProduct,
+		"/program/":     FragmentTypeOrganization, // → org/program
+		"/market/":      FragmentTypeMarket,
+		"/event/":       FragmentTypeEvent,
+		"/person/":      FragmentTypePerson,
+		"/media/":       FragmentTypeOrganization, // → org/media_channel
+		"/supply-link/": FragmentTypeFacility,     // → site/supply_link
 	}
 
 	for prefix, expectedType := range pathTypeMap {
-		if strings.HasPrefix(path, prefix) && fragment.Type != expectedType {
+		if strings.HasPrefix(path, prefix) && fragment.Class != expectedType {
 			return NormalizationResult{
 				ShouldNormalize: true,
-				OriginalType:    fragment.Type,
+				OriginalType:    fragment.Class,
 				NormalizedType:  expectedType,
 				CanonicalPath:   fragment.CanonicalPath,
 				Reason:          "canonicalPath prefix " + prefix + " requires type " + string(expectedType),

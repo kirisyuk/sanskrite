@@ -11,7 +11,7 @@ type amplitudeBreakdown struct {
 	Factors   map[string]float64
 }
 
-func classifySignalTransfer(axis string, edgeType horizonmodels.DependencyType, fromFrag, toFrag *horizonmodels.HorizonFragment) (channel string, scope string, spillover string, fromGeo string, toGeo string) {
+func classifySignalTransfer(axis string, edgeType DependencyType, fromFrag, toFrag *horizonmodels.HorizonFragment) (channel string, scope string, spillover string, fromGeo string, toGeo string) {
 	channel = classifySignalChannel(axis, edgeType)
 	fromGeo, _ = policyImpactCanonicalGeo(fragmentCanonicalPath(fromFrag))
 	toGeo, _ = policyImpactCanonicalGeo(fragmentCanonicalPath(toFrag))
@@ -59,7 +59,7 @@ func classifySignalTransfer(axis string, edgeType horizonmodels.DependencyType, 
 	return channel, scope, spillover, fromGeo, toGeo
 }
 
-func classifySignalChannel(axis string, edgeType horizonmodels.DependencyType) string {
+func classifySignalChannel(axis string, edgeType DependencyType) string {
 	axis = strings.TrimSpace(axis)
 	switch axis {
 	case horizonmodels.AxisLegalAccess, horizonmodels.AxisLegalCompliance:
@@ -75,31 +75,31 @@ func classifySignalChannel(axis string, edgeType horizonmodels.DependencyType) s
 	}
 
 	switch edgeType {
-	case horizonmodels.DependencyTypeRegulates,
-		horizonmodels.DependencyTypeAppliesTo,
-		horizonmodels.DependencyTypeImposesCondition,
-		horizonmodels.DependencyTypeControlsAccess,
-		horizonmodels.DependencyTypeAdministers:
+	case DependencyTypeRegulates,
+		DependencyTypeAppliesTo,
+		DependencyTypeImposesCondition,
+		DependencyTypeControlsAccess,
+		DependencyTypeAdministers:
 		return "regulatory"
-	case horizonmodels.DependencyTypeDependsOn,
-		horizonmodels.DependencyTypeSuppliesTo,
-		horizonmodels.DependencyTypeUsedIn,
-		horizonmodels.DependencyTypeParticipatesIn,
-		horizonmodels.DependencyTypeTradedIn,
-		horizonmodels.DependencyTypeInvestsIn:
+	case DependencyTypeDependsOn,
+		DependencyTypeSuppliesTo,
+		DependencyTypeUsedIn,
+		DependencyTypeParticipatesIn,
+		DependencyTypeTradedIn,
+		DependencyTypeInvestsIn:
 		return "economic"
-	case horizonmodels.DependencyTypeInfluences,
-		horizonmodels.DependencyTypePartnersWith,
-		horizonmodels.DependencyTypeAssociatedWith,
-		horizonmodels.DependencyTypeAbout:
+	case DependencyTypeInfluences,
+		DependencyTypePartnersWith,
+		DependencyTypeAssociatedWith,
+		DependencyTypeAbout:
 		return "informational"
-	case horizonmodels.DependencyTypeOperatesIn,
-		horizonmodels.DependencyTypeLocatedIn,
-		horizonmodels.DependencyTypeInGeoScope,
-		horizonmodels.DependencyTypeAffects,
-		horizonmodels.DependencyTypeTriggeredBy:
+	case DependencyTypeOperatesIn,
+		DependencyTypeLocatedIn,
+		DependencyTypeInGeoScope,
+		DependencyTypeAffects,
+		DependencyTypeTriggeredBy:
 		return "geopolitical"
-	case horizonmodels.DependencyTypeManages:
+	case DependencyTypeManages:
 		return "operational"
 	default:
 		return "mixed"

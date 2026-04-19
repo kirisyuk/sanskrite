@@ -6,6 +6,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestApplyProductRelationDictionarySwapsCanonicalQualifiers(t *testing.T) {
@@ -27,7 +28,7 @@ func TestApplyProductRelationDictionarySwapsCanonicalQualifiers(t *testing.T) {
 		TenantID:         "global",
 		SourceFragmentID: "mri-id",
 		TargetFragmentID: "helium-id",
-		Type:             models.DependencyTypeTransformsInto,
+		Relation:         ah.RelationName("transforms_into"),
 		Qualifiers: map[string]interface{}{
 			"sourceCanonicalPath": "/product/finished/mechanical/assembly/mri-scanner",
 			"targetCanonicalPath": "/product/finished/mechanical/assembly/helium",
@@ -37,8 +38,8 @@ func TestApplyProductRelationDictionarySwapsCanonicalQualifiers(t *testing.T) {
 	sourcePath, targetPath, swapped := repo.applyProductRelationDictionary(
 		ctx,
 		edge,
-		string(models.FragmentTypeProduct),
-		string(models.FragmentTypeProduct),
+		string(ah.FragmentClassProduct),
+		string(ah.FragmentClassProduct),
 		"/product/finished/mechanical/assembly/mri-scanner",
 		"/product/finished/mechanical/assembly/helium",
 	)
@@ -51,8 +52,8 @@ func TestApplyProductRelationDictionarySwapsCanonicalQualifiers(t *testing.T) {
 	if edge.SourceFragmentID != "helium-id" || edge.TargetFragmentID != "mri-id" {
 		t.Fatalf("unexpected fragment ids: %q -> %q", edge.SourceFragmentID, edge.TargetFragmentID)
 	}
-	if edge.Type != models.DependencyTypeUsedIn {
-		t.Fatalf("type=%q, want USED_IN", edge.Type)
+	if edge.Relation != ah.RelationName("used_in") {
+		t.Fatalf("type=%q, want USED_IN", edge.Relation)
 	}
 	if got, _ := edge.Qualifiers["sourceCanonicalPath"].(string); got != "/product/finished/mechanical/assembly/helium" {
 		t.Fatalf("sourceCanonicalPath=%q, want helium", got)
@@ -84,14 +85,14 @@ func TestApplyProductRelationDictionary_SkipsNonProductEndpoints(t *testing.T) {
 		TenantID:         "global",
 		SourceFragmentID: "org-a",
 		TargetFragmentID: "org-b",
-		Type:             models.DependencyTypeTransformsInto,
+		Relation:         ah.RelationName("transforms_into"),
 	}
 
 	sourcePath, targetPath, swapped := repo.applyProductRelationDictionary(
 		ctx,
 		edge,
-		string(models.FragmentTypeOrganization),
-		string(models.FragmentTypeProduct),
+		string(ah.FragmentClassOrg),
+		string(ah.FragmentClassProduct),
 		"/org/us/example-miner",
 		"/product/raw/mineral/extraction/iron-ore",
 	)
@@ -101,8 +102,8 @@ func TestApplyProductRelationDictionary_SkipsNonProductEndpoints(t *testing.T) {
 	if sourcePath != "/org/us/example-miner" || targetPath != "/product/raw/mineral/extraction/iron-ore" {
 		t.Fatalf("unexpected paths after no-op normalization: %q -> %q", sourcePath, targetPath)
 	}
-	if edge.Type != models.DependencyTypeTransformsInto {
-		t.Fatalf("edge type changed unexpectedly: %s", edge.Type)
+	if edge.Relation != ah.RelationName("transforms_into") {
+		t.Fatalf("edge type changed unexpectedly: %s", edge.Relation)
 	}
 	if len(edge.Qualifiers) != 0 {
 		t.Fatalf("expected no qualifiers to be added for non-product endpoints, got %v", edge.Qualifiers)

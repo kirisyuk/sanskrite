@@ -289,8 +289,11 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 			}
 		}
 	}
-	if partial.Type != "" {
-		main.Type = partial.Type
+	if partial.Class != "" {
+		main.Class = partial.Class
+	}
+	if partial.Subtype != "" {
+		main.Subtype = partial.Subtype
 	}
 	if partial.EntityPath != "" {
 		main.EntityPath = partial.EntityPath
@@ -392,7 +395,7 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 			out = append(out, t)
 		}
 		main.Tags = out
-		if main.Type == models.FragmentTypeMarket {
+		if main.Class == FragmentTypeMarket {
 			main.Tags = taxonomy.NormalizeMarketTags(main.Tags)
 		}
 	}
@@ -500,7 +503,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 	spheresLine := strings.Join(dedupNonEmptyStrings(spherePaths), ", ")
 	keywordsLine := strings.Join(dedupNonEmptyStrings(keywords), ", ")
 	specialties = taxonomy.NormalizeSpecialties(specialties)
-	isDomain := fragment != nil && (fragment.Type == models.FragmentTypeDomain || strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/domain/"))
+	isDomain := fragment != nil && (fragment.IsLegacyDomain() || strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/domain/"))
 	chainBlock := ""
 	if strings.TrimSpace(chainContext) != "" {
 		chainBlock = strings.TrimSpace(chainContext) + "\n"
@@ -546,7 +549,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 
 	// Add MARKET decomposition block if applicable
 	decompositionBlock := ""
-	if !isDomain && fragment != nil && (fragment.Type == models.FragmentTypeMarket || fragment.Type == models.FragmentTypeProgram || strings.HasPrefix(fragment.CanonicalPath, "/market/") || strings.HasPrefix(fragment.CanonicalPath, "/program/")) {
+	if !isDomain && fragment != nil && (fragment.Class == FragmentTypeMarket || fragment.IsLegacyProgram() || strings.HasPrefix(fragment.CanonicalPath, "/market/") || strings.HasPrefix(fragment.CanonicalPath, "/program/")) {
 		// Find matching decomposition hint
 		var hint *DecompositionHint
 		for i := range decompositionHints {
@@ -605,10 +608,10 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 	specBlock := buildResearchSpecializationModulesBlock(specialties)
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
 	// Object detail: from entity_semantics (unified per type).
-	profileBlock := entity_semantics.ResearchBlockForPath(fragment.CanonicalPath, fragment.Type, fragment.CommunityType)
-	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlockWithHints(fragment.CanonicalPath, fragment.Type, fragment.CommunityType, fragment.Qualifiers, fragment.Identifiers, fragment.SpherePaths)
+	profileBlock := entity_semantics.ResearchBlockForPath(fragment.CanonicalPath, fragment.Class, fragment.Subtype, fragment.CommunityType)
+	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlockWithHints(fragment.CanonicalPath, fragment.Class, fragment.CommunityType, fragment.Qualifiers, fragment.Identifiers, fragment.SpherePaths)
 	coreBusinessTaxonomyBlock := buildCoreBusinessTaxonomyBlock()
-	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(fragment.CanonicalPath, fragment.Type, fragment.Qualifiers, fragment.Identifiers, fragment.Labels)
+	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(fragment.CanonicalPath, fragment.Class, fragment.Qualifiers, fragment.Identifiers, fragment.Labels)
 	targetTypeEnum := entity_semantics.PromptRelationTargetTypesPipeList()
 	nameRulesBlock := naming.PromptEntityNameNormalizationRules()
 	canonicalRulesBlock := taxonomy.ExtendedCanonicalPathRulesPrompt() + `

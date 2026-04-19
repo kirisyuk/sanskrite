@@ -3,12 +3,11 @@ package scout
 import (
 	"testing"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 func TestEdgeDedupVariant_AssuresByQualifier(t *testing.T) {
 	got := edgeDedupVariant(
-		models.DependencyTypeAssures,
+		DependencyTypeAssures,
 		"ASSURES",
 		map[string]interface{}{"assurance_type": "certification"},
 		"",
@@ -20,7 +19,7 @@ func TestEdgeDedupVariant_AssuresByQualifier(t *testing.T) {
 
 func TestEdgeDedupVariant_AssuresFromLegacyRaw(t *testing.T) {
 	got := edgeDedupVariant(
-		models.DependencyTypeAssures,
+		DependencyTypeAssures,
 		"AUDITED_BY",
 		nil,
 		"",
@@ -32,7 +31,7 @@ func TestEdgeDedupVariant_AssuresFromLegacyRaw(t *testing.T) {
 
 func TestEdgeDedupVariant_NonAssuresEmpty(t *testing.T) {
 	got := edgeDedupVariant(
-		models.DependencyTypeOwns,
+		DependencyTypeOwns,
 		"AUDITED_BY",
 		map[string]interface{}{"assurance_type": "audit"},
 		"",

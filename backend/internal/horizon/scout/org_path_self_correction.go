@@ -101,7 +101,7 @@ func orgCanonicalizationLabel(fragment *models.HorizonFragment, oldPath string) 
 }
 
 func (e *ScoutEngine) maybeUpgradeLegacyOrgPath(_ context.Context, fragment *models.HorizonFragment, effectiveCanonicalPath string) *orgPathUpgrade {
-	if fragment == nil || fragment.Type != models.FragmentTypeOrganization {
+	if fragment == nil || fragment.Class != FragmentTypeOrganization {
 		return nil
 	}
 	oldPath := strings.TrimSpace(effectiveCanonicalPath)
@@ -300,7 +300,7 @@ func (e *ScoutEngine) collectOrgEdgeCleanupCandidates(ctx context.Context, fragm
 		other := getFrag(otherID)
 		candidate := orgEdgeCandidate{
 			EdgeID:             edge.ID,
-			RelationType:       string(edge.Type),
+			RelationType:       string(edge.Relation),
 			Direction:          direction,
 			OtherFragmentID:    otherID,
 			OtherCanonicalPath: "",

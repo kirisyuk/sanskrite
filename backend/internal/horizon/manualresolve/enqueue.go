@@ -27,8 +27,8 @@ func FragmentLikelyNeedsGeoCoordinates(f *horizonmodels.HorizonFragment) bool {
 	if strings.HasPrefix(p, "/org/") || strings.HasPrefix(p, "/gov/") || strings.HasPrefix(p, "/fac/") {
 		return true
 	}
-	switch f.Type {
-	case horizonmodels.FragmentTypeOrganization, horizonmodels.FragmentTypeFacility:
+	switch f.Class {
+	case FragmentTypeOrganization, FragmentTypeFacility:
 		return true
 	default:
 		return false
@@ -70,7 +70,7 @@ func EnqueueMissingGeoForOrgGovFac(
 			LensID:          strings.TrimSpace(lensID),
 			FragmentID:      strings.TrimSpace(f.ID),
 			CanonicalPath:   path,
-			FragmentType:    f.Type,
+			FragmentClass:   f.Class,
 			EnrichmentKinds: []string{horizonmodels.EnrichmentKindGeoCoordinates},
 			Status:          horizonmodels.ManualResolveQueueStatusOpen,
 			Priority:        55,

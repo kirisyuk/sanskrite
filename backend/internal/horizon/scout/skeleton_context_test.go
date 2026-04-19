@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 func TestGovSkeletonContext_DecisionEdgesFieldExists(t *testing.T) {
@@ -15,24 +14,24 @@ func TestGovSkeletonContext_DecisionEdgesFieldExists(t *testing.T) {
 		FragmentID:    "f1",
 		DecisionEdges: []skeletonEdgeView{
 			{
-				Type:       string(models.DependencyTypeGatekeepsDecision),
+				Type:       string(DependencyTypeGatekeepsDecision),
 				SourcePath: "/gov/sa/sama",
 				TargetPath: "/decision/sa-banking/grant-banking-license",
 			},
 			{
-				Type:       string(models.DependencyTypeControlsAccess),
+				Type:       string(DependencyTypeControlsAccess),
 				SourcePath: "/gov/sa/sama",
 				TargetPath: "/org/sa/some-bank",
 			},
 			{
-				Type:       string(models.DependencyTypeUsesMechanism),
+				Type:       string(DependencyTypeUsesMechanism),
 				SourcePath: "/gov/sa/sama",
 				TargetPath: "/mechanism/regulatory/banking-license",
 			},
 		},
 		IncomingStratEdges: []skeletonEdgeView{
 			{
-				Type:       string(models.DependencyTypeAppliesTo),
+				Type:       string(DependencyTypeAppliesTo),
 				SourcePath: "/mechanism/regulatory/capital-adequacy",
 				TargetPath: "/gov/sa/sama",
 			},
@@ -45,13 +44,23 @@ func TestGovSkeletonContext_DecisionEdgesFieldExists(t *testing.T) {
 	}
 	s := string(b)
 
+	// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml +
+	// AGENTS.md): DependencyType*Decision-layer constants now resolve to
+	// AH RelationName values (snake_case), so the skeleton context JSON
+	// surfaces canonical AH tokens — gatekeeps / controls_access /
+	// wields / applies_to — not the pre-migration UPPER_SNAKE wire
+	// names. Asserting on the canonical AH names locks the contract
+	// expected by downstream agent prompts (which the AGENTS.md "agent
+	// emits human-readable snake_case for proposedRelations" rule
+	// pins). The substring assertion otherwise still proves all four
+	// edge types reach the JSON payload.
 	for _, want := range []string{
 		`"decisionEdges"`,
 		`"incomingStrategicEdges"`,
-		`GATEKEEPS_DECISION`,
-		`CONTROLS_ACCESS`,
-		`USES_MECHANISM`,
-		`APPLIES_TO`,
+		`gatekeeps`,
+		`controls_access`,
+		`wields`,
+		`applies_to`,
 		`/decision/sa-banking/grant-banking-license`,
 		`/mechanism/regulatory/banking-license`,
 	} {
@@ -82,13 +91,13 @@ func TestGovSkeletonContext_EmptyDecisionEdgesOmitted(t *testing.T) {
 }
 
 func TestGovStrategicEdgeTypes_ContainsExpected(t *testing.T) {
-	expected := map[models.DependencyType]bool{
-		models.DependencyTypeGatekeepsDecision: false,
-		models.DependencyTypeControlsAccess:    false,
-		models.DependencyTypeUsesMechanism:     false,
-		models.DependencyTypeImposesCondition:   false,
-		models.DependencyTypeAppliesTo:          false,
-		models.DependencyTypeRegulates:          false,
+	expected := map[DependencyType]bool{
+		DependencyTypeGatekeepsDecision: false,
+		DependencyTypeControlsAccess:    false,
+		DependencyTypeUsesMechanism:     false,
+		DependencyTypeImposesCondition:   false,
+		DependencyTypeAppliesTo:          false,
+		DependencyTypeRegulates:          false,
 	}
 
 	for _, et := range govStrategicEdgeTypes {

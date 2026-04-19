@@ -31,7 +31,7 @@ func (f *fakeWikidataClient) ConvertToEntity(context.Context, *coreontology.Wiki
 
 func TestEnrichFragmentFromEntityData_SetsCoordinatesFromP625(t *testing.T) {
 	frag := &hmodels.HorizonFragment{
-		Type: hmodels.FragmentTypeGeoRegion,
+		Class: FragmentTypeGeoRegion,
 		KBRefs: []hmodels.KBReference{
 			{KB: "Wikidata", ExternalID: "Q89"},
 		},
@@ -67,7 +67,7 @@ func TestEnrichFragmentFromEntityData_SetsCoordinatesFromP625(t *testing.T) {
 func TestEnrichFragmentFromEntityData_DoesNotOverwriteCoordinatesWhenDisabled(t *testing.T) {
 	existingISO := "+24.466670+54.366670/"
 	frag := &hmodels.HorizonFragment{
-		Type: hmodels.FragmentTypeGeoRegion,
+		Class: FragmentTypeGeoRegion,
 		Coordinates: &hmodels.Coordinates{
 			Lat: 24.46667,
 			Lon: 54.36667,
@@ -104,7 +104,7 @@ func TestEnrichFragmentFromEntityData_DoesNotOverwriteCoordinatesWhenDisabled(t 
 func TestEnrichFragmentFromEntityData_NullIslandIsOverwrittenWhenOverwriteDisabled(t *testing.T) {
 	nullISO := "+0.000000+0.000000/"
 	frag := &hmodels.HorizonFragment{
-		Type: hmodels.FragmentTypeGeoRegion,
+		Class: FragmentTypeGeoRegion,
 		Coordinates: &hmodels.Coordinates{
 			Lat: 0,
 			Lon: 0,
@@ -137,7 +137,7 @@ func TestEnrichFragmentFromEntityData_NullIslandIsOverwrittenWhenOverwriteDisabl
 
 func TestEnrichFragmentFromWikidataIfPresent_UsesP159LocationFallback(t *testing.T) {
 	frag := &hmodels.HorizonFragment{
-		Type: hmodels.FragmentTypeOrganization,
+		Class: FragmentTypeOrganization,
 		KBRefs: []hmodels.KBReference{
 			{KB: "Wikidata", ExternalID: "Q100"},
 		},

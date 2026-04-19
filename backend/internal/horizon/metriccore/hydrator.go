@@ -371,8 +371,8 @@ func inferOperationalTargetContract(fragment *horizonmodels.HorizonFragment) (st
 		strings.Contains(text, "technical regulation") || strings.Contains(text, "conformity") || strings.Contains(text, "certification") || strings.Contains(text, "inspection") ||
 		strings.Contains(text, "recall") || strings.Contains(text, "standards"):
 		return "product_safety", addReqs("productSafetyEnforcementScore", "counterfeitSeizurePressureScore", "recallExposureScore", "consumerTrustScore")
-	case fragment.Type == horizonmodels.FragmentTypeMarket ||
-		fragment.Type == horizonmodels.FragmentTypeDomain ||
+	case fragment.Class == FragmentTypeMarket ||
+		fragment.IsLegacyDomain() ||
 		strings.Contains(path, "/market/") ||
 		(strings.Contains(path, "/domain/") && (strings.Contains(path, "/product/") || strings.Contains(text, "toy") || strings.Contains(text, "consumer"))) ||
 		strings.Contains(text, "retail") || strings.Contains(text, "marketplace") || strings.Contains(text, "ecommerce") || strings.Contains(text, "consumer"):

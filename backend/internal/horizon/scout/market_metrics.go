@@ -44,7 +44,7 @@ func normalizeMarketMetricKeys(fragment *models.HorizonFragment) {
 		return
 	}
 	// Only apply to MARKET nodes (by type or path prefix).
-	if fragment.Type != models.FragmentTypeMarket && !strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/market/") {
+	if fragment.Class != FragmentTypeMarket && !strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/market/") {
 		return
 	}
 

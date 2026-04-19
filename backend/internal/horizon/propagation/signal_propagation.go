@@ -383,7 +383,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 				if hook, err := adapter.TransferHook(ctx, hookSignal, neighbor.edge, frag); err == nil && hook != nil {
 					traceFactors = mergeFactorMaps(traceFactors, hook.DebugFactors, "adapter.")
 					if hook.Skip {
-						meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), frag, neighbor.fragmentID, neighbor.edge.Type, nextAxis, fragmentCache)
+						meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), frag, neighbor.fragmentID, neighbor.edge.Relation, nextAxis, fragmentCache)
 						traceCollector.add(SignalPropagationTraceEvent{
 							SignalID:     signal.ID,
 							FromFragment: item.fragmentID,
@@ -393,7 +393,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 							FromGeo:      meta.FromGeo,
 							ToGeo:        meta.ToGeo,
 							EdgeID:       neighbor.edge.ID,
-							EdgeType:     string(neighbor.edge.Type),
+							EdgeType:     string(neighbor.edge.Relation),
 							Direction:    neighbor.traversalDirection,
 							Channel:      meta.Channel,
 							Scope:        meta.Scope,
@@ -441,7 +441,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 				traceFactors["artifact_key"] = 1
 			}
 
-			meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), frag, neighbor.fragmentID, neighbor.edge.Type, nextAxis, fragmentCache)
+			meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), frag, neighbor.fragmentID, neighbor.edge.Relation, nextAxis, fragmentCache)
 			if nextAmplitude < MinAmplitudeThreshold {
 				traceCollector.add(SignalPropagationTraceEvent{
 					SignalID:     signal.ID,
@@ -452,7 +452,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 					FromGeo:      meta.FromGeo,
 					ToGeo:        meta.ToGeo,
 					EdgeID:       neighbor.edge.ID,
-					EdgeType:     string(neighbor.edge.Type),
+					EdgeType:     string(neighbor.edge.Relation),
 					Direction:    neighbor.traversalDirection,
 					Channel:      meta.Channel,
 					Scope:        meta.Scope,
@@ -478,7 +478,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 				FromGeo:      meta.FromGeo,
 				ToGeo:        meta.ToGeo,
 				EdgeID:       neighbor.edge.ID,
-				EdgeType:     string(neighbor.edge.Type),
+				EdgeType:     string(neighbor.edge.Relation),
 				Direction:    neighbor.traversalDirection,
 				Channel:      meta.Channel,
 				Scope:        meta.Scope,
@@ -505,7 +505,7 @@ func (e *PropagationEngine) PropagateSignalFromSeeds(
 						FromGeo:      meta.FromGeo,
 						ToGeo:        meta.ToGeo,
 						EdgeID:       neighbor.edge.ID,
-						EdgeType:     string(neighbor.edge.Type),
+						EdgeType:     string(neighbor.edge.Relation),
 						Direction:    neighbor.traversalDirection,
 						Channel:      meta.Channel,
 						Scope:        meta.Scope,
@@ -915,8 +915,8 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 				if hook, err := adapter.TransferHook(ctx, hookSignal, neighbor.edge, frag); err == nil && hook != nil {
 					traceFactors = mergeFactorMaps(traceFactors, hook.DebugFactors, "adapter.")
 					if hook.Skip {
-						debugLog("edge-drop reason=transfer_skip from=%s toFragment=%s edgeType=%s axisIn=%s axisOut=%s ampIn=%.3f ampOut=%.3f", strings.TrimSpace(frag.CanonicalPath), neighbor.fragmentID, neighbor.edge.Type, item.axis, nextAxis, item.amplitude, nextAmplitude)
-						meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), frag, neighbor.fragmentID, neighbor.edge.Type, nextAxis, fragmentCache)
+						debugLog("edge-drop reason=transfer_skip from=%s toFragment=%s edgeType=%s axisIn=%s axisOut=%s ampIn=%.3f ampOut=%.3f", strings.TrimSpace(frag.CanonicalPath), neighbor.fragmentID, neighbor.edge.Relation, item.axis, nextAxis, item.amplitude, nextAmplitude)
+						meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), frag, neighbor.fragmentID, neighbor.edge.Relation, nextAxis, fragmentCache)
 						traceCollector.add(SignalPropagationTraceEvent{
 							SignalID:     signal.ID,
 							FromFragment: item.fragmentID,
@@ -926,7 +926,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 							FromGeo:      meta.FromGeo,
 							ToGeo:        meta.ToGeo,
 							EdgeID:       neighbor.edge.ID,
-							EdgeType:     string(neighbor.edge.Type),
+							EdgeType:     string(neighbor.edge.Relation),
 							Direction:    neighbor.traversalDirection,
 							Channel:      meta.Channel,
 							Scope:        meta.Scope,
@@ -969,9 +969,9 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 			}
 			traceFactors["waveguide_coherence"] = coherence
 
-			meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), frag, neighbor.fragmentID, neighbor.edge.Type, nextAxis, fragmentCache)
+			meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), frag, neighbor.fragmentID, neighbor.edge.Relation, nextAxis, fragmentCache)
 			if nextAmplitude < MinAmplitudeThreshold {
-				debugLog("edge-drop reason=damped_below_threshold from=%s toFragment=%s edgeType=%s axisIn=%s axisOut=%s ampIn=%.3f ampOut=%.3f", strings.TrimSpace(frag.CanonicalPath), neighbor.fragmentID, neighbor.edge.Type, item.axis, nextAxis, item.amplitude, nextAmplitude)
+				debugLog("edge-drop reason=damped_below_threshold from=%s toFragment=%s edgeType=%s axisIn=%s axisOut=%s ampIn=%.3f ampOut=%.3f", strings.TrimSpace(frag.CanonicalPath), neighbor.fragmentID, neighbor.edge.Relation, item.axis, nextAxis, item.amplitude, nextAmplitude)
 				traceCollector.add(SignalPropagationTraceEvent{
 					SignalID:     signal.ID,
 					FromFragment: item.fragmentID,
@@ -981,7 +981,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 					FromGeo:      meta.FromGeo,
 					ToGeo:        meta.ToGeo,
 					EdgeID:       neighbor.edge.ID,
-					EdgeType:     string(neighbor.edge.Type),
+					EdgeType:     string(neighbor.edge.Relation),
 					Direction:    neighbor.traversalDirection,
 					Channel:      meta.Channel,
 					Scope:        meta.Scope,
@@ -1006,7 +1006,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 				FromGeo:      meta.FromGeo,
 				ToGeo:        meta.ToGeo,
 				EdgeID:       neighbor.edge.ID,
-				EdgeType:     string(neighbor.edge.Type),
+				EdgeType:     string(neighbor.edge.Relation),
 				Direction:    neighbor.traversalDirection,
 				Channel:      meta.Channel,
 				Scope:        meta.Scope,
@@ -1019,11 +1019,11 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 				Outcome:      "propagated",
 				Factors:      traceFactors,
 			})
-			debugLog("enqueue from=%s toFragment=%s edgeType=%s axisIn=%s axisOut=%s ampIn=%.3f ampOut=%.3f nextHop=%d", strings.TrimSpace(frag.CanonicalPath), neighbor.fragmentID, neighbor.edge.Type, item.axis, nextAxis, item.amplitude, nextAmplitude, item.hops+1)
+			debugLog("enqueue from=%s toFragment=%s edgeType=%s axisIn=%s axisOut=%s ampIn=%.3f ampOut=%.3f nextHop=%d", strings.TrimSpace(frag.CanonicalPath), neighbor.fragmentID, neighbor.edge.Relation, item.axis, nextAxis, item.amplitude, nextAmplitude, item.hops+1)
 			nextKey := neighbor.fragmentID + "|" + nextAxis
 			if best, ok := frontier[nextKey]; ok {
 				if best.amplitude > nextAmplitude || (best.amplitude == nextAmplitude && best.hops <= item.hops+1) {
-					debugLog("edge-drop reason=frontier_weaker_duplicate from=%s toFragment=%s edgeType=%s axisIn=%s axisOut=%s ampIn=%.3f ampOut=%.3f", strings.TrimSpace(frag.CanonicalPath), neighbor.fragmentID, neighbor.edge.Type, item.axis, nextAxis, item.amplitude, nextAmplitude)
+					debugLog("edge-drop reason=frontier_weaker_duplicate from=%s toFragment=%s edgeType=%s axisIn=%s axisOut=%s ampIn=%.3f ampOut=%.3f", strings.TrimSpace(frag.CanonicalPath), neighbor.fragmentID, neighbor.edge.Relation, item.axis, nextAxis, item.amplitude, nextAmplitude)
 					traceCollector.add(SignalPropagationTraceEvent{
 						SignalID:     signal.ID,
 						FromFragment: item.fragmentID,
@@ -1033,7 +1033,7 @@ func (e *PropagationEngine) SimulateSignalFromSeeds(
 						FromGeo:      meta.FromGeo,
 						ToGeo:        meta.ToGeo,
 						EdgeID:       neighbor.edge.ID,
-						EdgeType:     string(neighbor.edge.Type),
+						EdgeType:     string(neighbor.edge.Relation),
 						Direction:    neighbor.traversalDirection,
 						Channel:      meta.Channel,
 						Scope:        meta.Scope,
@@ -1129,8 +1129,8 @@ func (e *PropagationEngine) findSeedNodes(ctx context.Context, signal *horizonmo
 	if signal.LocationPath != "" {
 		locationFrag, err := e.fragmentsRepo.GetByCanonicalPath(ctx, signal.LocationPath)
 		if err == nil && locationFrag != nil {
-			operatesInType := horizonmodels.DependencyTypeOperatesIn
-			locatedInType := horizonmodels.DependencyTypeLocatedIn
+			operatesInType := DependencyTypeOperatesIn
+			locatedInType := DependencyTypeLocatedIn
 			operatesInEdges, _ := e.edgesRepo.ListByTarget(ctx, "global", locationFrag.ID, &operatesInType, 100)
 			locatedInEdges, _ := e.edgesRepo.ListByTarget(ctx, "global", locationFrag.ID, &locatedInType, 100)
 
@@ -1174,11 +1174,17 @@ func (e *PropagationEngine) getNeighborsViaStrongEdges(
 	allowSourceToTarget := propagationModeAllowsTraversal(mode, "source_to_target")
 	allowTargetToSource := propagationModeAllowsTraversal(mode, "target_to_source")
 
-	// Build set of strong edge types -> spec
-	strongSpecs := make(map[horizonmodels.DependencyType]*horizonmodels.StrongEdgeSpec)
+	// Build set of strong edge types -> spec. PropagationProfile.StrongEdges
+	// is authored in AH RelationName SoT (see DefaultPropagationProfiles);
+	// keys match edge.Relation directly.
+	strongSpecs := make(map[DependencyType]*horizonmodels.StrongEdgeSpec)
 	for _, spec := range profile.StrongEdges {
 		s := spec
-		strongSpecs[horizonmodels.DependencyType(spec.Type)] = &s
+		raw := strings.TrimSpace(spec.Type)
+		if raw == "" {
+			continue
+		}
+		strongSpecs[DependencyType(raw)] = &s
 	}
 
 	debugSignalID := strings.TrimSpace(os.Getenv("HORIZON_PROPAGATION_DEBUG_SIGNAL_ID"))
@@ -1222,7 +1228,7 @@ func (e *PropagationEngine) getNeighborsViaStrongEdges(
 		if item.edge == nil || strings.TrimSpace(item.fragmentID) == "" {
 			return
 		}
-		key := strings.TrimSpace(item.fragmentID) + "|" + strings.TrimSpace(item.traversalDirection) + "|" + strings.TrimSpace(string(item.edge.Type))
+		key := strings.TrimSpace(item.fragmentID) + "|" + strings.TrimSpace(item.traversalDirection) + "|" + strings.TrimSpace(string(item.edge.Relation))
 		if _, ok := seen[key]; ok {
 			return
 		}
@@ -1235,7 +1241,7 @@ func (e *PropagationEngine) getNeighborsViaStrongEdges(
 		if edge == nil || edge.IsQuarantined() || !edge.IsActiveNow() {
 			continue
 		}
-		spec := strongSpecs[edge.Type]
+		spec := strongSpecs[edge.Relation]
 		if spec == nil {
 			continue
 		}
@@ -1262,7 +1268,7 @@ func (e *PropagationEngine) getNeighborsViaStrongEdges(
 		if edge == nil || edge.IsQuarantined() || !edge.IsActiveNow() {
 			continue
 		}
-		spec := strongSpecs[edge.Type]
+		spec := strongSpecs[edge.Relation]
 		if spec == nil {
 			continue
 		}
@@ -1287,7 +1293,7 @@ func (e *PropagationEngine) getNeighborsViaStrongEdges(
 	if len(neighbors) > 0 {
 		// Prefer explicit strong edges whenever they already exist.
 		// Virtual supply-link overlay stays as a fallback only for sparse nodes.
-		debugLog("neighbors-virtual-skipped path=%s fragmentId=%s type=%s direct=%d", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(frag.ID), frag.Type, len(neighbors))
+		debugLog("neighbors-virtual-skipped path=%s fragmentId=%s type=%s direct=%d", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(frag.ID), frag.Class, len(neighbors))
 		debugLog("neighbors-done path=%s fragmentId=%s total=%d", strings.TrimSpace(frag.CanonicalPath), strings.TrimSpace(frag.ID), len(neighbors))
 		return neighbors, nil
 	}
@@ -1412,10 +1418,16 @@ func (e *PropagationEngine) calculateDampedAmplitudeWithBreakdown(
 	}
 	factors["edge_amplification"] = ampFactor
 
-	// Strong-edge weight
+	// Strong-edge weight. PropagationProfile.StrongEdges is authored in AH
+	// RelationName SoT; spec.Type matches edge.Relation directly.
 	weight := 1.0
+	edgeRel := string(edge.Relation)
 	for _, spec := range profile.StrongEdges {
-		if spec.Type == string(edge.Type) {
+		raw := strings.TrimSpace(spec.Type)
+		if raw == "" {
+			continue
+		}
+		if raw == edgeRel {
 			weight = spec.Weight
 			break
 		}
@@ -1430,7 +1442,7 @@ func (e *PropagationEngine) calculateDampedAmplitudeWithBreakdown(
 
 	// Substitutability reduces signal (easy to bypass = weaker propagation)
 	subFactor := 1.0
-	if sub := edge.GetSubstitutability(); sub > 0 {
+	if sub := edgeSubstitutability(edge); sub > 0 {
 		subFactor = (1 - sub*0.5)
 		out *= subFactor
 	}
@@ -1509,7 +1521,7 @@ func (e *PropagationEngine) applyTransformation(
 	profile *horizonmodels.PropagationProfile,
 ) (string, float64) {
 	for _, trans := range profile.Transformations {
-		if trans.OnEdgeType == string(edge.Type) {
+		if trans.OnEdgeType == string(edge.Relation) {
 			return trans.ToAxis, trans.Factor
 		}
 	}
@@ -1603,7 +1615,7 @@ func (e *PropagationEngine) computeTransferTraceMeta(
 	traceEnabled bool,
 	fromFrag *horizonmodels.HorizonFragment,
 	toFragmentID string,
-	edgeType horizonmodels.DependencyType,
+	edgeType DependencyType,
 	axis string,
 	fragmentCache map[string]*horizonmodels.HorizonFragment,
 ) transferTraceMeta {
@@ -1651,14 +1663,14 @@ func spatialBindingFactor(edge *horizonmodels.DependencyEdge, axis string) float
 		return 1.0
 	}
 	factor := 1.0
-	zoneRefs := qualifierStringSlice(edge.Qualifiers[horizonmodels.QualifierZoneRefs])
-	affectedZoneRefs := qualifierStringSlice(edge.Qualifiers[horizonmodels.QualifierAffectedZoneRefs])
-	spatialSemantics := qualifierStringSlice(edge.Qualifiers[horizonmodels.QualifierSpatialSemantics])
-	pathStress, _ := qualifierFloatValue(edge.Qualifiers[horizonmodels.QualifierPathStressScore])
-	pathFragility, _ := qualifierFloatValue(edge.Qualifiers[horizonmodels.QualifierPathFragility])
-	pathRerouteability, _ := qualifierFloatValue(edge.Qualifiers[horizonmodels.QualifierPathRerouteability])
-	pathZonePressure, _ := qualifierFloatValue(edge.Qualifiers[horizonmodels.QualifierPathZonePressure])
-	pathAffectedPressure, _ := qualifierFloatValue(edge.Qualifiers[horizonmodels.QualifierPathAffectedPressure])
+	zoneRefs := qualifierStringSlice(edge.Qualifiers[QualifierZoneRefs])
+	affectedZoneRefs := qualifierStringSlice(edge.Qualifiers[QualifierAffectedZoneRefs])
+	spatialSemantics := qualifierStringSlice(edge.Qualifiers[QualifierSpatialSemantics])
+	pathStress, _ := qualifierFloatValue(edge.Qualifiers[QualifierPathStressScore])
+	pathFragility, _ := qualifierFloatValue(edge.Qualifiers[QualifierPathFragility])
+	pathRerouteability, _ := qualifierFloatValue(edge.Qualifiers[QualifierPathRerouteability])
+	pathZonePressure, _ := qualifierFloatValue(edge.Qualifiers[QualifierPathZonePressure])
+	pathAffectedPressure, _ := qualifierFloatValue(edge.Qualifiers[QualifierPathAffectedPressure])
 	if len(zoneRefs) > 0 {
 		factor *= 1 + math.Min(float64(len(zoneRefs)), 4)*0.03
 		if axis == horizonmodels.AxisLogisticsCapacity || axis == horizonmodels.AxisLogisticsLatency || axis == horizonmodels.AxisPhysicalFlowSupply {
@@ -1678,7 +1690,7 @@ func spatialBindingFactor(edge *horizonmodels.DependencyEdge, axis string) float
 	if containsAnyRef(spatialSemantics, "chokepoint_exposed") && (axis == horizonmodels.AxisGeoConflict || axis == horizonmodels.AxisLogisticsCapacity || axis == horizonmodels.AxisLogisticsLatency) {
 		factor *= 1.08
 	}
-	if bindingConfidence, ok := qualifierFloatValue(edge.Qualifiers[horizonmodels.QualifierBindingConfidence]); ok && bindingConfidence > 0 {
+	if bindingConfidence, ok := qualifierFloatValue(edge.Qualifiers[QualifierBindingConfidence]); ok && bindingConfidence > 0 {
 		factor *= 1 + math.Min(bindingConfidence, 1.0)*0.12
 	}
 	if pathStress > 0 {

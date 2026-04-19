@@ -25,7 +25,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 	sourceFragment *models.HorizonFragment,
 	targetFragment *models.HorizonFragment,
 	targetID string,
-	targetType models.FragmentType,
+	targetType FragmentType,
 	targetPath string,
 	rel agents.DiscoveredRelation,
 	rawRelationType string,
@@ -45,7 +45,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 		return nil
 	}
 
-	edgeType := models.DependencyType(strings.TrimSpace(rel.RelationType))
+	edgeType := DependencyType(strings.TrimSpace(rel.RelationType))
 	edgeSourceID := sourceFragment.ID
 	edgeTargetID := targetID
 	relConfidence := rel.Confidence
@@ -78,7 +78,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 					srcType = InferFragmentTypeFromCanonicalPath(explicitSourcePath)
 				}
 				if srcType == "" {
-					srcType = models.FragmentTypeOrganization
+					srcType = FragmentTypeOrganization
 				}
 				now := time.Now().UTC()
 				srcName := strings.TrimSpace(rel.SourceName)
@@ -91,7 +91,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 				newSrcFrag := &models.HorizonFragment{
 					TenantID:      "global",
 					CanonicalPath: explicitSourcePath,
-					Type:          srcType,
+					Class:         srcType,
 					Labels:        map[string]string{"en": srcName},
 					Status:        "active",
 					Governance: models.Governance{
@@ -126,7 +126,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 		// When explicit source is used and target is THIS FRAGMENT, set target to sourceFragment.
 		if strings.TrimSpace(rel.TargetCanonicalPath) == strings.TrimSpace(sourceFragment.CanonicalPath) {
 			edgeTargetID = sourceFragment.ID
-			targetType = sourceFragment.Type
+			targetType = sourceFragment.Class
 		}
 	}
 
@@ -135,7 +135,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 	edgeSourceID, edgeTargetID, edgeType, directionChanged := normalizeRelationEdge(explicitSourceFragment, edgeSourceID, edgeTargetID, edgeType, targetType, enableManagement, rel.Qualifiers)
 	switch edgeType {
 	case "SUBSIDIARY_OF":
-		edgeType = models.DependencyTypeOwns
+		edgeType = DependencyTypeOwns
 		edgeSourceID, edgeTargetID = targetID, sourceFragment.ID
 		directionChanged = true
 	}
@@ -175,12 +175,12 @@ func (e *ScoutEngine) materializeRelationEdge(
 	}
 
 	// Resolve *actual* endpoint types for validation (must match edgeSourceID/edgeTargetID after swaps).
-	resolveTypeByID := func(id string) models.FragmentType {
+	resolveTypeByID := func(id string) FragmentType {
 		id = strings.TrimSpace(id)
 		if id == "" {
 			return ""
 		}
-		resolveFromPath := func(path string, current models.FragmentType) models.FragmentType {
+		resolveFromPath := func(path string, current FragmentType) FragmentType {
 			inferred := InferFragmentTypeFromCanonicalPath(strings.TrimSpace(path))
 			if inferred == "" {
 				return current
@@ -192,17 +192,17 @@ func (e *ScoutEngine) materializeRelationEdge(
 			return current
 		}
 		if explicitSourceFragment != nil && strings.TrimSpace(explicitSourceFragment.ID) == id {
-			return resolveFromPath(explicitSourceFragment.CanonicalPath, explicitSourceFragment.Type)
+			return resolveFromPath(explicitSourceFragment.CanonicalPath, explicitSourceFragment.Class)
 		}
 		if sourceFragment != nil && strings.TrimSpace(sourceFragment.ID) == id {
-			return resolveFromPath(sourceFragment.CanonicalPath, sourceFragment.Type)
+			return resolveFromPath(sourceFragment.CanonicalPath, sourceFragment.Class)
 		}
 		if targetFragment != nil && strings.TrimSpace(targetFragment.ID) == id {
-			return resolveFromPath(targetFragment.CanonicalPath, targetFragment.Type)
+			return resolveFromPath(targetFragment.CanonicalPath, targetFragment.Class)
 		}
 		if e.fragmentsRepo != nil {
 			if f, ferr := e.fragmentsRepo.Get(ctx, id); ferr == nil && f != nil {
-				return resolveFromPath(f.CanonicalPath, f.Type)
+				return resolveFromPath(f.CanonicalPath, f.Class)
 			}
 		}
 		return ""
@@ -247,7 +247,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 		RawRelationType:   rawRelationType,
 		Reason:            strings.TrimSpace(rel.Reason),
 		Qualifiers:        rel.Qualifiers,
-		OwnershipEvidence: models.HasOwnershipEvidence(rel.Reason, rel.Qualifiers, rel.Metrics),
+		OwnershipEvidence: HasOwnershipEvidence(rel.Reason, rel.Qualifiers, rel.Metrics),
 		SupplyChainMode:   isSupplyChainMode,
 	})
 	if canon.Changed {
@@ -366,7 +366,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 					edgeSourceID, edgeTargetID, edgeType, _ = NormalizeSymmetricEdge(edgeSourceID, edgeTargetID, edgeType)
 				},
 				RewriteType: func(newType string, _ string) {
-					newEdgeType := models.DependencyType(strings.TrimSpace(newType))
+					newEdgeType := DependencyType(strings.TrimSpace(newType))
 					if newEdgeType == "" || newEdgeType == edgeType {
 						return
 					}
@@ -413,7 +413,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 		st := srcTypeActual
 		tt := dstTypeActual
 		if st == "" {
-			st = sourceFragment.Type
+			st = sourceFragment.Class
 		}
 		if tt == "" {
 			tt = targetType
@@ -499,7 +499,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 		TenantID:         "global",
 		SourceFragmentID: edgeSourceID,
 		TargetFragmentID: edgeTargetID,
-		Type:             edgeType,
+		Relation:         edgeType,
 		Properties: models.EdgeProperties{
 			Criticality:   normalizeEdgeConfidence(relConfidence),
 			Amplification: 1.0,
@@ -574,25 +574,25 @@ func (e *ScoutEngine) materializeRelationEdge(
 		edge.Qualifiers["canonicalizedGovRegulatesSwap"] = true
 		edge.Qualifiers["govRegulatesSwapReason"] = canon.GovRegulatesSwapReason
 	}
-	if edge.Type == models.DependencyTypeAssures {
+	if edge.Relation == DependencyTypeAssures {
 		if normalizeAssuranceTypeQualifier(edge.Qualifiers) == "" {
-			if dedupVariant := edgeDedupVariant(edge.Type, rawRelationType, edge.Qualifiers, rel.Reason); dedupVariant == "assurance_type=audit" {
+			if dedupVariant := edgeDedupVariant(edge.Relation, rawRelationType, edge.Qualifiers, rel.Reason); dedupVariant == "assurance_type=audit" {
 				edge.Qualifiers["assurance_type"] = "audit"
 			}
 		}
 	}
 	edge.SetPolicyStatus(policyStatus, policyReason, policyPenalty)
 	if canonFromEdgeType != "" {
-		edge.SetPolicyOriginalType(models.DependencyType(canonFromEdgeType))
+		edge.SetPolicyOriginalType(DependencyType(canonFromEdgeType))
 	}
 	applyBestEffortEdgeEnrichment(edge, resolvedSourcePath, resolvedTargetPath)
-	dedupVariant = edgeDedupVariant(edge.Type, rawRelationType, edge.Qualifiers, rel.Reason)
-	if e.hasDuplicateEdgeByVariant(ctx, "global", edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, dedupVariant) {
-		e.rememberEdgeDedupRecently(edgeDedupKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, dedupVariant))
+	dedupVariant = edgeDedupVariant(edge.Relation, rawRelationType, edge.Qualifiers, rel.Reason)
+	if e.hasDuplicateEdgeByVariant(ctx, "global", edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation, dedupVariant) {
+		e.rememberEdgeDedupRecently(edgeDedupKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation, dedupVariant))
 		return nil
 	}
 
-	e.rememberEdgeDedupRecently(edgeDedupKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, dedupVariant))
+	e.rememberEdgeDedupRecently(edgeDedupKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation, dedupVariant))
 
 	// Final allowlist gate (supply-chain): never persist out-of-contract types.
 	// Defense-in-depth: catches any edge that slipped through pre-materialization guard or canonicalization.
@@ -647,14 +647,14 @@ func (e *ScoutEngine) materializeRelationEdge(
 		"targetCanonicalPath": resolvedTargetPath,
 		"sourceLabel":         strings.TrimSpace(sourceFragment.Labels["en"]),
 		"targetLabel":         strings.TrimSpace(firstNonEmpty(rel.TargetShortName, rel.TargetName, rel.TargetLegalName)),
-		"type":                string(edge.Type),
+		"type":                string(edge.Relation),
 		"properties":          edge.Properties,
 		"qualifiers":          edge.Qualifiers,
 	})
 	return nil
 }
 
-func edgeDedupKey(sourceID, targetID string, edgeType models.DependencyType, variant string) string {
+func edgeDedupKey(sourceID, targetID string, edgeType DependencyType, variant string) string {
 	base := EdgeKey(sourceID, targetID, edgeType)
 	variant = strings.TrimSpace(variant)
 	if variant == "" {
@@ -664,12 +664,12 @@ func edgeDedupKey(sourceID, targetID string, edgeType models.DependencyType, var
 }
 
 func edgeDedupVariant(
-	edgeType models.DependencyType,
+	edgeType DependencyType,
 	rawRelationType string,
 	qualifiers map[string]interface{},
 	reason string,
 ) string {
-	if edgeType != models.DependencyTypeAssures {
+	if edgeType != DependencyTypeAssures {
 		return ""
 	}
 	if t := normalizeAssuranceTypeQualifier(qualifiers); t != "" {
@@ -715,7 +715,7 @@ func normalizeAssuranceTypeQualifier(qualifiers map[string]interface{}) string {
 func (e *ScoutEngine) hasDuplicateEdgeByVariant(
 	ctx context.Context,
 	tenantID, sourceID, targetID string,
-	edgeType models.DependencyType,
+	edgeType DependencyType,
 	variant string,
 ) bool {
 	if e == nil || e.edgesRepo == nil {
@@ -734,7 +734,7 @@ func (e *ScoutEngine) hasDuplicateEdgeByVariant(
 		if ex == nil {
 			continue
 		}
-		if edgeDedupVariant(ex.Type, "", ex.Qualifiers, "") == variant {
+		if edgeDedupVariant(ex.Relation, "", ex.Qualifiers, "") == variant {
 			return true
 		}
 	}
@@ -744,7 +744,7 @@ func (e *ScoutEngine) hasDuplicateEdgeByVariant(
 // isCrossJurisdictionSuspicious checks if an edge between two jurisdictions is suspicious
 // based on the edge type. For "local" relations like REGULATES, CONTROLS_ACCESS, etc.,
 // cross-jurisdiction edges are likely errors (e.g., Indian regulator controlling Saudi company).
-func isCrossJurisdictionSuspicious(edgeType models.DependencyType, srcPath, dstPath string) bool {
+func isCrossJurisdictionSuspicious(edgeType DependencyType, srcPath, dstPath string) bool {
 	srcJurisdiction := extractJurisdiction(srcPath)
 	dstJurisdiction := extractJurisdiction(dstPath) // If either jurisdiction is empty/global, not suspicious
 	if srcJurisdiction == "" || dstJurisdiction == "" {
@@ -760,9 +760,9 @@ func isCrossJurisdictionSuspicious(edgeType models.DependencyType, srcPath, dstP
 	}
 
 	// Check if edge type is "local" (should typically be same jurisdiction)
-	localEdgeTypes := map[models.DependencyType]bool{
-		models.DependencyTypeRegulates:      true,
-		models.DependencyTypeControlsAccess: true,
+	localEdgeTypes := map[DependencyType]bool{
+		DependencyTypeRegulates:      true,
+		DependencyTypeControlsAccess: true,
 		"GATEKEEPS":                         true,
 		"GATEKEEPS_DECISION":                true,
 		"LICENSED_BY":                       true,
@@ -853,7 +853,7 @@ func (b *EdgeBatchBuffer) Flush(ctx context.Context, e *ScoutEngine) error {
 			"targetCanonicalPath": meta.targetPath,
 			"sourceLabel":         meta.sourceLabel,
 			"targetLabel":         meta.targetLabel,
-			"type":                string(edge.Type),
+			"type":                string(edge.Relation),
 			"properties":          edge.Properties,
 			"qualifiers":          edge.Qualifiers,
 		})
@@ -865,10 +865,10 @@ func (b *EdgeBatchBuffer) Flush(ctx context.Context, e *ScoutEngine) error {
 
 // detectLikelyInvertedOwnershipEdge returns true when Reason or qualifiers suggest the edge direction
 // is inverted (e.g. "owned by" implies target->source but we have source->target).
-func detectLikelyInvertedOwnershipEdge(edgeType models.DependencyType, rel agents.DiscoveredRelation) bool {
+func detectLikelyInvertedOwnershipEdge(edgeType DependencyType, rel agents.DiscoveredRelation) bool {
 	switch edgeType {
-	case models.DependencyTypeOwns, models.DependencyTypeInvestsIn,
-		models.DependencyTypeControls, models.DependencyTypeAssures:
+	case DependencyTypeOwns, DependencyTypeInvestsIn,
+		DependencyTypeControls, DependencyTypeAssures:
 		// check
 	default:
 		return false

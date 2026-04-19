@@ -111,7 +111,7 @@ func ResolveAndAttachWikidataQIDIfMissing(
 	if !opts.Enabled {
 		return nil, nil, false, nil
 	}
-	if fragment.Type != hmodels.FragmentTypeOrganization && fragment.Type != hmodels.FragmentTypePerson {
+	if fragment.Class != FragmentTypeOrganization && fragment.Class != FragmentTypePerson {
 		return nil, nil, false, nil
 	}
 	if strings.TrimSpace(extractWikidataIDFromFragment(fragment)) != "" {
@@ -137,10 +137,10 @@ func ResolveAndAttachWikidataQIDIfMissing(
 
 	// Type gating using P31/Q5.
 	isHuman := looksHuman(ed)
-	if fragment.Type == hmodels.FragmentTypePerson && !isHuman {
+	if fragment.Class == FragmentTypePerson && !isHuman {
 		return best, ed, false, fmt.Errorf("qid %s is not human (P31=%v)", best.QID, extractEntityIDs(ed.PropertiesRaw, "P31"))
 	}
-	if fragment.Type == hmodels.FragmentTypeOrganization && isHuman {
+	if fragment.Class == FragmentTypeOrganization && isHuman {
 		return best, ed, false, fmt.Errorf("qid %s is human (unexpected for org)", best.QID)
 	}
 
@@ -260,7 +260,7 @@ func pickQueries(f *hmodels.HorizonFragment) []string {
 		out = append(out, s)
 	}
 	// primary
-	if f.Type == hmodels.FragmentTypePerson {
+	if f.Class == FragmentTypePerson {
 		add(label)
 		add(legal)
 		add(short)
@@ -301,7 +301,7 @@ func scoreCandidate(f *hmodels.HorizonFragment, query, candLabel, candDesc strin
 		}
 	}
 	// Org-specific suffix normalization bonus.
-	if f != nil && f.Type == hmodels.FragmentTypeOrganization {
+	if f != nil && f.Class == FragmentTypeOrganization {
 		q2 := normalizeLegalName(query)
 		l2 := normalizeLegalName(candLabel)
 		if q2 != "" && l2 != "" && q2 == l2 {
@@ -319,7 +319,7 @@ func scoreCandidate(f *hmodels.HorizonFragment, query, candLabel, candDesc strin
 	}
 
 	// Soft org-like boost for orgs.
-	if f != nil && f.Type == hmodels.FragmentTypeOrganization {
+	if f != nil && f.Class == FragmentTypeOrganization {
 		if strings.Contains(txt, "company") || strings.Contains(txt, "organization") || strings.Contains(txt, "bank") || strings.Contains(txt, "airline") || strings.Contains(txt, "government") {
 			score += 10
 		}

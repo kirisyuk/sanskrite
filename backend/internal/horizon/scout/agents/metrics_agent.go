@@ -105,18 +105,18 @@ func metricBaseName(metricPathOrName string) string {
 	return s
 }
 
-func defaultMetricSpecsForType(t models.FragmentType) []metricSpec {
+func defaultMetricSpecsForType(t FragmentType) []metricSpec {
 	// Standardized, type-aware defaults.
 	// Note: these are intentionally conservative; dynamic requested metrics can extend this set.
 	switch t {
-	case models.FragmentTypePerson:
+	case FragmentTypePerson:
 		return []metricSpec{
 			{Path: "/metric/risk/public_perception", Kind: metricKindDirectional},
 			{Path: "/metric/risk/market_sentiment", Kind: metricKindDirectional},
 			{Path: "/metric/risk/geopolitical_alignment", Kind: metricKindDirectional},
 			{Path: "/metric/risk/sanction_exposure", Kind: metricKindMagnitude},
 		}
-	case models.FragmentTypeGeoRegion:
+	case FragmentTypeGeoRegion:
 		return []metricSpec{
 			{Path: "/metric/risk/stability_index", Kind: metricKindMagnitude},
 			{Path: "/metric/risk/corruption_vulnerability", Kind: metricKindMagnitude},
@@ -124,14 +124,14 @@ func defaultMetricSpecsForType(t models.FragmentType) []metricSpec {
 			{Path: "/metric/risk/geopolitical_alignment", Kind: metricKindDirectional},
 			{Path: "/metric/risk/public_perception", Kind: metricKindDirectional},
 		}
-	case models.FragmentTypeEvent:
+	case FragmentTypeEvent:
 		return []metricSpec{
 			{Path: "/metric/risk/market_sentiment", Kind: metricKindDirectional},
 			{Path: "/metric/risk/public_perception", Kind: metricKindDirectional},
 			{Path: "/metric/risk/geopolitical_alignment", Kind: metricKindDirectional},
 			{Path: "/metric/risk/sanction_exposure", Kind: metricKindMagnitude},
 		}
-	case models.FragmentTypeFacility:
+	case FragmentTypeFacility:
 		return []metricSpec{
 			{Path: "/metric/risk/operational_health", Kind: metricKindMagnitude},
 			{Path: "/metric/risk/capacity_utilization", Kind: metricKindMagnitude},
@@ -140,13 +140,13 @@ func defaultMetricSpecsForType(t models.FragmentType) []metricSpec {
 			{Path: "/metric/risk/corruption_vulnerability", Kind: metricKindMagnitude},
 			{Path: "/metric/risk/sanction_exposure", Kind: metricKindMagnitude},
 		}
-	case models.FragmentTypeProduct:
+	case FragmentTypeProduct:
 		return []metricSpec{
 			{Path: "/metric/risk/supply_chain_criticality", Kind: metricKindMagnitude},
 			{Path: "/metric/risk/market_sentiment", Kind: metricKindDirectional},
 			{Path: "/metric/risk/public_perception", Kind: metricKindDirectional},
 		}
-	case models.FragmentTypeOrganization:
+	case FragmentTypeOrganization:
 		fallthrough
 	default:
 		return []metricSpec{
@@ -165,7 +165,7 @@ func defaultMetricSpecsForType(t models.FragmentType) []metricSpec {
 
 // RequiredMetricPathsForType is the metrics schema contract for runtime refresh decisions:
 // it returns canonical metric paths that must exist (type defaults + explicit requested metrics).
-func RequiredMetricPathsForType(t models.FragmentType, requestedMetrics []string) []string {
+func RequiredMetricPathsForType(t FragmentType, requestedMetrics []string) []string {
 	specs := defaultMetricSpecsForType(t)
 	for _, rm := range requestedMetrics {
 		p := canonicalizeMetricPath(rm)
@@ -214,7 +214,7 @@ func (a *MetricsAgent) ComputeState(
 	}
 
 	// Build allowed metrics set: defaults by type + explicitly requested metrics.
-	specs := defaultMetricSpecsForType(fragment.Type)
+	specs := defaultMetricSpecsForType(fragment.Class)
 	for _, rm := range requestedMetrics {
 		p := canonicalizeMetricPath(rm)
 		if p == "" {
@@ -238,7 +238,7 @@ func (a *MetricsAgent) ComputeState(
 		allowed[cp] = s.Kind
 	}
 	if len(allowed) == 0 {
-		return nil, fmt.Errorf("metrics agent: no allowed metrics for type=%s", fragment.Type)
+		return nil, fmt.Errorf("metrics agent: no allowed metrics for type=%s", fragment.Class)
 	}
 
 	prompt := a.buildMetricsPrompt(fragment, sourceURLs, aggregatedContent, relations, specs, requestedMetrics)

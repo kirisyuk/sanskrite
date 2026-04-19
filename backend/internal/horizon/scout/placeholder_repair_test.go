@@ -8,7 +8,7 @@ import (
 
 func TestRepairSyntheticOrgCanonicalPath_RepairsGovKnownGeoPlaceholderSlug(t *testing.T) {
 	frag := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/gov/qa/na",
 		Labels: map[string]string{
 			"en": "Government of Qatar",

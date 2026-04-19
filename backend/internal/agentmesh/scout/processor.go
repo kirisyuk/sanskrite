@@ -1658,7 +1658,8 @@ func (p *Processor) buildPlanningContext(ctx context.Context, req InvestigationR
 	out["targetFragment"] = map[string]any{
 		"id":            strings.TrimSpace(fragment.ID),
 		"canonicalPath": strings.TrimSpace(fragment.CanonicalPath),
-		"type":          string(fragment.Type),
+		"class":         string(fragment.Class),
+		"subtype":       strings.TrimSpace(fragment.Subtype),
 		"label":         firstNonEmpty(fragment.Labels["en"], fragment.Identifiers["shortName"]),
 	}
 	if p.edges != nil && strings.TrimSpace(fragment.ID) != "" {
@@ -8019,10 +8020,10 @@ func summarizeEdges(edges []*horizonmodels.DependencyEdge) []map[string]any {
 			continue
 		}
 		out = append(out, map[string]any{
-			"id":     strings.TrimSpace(edge.ID),
-			"type":   string(edge.Type),
-			"source": strings.TrimSpace(edge.SourceFragmentID),
-			"target": strings.TrimSpace(edge.TargetFragmentID),
+			"id":       strings.TrimSpace(edge.ID),
+			"relation": string(edge.Relation),
+			"source":   strings.TrimSpace(edge.SourceFragmentID),
+			"target":   strings.TrimSpace(edge.TargetFragmentID),
 		})
 	}
 	return out

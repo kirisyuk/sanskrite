@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestLocationSeedCapForSignal(t *testing.T) {
@@ -23,10 +24,10 @@ func TestLocationFallbackPriorityForAxisConflictPrefersBusinessSeedsOverGov(t *t
 		Axis:         horizonmodels.AxisGeoConflict,
 		LocationPath: "/loc/ir",
 	}
-	loc := &horizonmodels.HorizonFragment{CanonicalPath: "/loc/ir", Type: horizonmodels.FragmentTypeGeoRegion}
-	fac := &horizonmodels.HorizonFragment{CanonicalPath: "/fac/ir/bandar-abbas-port", Type: horizonmodels.FragmentTypeFacility}
-	market := &horizonmodels.HorizonFragment{CanonicalPath: "/market/ir/transportation/port-services", Type: horizonmodels.FragmentTypeMarket}
-	gov := &horizonmodels.HorizonFragment{CanonicalPath: "/gov/ir/ministry-of-defense", Type: horizonmodels.FragmentTypeOrganization}
+	loc := &horizonmodels.HorizonFragment{CanonicalPath: "/loc/ir", Class: FragmentTypeGeoRegion}
+	fac := &horizonmodels.HorizonFragment{CanonicalPath: "/fac/ir/bandar-abbas-port", Class: FragmentTypeFacility}
+	market := &horizonmodels.HorizonFragment{CanonicalPath: "/market/ir/transportation/port-services", Class: FragmentTypeMarket}
+	gov := &horizonmodels.HorizonFragment{CanonicalPath: "/gov/ir/ministry-of-defense", Class: FragmentTypeOrganization}
 
 	locScore := locationFallbackPriorityForAxis(signal, loc)
 	facScore := locationFallbackPriorityForAxis(signal, fac)
@@ -53,10 +54,10 @@ func TestLocationFallbackPriorityForAxisConflictBoostsEnergyMarketsWithTheme(t *
 		LocationPath: "/loc/ir",
 		SeedNames:    []string{"Strait of Hormuz", "Iran energy", "Iran port"},
 	}
-	fac := &horizonmodels.HorizonFragment{CanonicalPath: "/fac/ir/bandar-abbas-port", Type: horizonmodels.FragmentTypeFacility}
-	market := &horizonmodels.HorizonFragment{CanonicalPath: "/market/ir/energy/natural-gas", Type: horizonmodels.FragmentTypeMarket}
-	gov := &horizonmodels.HorizonFragment{CanonicalPath: "/gov/ir/ministry-of-defense", Type: horizonmodels.FragmentTypeOrganization}
-	deposit := &horizonmodels.HorizonFragment{CanonicalPath: "/deposit/ir/south-pars", Type: horizonmodels.FragmentTypeDeposit}
+	fac := &horizonmodels.HorizonFragment{CanonicalPath: "/fac/ir/bandar-abbas-port", Class: FragmentTypeFacility}
+	market := &horizonmodels.HorizonFragment{CanonicalPath: "/market/ir/energy/natural-gas", Class: FragmentTypeMarket}
+	gov := &horizonmodels.HorizonFragment{CanonicalPath: "/gov/ir/ministry-of-defense", Class: FragmentTypeOrganization}
+	deposit := &horizonmodels.HorizonFragment{CanonicalPath: "/deposit/ir/south-pars", Class: ah.FragmentClassSite, Subtype: "deposit"}
 
 	marketScore := locationFallbackPriorityForAxis(signal, market)
 	facScore := locationFallbackPriorityForAxis(signal, fac)
@@ -111,11 +112,11 @@ func TestSeedPathSearchNameOnlyUsesParallelPairs(t *testing.T) {
 func TestSemanticSeedQueryGeoBonusPrefersCountryMatch(t *testing.T) {
 	qaFrag := &horizonmodels.HorizonFragment{
 		CanonicalPath: "/org/qa/qatarenergy",
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 	}
 	egFrag := &horizonmodels.HorizonFragment{
 		CanonicalPath: "/gov/eg/egyptian-air-defense-forces",
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 	}
 	if got := semanticSeedQueryGeoBonus("Qatar air defense", qaFrag); got <= 0 {
 		t.Fatalf("expected positive geo bonus for Qatar match, got %.2f", got)
@@ -160,7 +161,7 @@ func TestSemanticSeedFragmentAllowedRejectsSupplyLinksAndAbstractHubs(t *testing
 			name: "facility allowed",
 			frag: &horizonmodels.HorizonFragment{
 				CanonicalPath: "/fac/ir/bandar-abbas-port",
-				Type:          horizonmodels.FragmentTypeFacility,
+				Class:         FragmentTypeFacility,
 			},
 			want: true,
 		},
@@ -168,7 +169,9 @@ func TestSemanticSeedFragmentAllowedRejectsSupplyLinksAndAbstractHubs(t *testing
 			name: "supply link rejected",
 			frag: &horizonmodels.HorizonFragment{
 				CanonicalPath: "/supply-link/ir/bandar-abbas-to-doha",
-				Type:          horizonmodels.FragmentTypeSupplyLink,
+				Class:         ah.FragmentClassSite,
+				Subtype:       "supply_link",
+				Identifiers:   map[string]string{"legacy_supply_link": "true"},
 			},
 			want: false,
 		},
@@ -176,7 +179,7 @@ func TestSemanticSeedFragmentAllowedRejectsSupplyLinksAndAbstractHubs(t *testing
 			name: "generic loc rejected",
 			frag: &horizonmodels.HorizonFragment{
 				CanonicalPath: "/loc/qa/na",
-				Type:          horizonmodels.FragmentTypeGeoRegion,
+				Class:         FragmentTypeGeoRegion,
 			},
 			want: false,
 		},
@@ -184,7 +187,8 @@ func TestSemanticSeedFragmentAllowedRejectsSupplyLinksAndAbstractHubs(t *testing
 			name: "sphere hub rejected",
 			frag: &horizonmodels.HorizonFragment{
 				CanonicalPath: "/sphere/geopolitics",
-				Type:          horizonmodels.FragmentTypeDomain,
+				Class:         ah.FragmentClassEvidence,
+				Subtype:       "domain_legacy",
 			},
 			want: false,
 		},
@@ -192,7 +196,7 @@ func TestSemanticSeedFragmentAllowedRejectsSupplyLinksAndAbstractHubs(t *testing
 			name: "product hub rejected",
 			frag: &horizonmodels.HorizonFragment{
 				CanonicalPath: "/product/energy/natural-gas",
-				Type:          horizonmodels.FragmentTypeProduct,
+				Class:         FragmentTypeProduct,
 			},
 			want: false,
 		},

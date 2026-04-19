@@ -135,7 +135,7 @@ func (v *SupplyChainStrictValidator) ValidateEdges(edges []*ChainEdge, jobID str
 // ValidateSupplyLink returns nil if the SupplyLink fragment passes strict validation.
 // ValidateSupplyLinkFields is called first; this adds strict /fac/ only checks (no fallback).
 func (v *SupplyChainStrictValidator) ValidateSupplyLink(f *models.HorizonFragment) error {
-	if f == nil || f.Type != models.FragmentTypeSupplyLink {
+	if f == nil || !f.IsLegacySupplyLink() {
 		return nil
 	}
 	if err := models.ValidateSupplyLinkFields(f); err != nil {

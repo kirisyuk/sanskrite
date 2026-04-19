@@ -4,7 +4,8 @@ import (
 	"context"
 	"testing"
 
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 type testValidationRulesRepo struct{}
@@ -26,9 +27,9 @@ func TestValidationPolicy_ControlsAllowsCommunitySource(t *testing.T) {
 	p := &ValidationPolicy{}
 
 	valid, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeControls,
-		horizonmodels.FragmentTypeCommunity,
-		horizonmodels.FragmentTypeOrganization,
+		relControls,
+		classCommunity,
+		classOrganization,
 	)
 	if !valid {
 		t.Fatalf("expected CONTROLS COMMUNITY -> ORGANIZATION to be valid")
@@ -39,9 +40,9 @@ func TestValidationPolicy_OwnsAllowsCommunitySource(t *testing.T) {
 	p := &ValidationPolicy{}
 
 	valid, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeOwns,
-		horizonmodels.FragmentTypeCommunity,
-		horizonmodels.FragmentTypeOrganization,
+		relOwns,
+		classCommunity,
+		classOrganization,
 	)
 	if !valid {
 		t.Fatalf("expected OWNS COMMUNITY -> ORGANIZATION to be valid")
@@ -52,27 +53,27 @@ func TestValidationPolicy_ProductMarketUsesTradedInAndProgramUsesParticipatesIn(
 	p := &ValidationPolicy{}
 
 	validProductParticipates, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeParticipatesIn,
-		horizonmodels.FragmentTypeProduct,
-		horizonmodels.FragmentTypeMarket,
+		relParticipatesIn,
+		classProduct,
+		classMarket,
 	)
 	if validProductParticipates {
 		t.Fatalf("expected PARTICIPATES_IN PRODUCT -> MARKET to be invalid")
 	}
 
 	validProductTradedIn, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeTradedIn,
-		horizonmodels.FragmentTypeProduct,
-		horizonmodels.FragmentTypeMarket,
+		relTradedIn,
+		classProduct,
+		classMarket,
 	)
 	if !validProductTradedIn {
 		t.Fatalf("expected TRADED_IN PRODUCT -> MARKET to be valid")
 	}
 
 	validProgram, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeParticipatesIn,
-		horizonmodels.FragmentTypeProgram,
-		horizonmodels.FragmentTypeMarket,
+		relParticipatesIn,
+		classProgram,
+		classMarket,
 	)
 	if !validProgram {
 		t.Fatalf("expected PARTICIPATES_IN PROGRAM -> MARKET to be valid")
@@ -85,9 +86,9 @@ func TestValidationPolicy_DecideQuarantinesProductMarketNonTradedIn(t *testing.T
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind": "edge",
-			"sourceType":     string(horizonmodels.FragmentTypeProduct),
-			"targetType":     string(horizonmodels.FragmentTypeMarket),
-			"relationType":   string(horizonmodels.DependencyTypeParticipatesIn),
+			"sourceType":     string(classProduct),
+			"targetType":     string(classMarket),
+			"relationType":   string(relParticipatesIn),
 		},
 	})
 	if err != nil {
@@ -102,18 +103,18 @@ func TestValidationPolicy_HasDomainStrategicDirectionRules(t *testing.T) {
 	p := &ValidationPolicy{}
 
 	validDomainEdge, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeSurfaces,
-		horizonmodels.FragmentTypeDomain,
-		horizonmodels.FragmentTypeDecisionPoint,
+		relSurfaces,
+		classDomain,
+		classDecisionPoint,
 	)
 	if !validDomainEdge {
 		t.Fatalf("expected SURFACES DOMAIN -> DECISION_POINT to be valid")
 	}
 
 	validStrategicEdge, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeControlsAccess,
-		horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeMarket,
+		relControlsAccess,
+		classOrganization,
+		classMarket,
 	)
 	if !validStrategicEdge {
 		t.Fatalf("expected CONTROLS_ACCESS ORGANIZATION -> MARKET to be valid")
@@ -121,13 +122,13 @@ func TestValidationPolicy_HasDomainStrategicDirectionRules(t *testing.T) {
 }
 
 func TestValidationPolicy_ExpectedPathPrefix_ExtendedTypes(t *testing.T) {
-	if got := ExpectedCanonicalPathPrefix(horizonmodels.FragmentTypeDomain); got != "/domain/" {
+	if got := ExpectedCanonicalPathPrefix(classDomain, "domain_legacy"); got != "/domain/" {
 		t.Fatalf("expected DOMAIN prefix /domain/, got %q", got)
 	}
-	if got := ExpectedCanonicalPathPrefix(horizonmodels.FragmentTypeDecisionPoint); got != "/decision/" {
+	if got := ExpectedCanonicalPathPrefix(classDecisionPoint, ""); got != "/decision/" {
 		t.Fatalf("expected DECISION_POINT prefix /decision/, got %q", got)
 	}
-	if got := ExpectedCanonicalPathPrefix(horizonmodels.FragmentTypeMechanism); got != "/mechanism/" {
+	if got := ExpectedCanonicalPathPrefix(classMechanism, ""); got != "/mechanism/" {
 		t.Fatalf("expected MECHANISM prefix /mechanism/, got %q", got)
 	}
 }
@@ -135,9 +136,9 @@ func TestValidationPolicy_ExpectedPathPrefix_ExtendedTypes(t *testing.T) {
 func TestValidationPolicy_UnknownEdgeTypeIsNotFailOpen(t *testing.T) {
 	p := &ValidationPolicy{}
 	valid, _, rule := p.validateEdgeDirection(
-		horizonmodels.DependencyType("UNKNOWN_EDGE_TYPE"),
-		horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeOrganization,
+		ah.RelationName("UNKNOWN_EDGE_TYPE"),
+		classOrganization,
+		classOrganization,
 	)
 	if valid {
 		t.Fatalf("expected unknown edge type to be invalid")
@@ -151,18 +152,18 @@ func TestValidationPolicy_ExtractsFromAndKeyPersonRulesPresent(t *testing.T) {
 	p := &ValidationPolicy{}
 
 	okExtracts, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeExtractsFrom,
-		horizonmodels.FragmentTypeFacility,
-		horizonmodels.FragmentTypeDeposit,
+		relExtractsFrom,
+		classFacility,
+		classDeposit,
 	)
 	if !okExtracts {
 		t.Fatalf("expected EXTRACTS_FROM FACILITY -> DEPOSIT to be valid")
 	}
 
 	okKeyPerson, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeKeyPerson,
-		horizonmodels.FragmentTypePerson,
-		horizonmodels.FragmentTypeOrganization,
+		relKeyPerson,
+		classPerson,
+		classOrganization,
 	)
 	if !okKeyPerson {
 		t.Fatalf("expected KEY_PERSON PERSON -> ORGANIZATION to be valid")
@@ -173,27 +174,27 @@ func TestValidationPolicy_CompetesWithAuditedByAndAssuresRulesPresent(t *testing
 	p := &ValidationPolicy{}
 
 	okCompetes, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeCompetesWith,
-		horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeOrganization,
+		relCompetesWith,
+		classOrganization,
+		classOrganization,
 	)
 	if !okCompetes {
 		t.Fatalf("expected COMPETES_WITH ORGANIZATION -> ORGANIZATION to be valid")
 	}
 
 	okAuditedBy, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeAuditedBy,
-		horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeOrganization,
+		relAuditedBy,
+		classOrganization,
+		classOrganization,
 	)
 	if !okAuditedBy {
 		t.Fatalf("expected AUDITED_BY ORGANIZATION -> ORGANIZATION to be valid")
 	}
 
 	okAssures, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeAssures,
-		horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeOrganization,
+		relAssures,
+		classOrganization,
+		classOrganization,
 	)
 	if !okAssures {
 		t.Fatalf("expected ASSURES ORGANIZATION -> ORGANIZATION to be valid")
@@ -204,18 +205,18 @@ func TestValidationPolicy_RelatedAndRelativeRulesPresent(t *testing.T) {
 	p := &ValidationPolicy{}
 
 	okRelated, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeRelatedTo,
-		horizonmodels.FragmentTypePerson,
-		horizonmodels.FragmentTypePerson,
+		relRelatedTo,
+		classPerson,
+		classPerson,
 	)
 	if !okRelated {
 		t.Fatalf("expected RELATED_TO PERSON -> PERSON to be valid")
 	}
 
 	okRelative, _, _ := p.validateEdgeDirection(
-		horizonmodels.DependencyTypeRelativeOf,
-		horizonmodels.FragmentTypePerson,
-		horizonmodels.FragmentTypePerson,
+		relRelativeOf,
+		classPerson,
+		classPerson,
 	)
 	if !okRelative {
 		t.Fatalf("expected RELATIVE_OF PERSON -> PERSON to be valid")
@@ -228,9 +229,9 @@ func TestValidationPolicy_InfluencesPersonToSphereAllowed(t *testing.T) {
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind": "edge",
-			"sourceType":     string(horizonmodels.FragmentTypePerson),
-			"targetType":     string(horizonmodels.FragmentTypeSphere),
-			"relationType":   string(horizonmodels.DependencyTypeInfluences),
+			"sourceType":     string(classPerson),
+			"targetType":     string(classSphere),
+			"relationType":   string(relInfluences),
 		},
 	})
 	if err != nil {
@@ -247,9 +248,9 @@ func TestValidationPolicy_InfluencesOrgToSphereGetsPenaltyPotential(t *testing.T
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind": "edge",
-			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
-			"targetType":     string(horizonmodels.FragmentTypeSphere),
-			"relationType":   string(horizonmodels.DependencyTypeInfluences),
+			"sourceType":     string(classOrganization),
+			"targetType":     string(classSphere),
+			"relationType":   string(relInfluences),
 		},
 	})
 	if err != nil {
@@ -270,9 +271,9 @@ func TestValidationPolicy_OrgOrgInvestsInRequiresDirectionEvidence(t *testing.T)
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind": "edge",
-			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
-			"targetType":     string(horizonmodels.FragmentTypeOrganization),
-			"relationType":   string(horizonmodels.DependencyTypeInvestsIn),
+			"sourceType":     string(classOrganization),
+			"targetType":     string(classOrganization),
+			"relationType":   string(relInvestsIn),
 			"reason":         "Vanguard invested in TSMC",
 		},
 	})
@@ -287,9 +288,9 @@ func TestValidationPolicy_OrgOrgInvestsInRequiresDirectionEvidence(t *testing.T)
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind": "edge",
-			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
-			"targetType":     string(horizonmodels.FragmentTypeOrganization),
-			"relationType":   string(horizonmodels.DependencyTypeInvestsIn),
+			"sourceType":     string(classOrganization),
+			"targetType":     string(classOrganization),
+			"relationType":   string(relInvestsIn),
 			"reason":         "Vanguard invested in TSMC",
 			"qualifiers": map[string]interface{}{
 				"source_role": "investor",
@@ -312,9 +313,9 @@ func TestValidationPolicy_OrgOrgAssuresPassiveCueWithoutRolesIsQuarantined(t *te
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind": "edge",
-			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
-			"targetType":     string(horizonmodels.FragmentTypeOrganization),
-			"relationType":   string(horizonmodels.DependencyTypeAssures),
+			"sourceType":     string(classOrganization),
+			"targetType":     string(classOrganization),
+			"relationType":   string(relAssures),
 			"reason":         "TSMC is audited by Deloitte",
 		},
 	})
@@ -333,9 +334,9 @@ func TestValidationPolicy_DependsOnActorPairRequiresDirectionEvidence(t *testing
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind": "edge",
-			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
-			"targetType":     string(horizonmodels.FragmentTypeOrganization),
-			"relationType":   string(horizonmodels.DependencyTypeDependsOn),
+			"sourceType":     string(classOrganization),
+			"targetType":     string(classOrganization),
+			"relationType":   string(relDependsOn),
 		},
 	})
 	if err != nil {
@@ -349,9 +350,9 @@ func TestValidationPolicy_DependsOnActorPairRequiresDirectionEvidence(t *testing
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind": "edge",
-			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
-			"targetType":     string(horizonmodels.FragmentTypeOrganization),
-			"relationType":   string(horizonmodels.DependencyTypeDependsOn),
+			"sourceType":     string(classOrganization),
+			"targetType":     string(classOrganization),
+			"relationType":   string(relDependsOn),
 			"qualifiers": map[string]interface{}{
 				"source_role": "dependent",
 				"target_role": "dependency",
@@ -373,9 +374,9 @@ func TestValidationPolicy_SuppliesToActorPairRequiresDirectionEvidence(t *testin
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind": "edge",
-			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
-			"targetType":     string(horizonmodels.FragmentTypeOrganization),
-			"relationType":   string(horizonmodels.DependencyTypeSuppliesTo),
+			"sourceType":     string(classOrganization),
+			"targetType":     string(classOrganization),
+			"relationType":   string(relSuppliesTo),
 		},
 	})
 	if err != nil {
@@ -389,9 +390,9 @@ func TestValidationPolicy_SuppliesToActorPairRequiresDirectionEvidence(t *testin
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind": "edge",
-			"sourceType":     string(horizonmodels.FragmentTypeOrganization),
-			"targetType":     string(horizonmodels.FragmentTypeOrganization),
-			"relationType":   string(horizonmodels.DependencyTypeSuppliesTo),
+			"sourceType":     string(classOrganization),
+			"targetType":     string(classOrganization),
+			"relationType":   string(relSuppliesTo),
 			"qualifiers": map[string]interface{}{
 				"source_role": "supplier",
 				"target_role": "customer",
@@ -413,11 +414,11 @@ func TestValidationPolicy_ControlsAccessRequiresDirectionEvidence(t *testing.T) 
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind":      "edge",
-			"sourceType":          string(horizonmodels.FragmentTypeOrganization),
-			"targetType":          string(horizonmodels.FragmentTypeMarket),
+			"sourceType":          string(classOrganization),
+			"targetType":          string(classMarket),
 			"sourceCanonicalPath": "/gov/ae/ministry-of-finance",
 			"targetCanonicalPath": "/market/ae/capital/foreign-direct-investment",
-			"relationType":        string(horizonmodels.DependencyTypeControlsAccess),
+			"relationType":        string(relControlsAccess),
 			"reason":              "The ministry can restrict foreign investor access to the market.",
 		},
 	})
@@ -432,11 +433,11 @@ func TestValidationPolicy_ControlsAccessRequiresDirectionEvidence(t *testing.T) 
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind":      "edge",
-			"sourceType":          string(horizonmodels.FragmentTypeOrganization),
-			"targetType":          string(horizonmodels.FragmentTypeMarket),
+			"sourceType":          string(classOrganization),
+			"targetType":          string(classMarket),
 			"sourceCanonicalPath": "/gov/ae/ministry-of-finance",
 			"targetCanonicalPath": "/market/ae/capital/foreign-direct-investment",
-			"relationType":        string(horizonmodels.DependencyTypeControlsAccess),
+			"relationType":        string(relControlsAccess),
 			"reason":              "The ministry can restrict foreign investor access to the market.",
 			"qualifiers": map[string]interface{}{
 				"source_role":     "controller",
@@ -460,11 +461,11 @@ func TestValidationPolicy_ImposesConditionMechanismRolesAllow(t *testing.T) {
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind":      "edge",
-			"sourceType":          string(horizonmodels.FragmentTypeMechanism),
-			"targetType":          string(horizonmodels.FragmentTypeOrganization),
+			"sourceType":          string(classMechanism),
+			"targetType":          string(classOrganization),
 			"sourceCanonicalPath": "/mechanism/regulatory/corporate-income-tax-rate-increase",
 			"targetCanonicalPath": "/org/ae/dubai-international-financial-centre",
-			"relationType":        string(horizonmodels.DependencyTypeImposesCondition),
+			"relationType":        string(relImposesCondition),
 			"reason":              "The rate increase imposes a higher tax burden on DIFC entities.",
 		},
 	})
@@ -479,11 +480,11 @@ func TestValidationPolicy_ImposesConditionMechanismRolesAllow(t *testing.T) {
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind":      "edge",
-			"sourceType":          string(horizonmodels.FragmentTypeMechanism),
-			"targetType":          string(horizonmodels.FragmentTypeOrganization),
+			"sourceType":          string(classMechanism),
+			"targetType":          string(classOrganization),
 			"sourceCanonicalPath": "/mechanism/regulatory/corporate-income-tax-rate-increase",
 			"targetCanonicalPath": "/org/ae/dubai-international-financial-centre",
-			"relationType":        string(horizonmodels.DependencyTypeImposesCondition),
+			"relationType":        string(relImposesCondition),
 			"reason":              "The rate increase imposes a higher tax burden on DIFC entities.",
 			"qualifiers": map[string]interface{}{
 				"source_role":     "mechanism",
@@ -511,7 +512,7 @@ func TestValidationPolicy_GovPathOrgWhitelist(t *testing.T) {
 	decision, err := p.Decide(context.Background(), PolicyInput{
 		Kind: "fragment",
 		Fragment: &horizonmodels.HorizonFragment{
-			Type:          horizonmodels.FragmentTypeOrganization,
+			Class: classOrganization,
 			CanonicalPath: "/gov/sa/ministry-of-finance",
 		},
 	})
@@ -530,11 +531,11 @@ func TestValidationPolicy_OrgMarketNonParticipatesQuarantine(t *testing.T) {
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind":      "edge",
-			"sourceType":          string(horizonmodels.FragmentTypeMarket),
-			"targetType":          string(horizonmodels.FragmentTypeMarket),
+			"sourceType":          string(classMarket),
+			"targetType":          string(classMarket),
 			"sourceCanonicalPath": "/market/global/materials",
 			"targetCanonicalPath": "/market/global/materials/raw-materials",
-			"relationType":        string(horizonmodels.DependencyTypeParticipatesIn),
+			"relationType":        string(relParticipatesIn),
 		},
 	})
 	if err != nil {
@@ -551,9 +552,9 @@ func TestValidationPolicy_DepositToOrgSuppliesToGetsPenaltyInsteadOfQuarantine(t
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind": "edge",
-			"sourceType":     string(horizonmodels.FragmentTypeDeposit),
-			"targetType":     string(horizonmodels.FragmentTypeOrganization),
-			"relationType":   string(horizonmodels.DependencyTypeSuppliesTo),
+			"sourceType":     string(classDeposit),
+			"targetType":     string(classOrganization),
+			"relationType":   string(relSuppliesTo),
 		},
 	})
 	if err != nil {
@@ -573,11 +574,11 @@ func TestValidationPolicy_GovRegulatesMarketAllowed(t *testing.T) {
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind":      "edge",
-			"sourceType":          string(horizonmodels.FragmentTypeOrganization),
-			"targetType":          string(horizonmodels.FragmentTypeMarket),
+			"sourceType":          string(classOrganization),
+			"targetType":          string(classMarket),
 			"sourceCanonicalPath": "/gov/us/federal-reserve",
 			"targetCanonicalPath": "/market/us/finance/banking",
-			"relationType":        string(horizonmodels.DependencyTypeRegulates),
+			"relationType":        string(relRegulates),
 		},
 	})
 	if err != nil {
@@ -594,11 +595,11 @@ func TestValidationPolicy_OrgNonGovMarketStillQuarantine(t *testing.T) {
 		Kind: "edge",
 		Context: map[string]interface{}{
 			"validationKind":      "edge",
-			"sourceType":          string(horizonmodels.FragmentTypeOrganization),
-			"targetType":          string(horizonmodels.FragmentTypeMarket),
+			"sourceType":          string(classOrganization),
+			"targetType":          string(classMarket),
 			"sourceCanonicalPath": "/org/us/jpmorgan-chase",
 			"targetCanonicalPath": "/market/us/finance/banking",
-			"relationType":        string(horizonmodels.DependencyTypeRegulates),
+			"relationType":        string(relRegulates),
 		},
 	})
 	if err != nil {
@@ -614,37 +615,37 @@ func TestValidationPolicy_FragmentLegacyPathRejectedByContract(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		fragmentType horizonmodels.FragmentType
+		fragmentType ah.FragmentClass
 		path         string
 		wantDecision string
 	}{
 		{
 			name:         "legacy org path",
-			fragmentType: horizonmodels.FragmentTypeOrganization,
+			fragmentType: classOrganization,
 			path:         "/org/acme",
 			wantDecision: "rule:hardcoded:invalid_canonical_path",
 		},
 		{
 			name:         "legacy market path",
-			fragmentType: horizonmodels.FragmentTypeMarket,
+			fragmentType: classMarket,
 			path:         "/market/semiconductors",
 			wantDecision: "rule:hardcoded:invalid_canonical_path",
 		},
 		{
 			name:         "legacy program path",
-			fragmentType: horizonmodels.FragmentTypeProgram,
+			fragmentType: classProgram,
 			path:         "/program/alem-ai",
 			wantDecision: "rule:hardcoded:invalid_canonical_path",
 		},
 		{
 			name:         "legacy community path",
-			fragmentType: horizonmodels.FragmentTypeCommunity,
+			fragmentType: classCommunity,
 			path:         "/community/ae/hawala-network",
 			wantDecision: "rule:hardcoded:invalid_canonical_path",
 		},
 		{
 			name:         "legacy deposit path",
-			fragmentType: horizonmodels.FragmentTypeDeposit,
+			fragmentType: classDeposit,
 			path:         "/deposit/permian-basin",
 			wantDecision: "rule:hardcoded:invalid_canonical_path",
 		},
@@ -655,7 +656,7 @@ func TestValidationPolicy_FragmentLegacyPathRejectedByContract(t *testing.T) {
 			decision, err := p.Decide(context.Background(), PolicyInput{
 				Kind: "fragment",
 				Fragment: &horizonmodels.HorizonFragment{
-					Type:          tt.fragmentType,
+					Class: tt.fragmentType,
 					CanonicalPath: tt.path,
 				},
 			})

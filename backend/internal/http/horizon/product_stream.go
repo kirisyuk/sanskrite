@@ -176,12 +176,12 @@ func (h *HorizonHandlers) resolveProductStreamSeed(r *http.Request, tenantID str
 			return nil, err
 		}
 		frag, err := h.service.Fragments().GetByCanonicalPathForTenant(ctx, tenantID, canonicalPath)
-		if err == nil && frag != nil && frag.Type == horizonmodels.FragmentTypeProduct {
+		if err == nil && frag != nil && frag.Class == FragmentTypeProduct {
 			return frag, nil
 		}
 	}
 
-	exact, _ := h.service.Fragments().FindByLabelForTenant(ctx, tenantID, "en", query, horizonmodels.FragmentTypeProduct)
+	exact, _ := h.service.Fragments().FindByLabelForTenant(ctx, tenantID, "en", query, FragmentTypeProduct)
 	if seed := bestProductSeedCandidate(ctx, tenantID, query, exact, h.productDictionary); seed != nil {
 		return seed, nil
 	}
@@ -203,7 +203,7 @@ func bestProductSeedCandidate(ctx context.Context, tenantID string, query string
 	var best *horizonmodels.HorizonFragment
 	bestScore := -1
 	for _, frag := range fragments {
-		if frag == nil || frag.Type != horizonmodels.FragmentTypeProduct {
+		if frag == nil || frag.Class != FragmentTypeProduct {
 			continue
 		}
 		score := 0
@@ -241,7 +241,7 @@ func filterProductFragments(in []*horizonmodels.HorizonFragment) []*horizonmodel
 	out := make([]*horizonmodels.HorizonFragment, 0, len(in))
 	seen := map[string]struct{}{}
 	for _, frag := range in {
-		if frag == nil || frag.Type != horizonmodels.FragmentTypeProduct {
+		if frag == nil || frag.Class != FragmentTypeProduct {
 			continue
 		}
 		key := strings.TrimSpace(frag.CanonicalPath)

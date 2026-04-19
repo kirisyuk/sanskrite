@@ -178,30 +178,30 @@ func dedupStrings(in []string) []string {
 	return out
 }
 
-func inferFragmentTypeFromPath(cp string) models.FragmentType {
+func inferFragmentTypeFromPath(cp string) FragmentType {
 	switch {
 	case strings.HasPrefix(cp, "/product/"):
-		return models.FragmentTypeProduct
+		return FragmentTypeProduct
 	case strings.HasPrefix(cp, "/program/"):
-		return models.FragmentTypeProgram
+		return FragmentTypeProgram
 	case strings.HasPrefix(cp, "/market/"):
-		return models.FragmentTypeMarket
+		return FragmentTypeMarket
 	case strings.HasPrefix(cp, "/fac/"):
-		return models.FragmentTypeFacility
+		return FragmentTypeFacility
 	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/region/"):
-		return models.FragmentTypeGeoRegion
+		return FragmentTypeGeoRegion
 	case strings.HasPrefix(cp, "/event/"):
-		return models.FragmentTypeEvent
+		return FragmentTypeEvent
 	case strings.HasPrefix(cp, "/person/"):
-		return models.FragmentTypePerson
+		return FragmentTypePerson
 	case strings.HasPrefix(cp, "/media/"):
-		return models.FragmentTypeMediaChannel
+		return FragmentTypeMediaChannel
 	case strings.HasPrefix(cp, "/org/"), strings.HasPrefix(cp, "/gov/"):
-		return models.FragmentTypeOrganization
+		return FragmentTypeOrganization
 	case strings.HasPrefix(cp, "/domain/"):
-		return models.FragmentTypeDomain
+		return FragmentTypeDomain
 	default:
-		return models.FragmentTypeOrganization
+		return FragmentTypeOrganization
 	}
 }
 
@@ -215,7 +215,7 @@ func canonicalizeScopeWithFirestore(
 	}
 
 	var resolver interface {
-		Resolve(ctx context.Context, canonicalPath string, fragmentType models.FragmentType) (*scout.ResolveResult, error)
+		Resolve(ctx context.Context, canonicalPath string, fragmentType FragmentType) (*scout.ResolveResult, error)
 	}
 	if eng := h.service.Scout(); eng != nil && eng.CanonicalPathResolver() != nil {
 		resolver = eng.CanonicalPathResolver()

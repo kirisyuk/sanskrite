@@ -40,10 +40,10 @@ func TestPolicyCheckerUnifiedDirectionReverse(t *testing.T) {
 			ID:               "e1",
 			SourceFragmentID: "s1",
 			TargetFragmentID: "t1",
-			Type:             horizonmodels.DependencyTypeDependsOn,
+			Relation: relDependsOn,
 		},
-		horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeMarket,
+		classOrganization,
+		classMarket,
 		"/org/us/acme-inc",
 		"/market/us/technology/semiconductors",
 	)
@@ -81,10 +81,10 @@ func TestPolicyCheckerUnifiedDirectionRewriteType(t *testing.T) {
 			ID:               "e2",
 			SourceFragmentID: "s2",
 			TargetFragmentID: "t2",
-			Type:             horizonmodels.DependencyTypeInvestsIn,
+			Relation: relInvestsIn,
 		},
-		horizonmodels.FragmentTypeMarket,
-		horizonmodels.FragmentTypeOrganization,
+		classMarket,
+		classOrganization,
 		"/market/us/technology/semiconductors",
 		"/org/us/acme-inc",
 	)
@@ -120,10 +120,10 @@ func TestPolicyCheckerUnifiedDirectionQuarantineSoft(t *testing.T) {
 			ID:               "e3",
 			SourceFragmentID: "s3",
 			TargetFragmentID: "t3",
-			Type:             horizonmodels.DependencyTypeParticipatesIn, // ORG->ORG PARTICIPATES_IN invalid (was CONSUMES, removed)
+			Relation: relParticipatesIn, // ORG->ORG PARTICIPATES_IN invalid (was CONSUMES, removed)
 		},
-		horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeOrganization,
+		classOrganization,
+		classOrganization,
 		"/org/us/acme-inc",
 		"/org/us/other-inc",
 	)

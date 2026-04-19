@@ -130,7 +130,7 @@ func (e *PropagationEngine) TracePropagationPaths(
 				EdgeID:           strings.TrimSpace(edge.ID),
 				SourceFragmentID: it.frag.ID,
 				TargetFragmentID: targetFragment.ID,
-				EdgeType:         string(edge.Type),
+				EdgeType:         string(edge.Relation),
 				HopsFromSource:   it.hops + 1,
 			})
 			newPath := make([]string, len(it.path)+1)

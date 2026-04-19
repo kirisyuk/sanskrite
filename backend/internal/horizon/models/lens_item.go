@@ -3,7 +3,10 @@ package models
 import (
 	"fmt"
 	"math"
+	"strings"
 	"time"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // LensItem представляет визуальную часть линзы - то, что отображается в графе и списке.
@@ -16,13 +19,13 @@ type LensItem struct {
 
 	// kind/subkind — расширяемая классификация (как у Interaction).
 	Kind    string  `json:"kind" firestore:"kind"`                           // "node" | "edge" | "viewport" | "layout"
-	Subkind *string `json:"subkind,omitempty" firestore:"subkind,omitempty"` // для edge: DependencyType; для node: "fragment" | ...
+	Subkind *string `json:"subkind,omitempty" firestore:"subkind,omitempty"` // для edge: ah.RelationName (или legacy UPPER_SNAKE / FE alias из validLensItemEdgeTypes); для node: "fragment" | ...
 
 	// kind="node"
 	FragmentID    *string            `json:"fragmentId,omitempty" firestore:"fragmentId,omitempty"`
 	CanonicalPath *string            `json:"canonicalPath,omitempty" firestore:"canonicalPath,omitempty"`
 	Label         *string            `json:"label,omitempty" firestore:"label,omitempty"`
-	Type          *string            `json:"type,omitempty" firestore:"type,omitempty"` // FragmentType (строкой для гибкости)
+	Type          *string            `json:"type,omitempty" firestore:"type,omitempty"` // ah.FragmentClass (строкой для гибкости; legacy FragmentType значения тоже принимаются)
 	State         map[string]float64 `json:"state,omitempty" firestore:"state,omitempty"`
 	Status        *string            `json:"status,omitempty" firestore:"status,omitempty"`
 
@@ -68,85 +71,54 @@ type LensItemMetadata struct {
 	Color      *string  `json:"color,omitempty" firestore:"color,omitempty"`
 }
 
-var validLensItemEdgeTypes = map[string]bool{
-	string(DependencyTypeSuppliesTo):          true,
-	string(DependencyTypeLocatedIn):           true,
-	string(DependencyTypeOwns):                true,
-	"PARENT_OF":                               true,
-	string(DependencyTypeSubsidiaryOf):        true,
-	string(DependencyTypeProduces):            true,
-	string(DependencyTypeConsumes):            true,
-	string(DependencyTypeOperatesIn):          true,
-	"BASED_IN":                                true,
-	"HEADQUARTERED_IN":                        true,
-	string(DependencyTypeRegulates):           true,
-	string(DependencyTypeCompetesWith):        true,
-	"CONFLICTS_WITH":                          true,
-	"OPPOSES":                                 true,
-	string(DependencyTypeDependsOn):           true,
-	string(DependencyTypeInfluences):          true,
-	string(DependencyTypeTransformsInto):      true,
-	string(DependencyTypeAssemblesInto):       true,
-	string(DependencyTypeUsedIn):              true,
-	string(DependencyTypeExtractsFrom):        true,
-	string(DependencyTypeParticipatesIn):      true,
-	string(DependencyTypeTradedIn):            true,
-	string(DependencyTypeDominates):           true,
-	string(DependencyTypeHasMarketSegment):    true,
-	string(DependencyTypeHasSubmarket):        true,
-	string(DependencyTypeAdministers):         true,
-	string(DependencyTypeManages):             true,
-	string(DependencyTypeControls):            true,
-	string(DependencyTypeControlsAccess):      true,
-	string(DependencyTypeEmployedBy):          true,
-	string(DependencyTypeBoardMemberOf):       true,
-	"EXECUTIVE_OF":                            true,
-	string(DependencyTypeFounded):             true,
-	string(DependencyTypeInvestsIn):           true,
-	string(DependencyTypePartnersWith):        true,
-	"COOPERATES_WITH":                         true,
-	string(DependencyTypeAssures):             true,
-	string(DependencyTypeAuditedBy):           true,
-	string(DependencyTypeRelativeOf):          true,
-	string(DependencyTypeRelatedTo):           true,
-	string(DependencyTypeOperatesVia):         true,
-	string(DependencyTypeMemberOf):            true,
-	string(DependencyTypeAffiliatedWith):      true,
-	string(DependencyTypeImposesCondition):    true,
-	string(DependencyTypeGatekeepsDecision):   true,
-	string(DependencyTypeUsesMechanism):       true,
-	string(DependencyTypeAppliesTo):           true,
-	string(DependencyTypeAssociatedWith):      true,
-	string(DependencyTypeCorporateTransition): true,
-	string(DependencyTypeDomainRelation):      true,
-	string(DependencyTypeWorksFor):            true,
-	string(DependencyTypeKeyPerson):           true,
-	string(DependencyTypeHasKeyPerson):        true,
-	string(DependencyTypeFocusesOn):           true,
-	string(DependencyTypeInvolvesActor):       true,
-	string(DependencyTypeInGeoScope):          true,
-	string(DependencyTypeAbout):               true,
-	string(DependencyTypeSurfaces):            true,
-	string(DependencyTypeRelatedDomain):       true,
-	string(DependencyTypeBroadensTo):          true,
-	string(DependencyTypeNarrowsTo):           true,
-	string(DependencyTypeAffects):             true,
-	"IMPACTS":                                 true,
-	string(DependencyTypeTriggeredBy):         true,
-	string(DependencyTypeHasSubgroup):         true,
-	string(DependencyTypeRenamedTo):           true,
-	string(DependencyTypeRebrandedTo):         true,
-	string(DependencyTypeLegalSuccessorOf):    true,
-	string(DependencyTypeMergedInto):          true,
-	string(DependencyTypeSpunOffFrom):         true,
-	string(DependencyTypeAcquiredBy):          true,
-	"REQUIRES":                                true,
-	"NEEDS":                                   true,
-	"USES":                                    true,
-	"SIMILAR_TO":                              true,
-	"LINKED_TO":                               true,
-	"SUPPORTS":                                true,
+// lensItemFEOnlyEdgeAliases are FE-only edge subkind labels that never
+// existed in the legacy DependencyType enum and have no current AH
+// counterpart. They survive transitionally because frontend code emits
+// them (most are display synonyms — IMPACTS for AFFECTS, OPPOSES for
+// CONFLICTS_WITH, etc.). Migrate-cli rewrites stored lens items so the
+// FE eventually narrows to the AH SoT alphabet only.
+var lensItemFEOnlyEdgeAliases = []string{
+	"PARENT_OF",
+	"BASED_IN",
+	"HEADQUARTERED_IN",
+	"CONFLICTS_WITH",
+	"OPPOSES",
+	"EXECUTIVE_OF",
+	"COOPERATES_WITH",
+	"IMPACTS",
+	"REQUIRES",
+	"NEEDS",
+	"USES",
+	"SIMILAR_TO",
+	"LINKED_TO",
+	"SUPPORTS",
 }
+
+// validLensItemEdgeTypes is the wire-level edge subkind alphabet the FE
+// is allowed to write into a LensItem. Built dynamically from:
+//
+//  1. ah.RelationNames (the AH SoT — both lowercase canonical and
+//     uppercase form for legacy/FE compatibility);
+//  2. legacyRelationAliases keys (graph_intent.go) — every legacy
+//     UPPER_SNAKE DependencyType still parses;
+//  3. lensItemFEOnlyEdgeAliases — the residual FE-only synonyms.
+//
+// Codegen of the AH taxonomy automatically refreshes (1); migrate-cli
+// is the source of truth for what FE-only labels remain valid.
+var validLensItemEdgeTypes = func() map[string]bool {
+	out := make(map[string]bool, len(ah.RelationNames)*2+len(legacyRelationAliases)+len(lensItemFEOnlyEdgeAliases))
+	for _, r := range ah.RelationNames {
+		out[string(r)] = true
+		out[strings.ToUpper(string(r))] = true
+	}
+	for legacy := range legacyRelationAliases {
+		out[legacy] = true
+	}
+	for _, alias := range lensItemFEOnlyEdgeAliases {
+		out[alias] = true
+	}
+	return out
+}()
 
 func (li *LensItem) Validate() error {
 	if li == nil {
@@ -199,9 +171,11 @@ func (li *LensItem) Validate() error {
 			return fmt.Errorf("sourceFragmentId and targetFragmentId must be different")
 		}
 
-		// subkind for edge must match DependencyType taxonomy
+		// subkind for edge must match ah.RelationName taxonomy
+		// (or a legacy UPPER_SNAKE / FE-only alias listed in
+		// validLensItemEdgeTypes for back-compat).
 		if li.Subkind == nil || *li.Subkind == "" {
-			return fmt.Errorf("subkind (DependencyType) is required for edge kind")
+			return fmt.Errorf("subkind (ah.RelationName) is required for edge kind")
 		}
 		if !validLensItemEdgeTypes[*li.Subkind] {
 			return fmt.Errorf("invalid subkind for edge: %s", *li.Subkind)

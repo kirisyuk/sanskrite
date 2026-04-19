@@ -3,45 +3,54 @@ package edgesemantics
 import (
 	"testing"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
-func TestNormalizeFragmentTypeToken_ExtendedTypesAndAliases(t *testing.T) {
+func TestNormalizeFragmentClassToken_ExtendedTypesAndAliases(t *testing.T) {
 	tests := []struct {
-		in   string
-		want models.FragmentType
+		in          string
+		wantClass   ah.FragmentClass
+		wantSubtype string
 	}{
-		{in: "GOV", want: models.FragmentTypeOrganization},
-		{in: "GOVERNMENT_BODY", want: models.FragmentTypeOrganization},
-		{in: "FAC", want: models.FragmentTypeFacility},
-		{in: "LOC", want: models.FragmentTypeGeoRegion},
-		{in: "MEDIA", want: models.FragmentTypeMediaChannel},
-		{in: "DOMAIN", want: models.FragmentTypeDomain},
-		{in: "SPHERE", want: models.FragmentTypeSphere},
-		{in: "DECISION", want: models.FragmentTypeDecisionPoint},
-		{in: "MECHANISM", want: models.FragmentTypeMechanism},
-		{in: "SUPPLYLINK", want: models.FragmentTypeSupplyLink},
-		{in: "NETWORK", want: models.FragmentTypeCommunity},
+		{in: "GOV", wantClass: ah.FragmentClassOrg, wantSubtype: "gov"},
+		{in: "GOVERNMENT_BODY", wantClass: ah.FragmentClassOrg, wantSubtype: "gov"},
+		{in: "FAC", wantClass: ah.FragmentClassSite},
+		{in: "LOC", wantClass: ah.FragmentClassGeo},
+		{in: "MEDIA", wantClass: ah.FragmentClassOrg, wantSubtype: "media_channel"},
+		// Legacy DOMAIN/SPHERE fold into evidence per migration_map.yaml.
+		{in: "DOMAIN", wantClass: ah.FragmentClassEvidence, wantSubtype: "domain_legacy"},
+		{in: "SPHERE", wantClass: ah.FragmentClassEvidence, wantSubtype: "sphere_legacy"},
+		{in: "DECISION", wantClass: ah.FragmentClassDecision},
+		{in: "MECHANISM", wantClass: ah.FragmentClassMechanism},
+		{in: "SUPPLYLINK", wantClass: ah.FragmentClassSite, wantSubtype: "supply_link"},
+		{in: "NETWORK", wantClass: ah.FragmentClassCommunity},
 	}
 
 	for _, tt := range tests {
-		got := NormalizeFragmentTypeToken(tt.in)
-		if got != tt.want {
-			t.Fatalf("NormalizeFragmentTypeToken(%q) = %q, want %q", tt.in, got, tt.want)
+		gotClass, gotSubtype, ok := NormalizeFragmentClassToken(tt.in)
+		if !ok {
+			t.Fatalf("NormalizeFragmentClassToken(%q) ok=false, want true", tt.in)
+		}
+		if gotClass != tt.wantClass {
+			t.Fatalf("NormalizeFragmentClassToken(%q) class=%q, want %q", tt.in, gotClass, tt.wantClass)
+		}
+		if gotSubtype != tt.wantSubtype {
+			t.Fatalf("NormalizeFragmentClassToken(%q) subtype=%q, want %q", tt.in, gotSubtype, tt.wantSubtype)
 		}
 	}
 }
 
-func TestNormalizeFragmentTypeToken_PathInferenceAndUnknownFallback(t *testing.T) {
-	if got := NormalizeFragmentTypeToken("/mechanism/regulatory/export-control"); got != models.FragmentTypeMechanism {
-		t.Fatalf("path-based normalization should infer MECHANISM, got %q", got)
+func TestNormalizeFragmentClassToken_PathInferenceAndUnknownFallback(t *testing.T) {
+	gotClass, _, ok := NormalizeFragmentClassToken("/mechanism/regulatory/export-control")
+	if !ok || gotClass != ah.FragmentClassMechanism {
+		t.Fatalf("path-based normalization should infer Mechanism, got %q (ok=%v)", gotClass, ok)
 	}
 
-	gotUnknown := NormalizeFragmentTypeToken("UNMAPPED_TYPE_TOKEN")
-	if gotUnknown == "" {
-		t.Fatalf("NormalizeFragmentTypeToken must never return empty")
+	gotUnknown, _, ok := NormalizeFragmentClassToken("UNMAPPED_TYPE_TOKEN")
+	if ok {
+		t.Fatalf("NormalizeFragmentClassToken(unknown) ok=true, want false")
 	}
-	if gotUnknown != models.FragmentTypeOrganization {
-		t.Fatalf("unknown type fallback should be ORGANIZATION, got %q", gotUnknown)
+	if gotUnknown != ah.FragmentClassOrg {
+		t.Fatalf("unknown type fallback should be FragmentClassOrg, got %q", gotUnknown)
 	}
 }

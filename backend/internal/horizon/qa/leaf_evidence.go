@@ -7,6 +7,7 @@ import (
 
 	horizoninterp "github.com/igorkirisyuk/sanskrite/internal/horizon/interpretation"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // LeafEvidenceCollector collects physical signals at terminal nodes (FACILITY, DEPOSIT, AFFECTED_ZONE, GEO_REGION).
@@ -19,12 +20,13 @@ func NewLeafEvidenceCollector(eventFactsResolver horizoninterp.EventFactsResolve
 	return &LeafEvidenceCollector{eventFactsResolver: eventFactsResolver}
 }
 
-// Leaf fragment types that accumulate real-world signals.
-var leafFragmentTypes = map[string]bool{
-	string(horizonmodels.FragmentTypeFacility):     true,
-	string(horizonmodels.FragmentTypeDeposit):      true,
-	string(horizonmodels.FragmentTypeAffectedZone): true,
-	string(horizonmodels.FragmentTypeGeoRegion):    true,
+// Leaf fragment classes that accumulate real-world signals. Under the AH
+// taxonomy the legacy FACILITY/DEPOSIT both fold into class=site and
+// GEO_REGION/AFFECTED_ZONE both fold into class=geo, so a class-level
+// allowlist captures the same set without needing subtype awareness.
+var leafFragmentClasses = map[ah.FragmentClass]bool{
+	ah.FragmentClassSite: true,
+	ah.FragmentClassGeo:  true,
 }
 
 // Collect returns leaf evidence for the given fragments.
@@ -38,7 +40,7 @@ func (c *LeafEvidenceCollector) Collect(ctx context.Context, fragments []*horizo
 		if frag == nil {
 			continue
 		}
-		if !leafFragmentTypes[string(frag.Type)] {
+		if !leafFragmentClasses[frag.Class] {
 			continue
 		}
 		if affectedFragmentIDs != nil && !affectedFragmentIDs[frag.ID] {

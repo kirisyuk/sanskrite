@@ -1,15 +1,22 @@
 package models
 
+import "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+
 // AxisSpec defines the properties of a quasi-physical axis.
-// See docs/notes/risk-architecture.md Contract 2 for full specification.
+// See docs/notes/risk-architecture.md Contract 2 for the original
+// pre-migration specification; the AH-canonical rewrite in
+// DefaultAxisSpecs is the runtime source of truth.
 type AxisSpec struct {
-	Key             string   `json:"key" firestore:"key"`                                             // e.g., "legal/access"
-	Label           string   `json:"label" firestore:"label"`                                         // Human-readable label
-	DefaultDamping  float64  `json:"defaultDamping" firestore:"defaultDamping"`                       // [0.0, 1.0]
-	DefaultMaxHops  int      `json:"defaultMaxHops" firestore:"defaultMaxHops"`                       // Typical propagation depth
-	PropagationMode string   `json:"propagationMode" firestore:"propagationMode"`                     // "upstream", "downstream", "both"
-	StrongEdgeTypes []string `json:"strongEdgeTypes,omitempty" firestore:"strongEdgeTypes,omitempty"` // Default strong edges
-	TransformsTo    []string `json:"transformsTo,omitempty" firestore:"transformsTo,omitempty"`       // Possible transformations
+	Key             string   `json:"key" firestore:"key"`
+	Label           string   `json:"label" firestore:"label"`
+	DefaultDamping  float64  `json:"defaultDamping" firestore:"defaultDamping"`
+	DefaultMaxHops  int      `json:"defaultMaxHops" firestore:"defaultMaxHops"`
+	PropagationMode string   `json:"propagationMode" firestore:"propagationMode"`
+	// StrongEdgeTypes lists AH RelationName strings (snake_case) that
+	// are considered "strong" for this axis. Legacy UPPER_SNAKE
+	// DependencyType strings are no longer accepted on this boundary.
+	StrongEdgeTypes []string `json:"strongEdgeTypes,omitempty" firestore:"strongEdgeTypes,omitempty"`
+	TransformsTo    []string `json:"transformsTo,omitempty" firestore:"transformsTo,omitempty"`
 }
 
 // The 12-Axis Basis - finite set of quasi-physical dimensions
@@ -57,8 +64,12 @@ func IsValidAxis(axis string) bool {
 	return false
 }
 
-// DefaultAxisSpecs returns default AxisSpec definitions for all 12 axes.
-// These are used as fallback if Firestore doesn't have custom specs.
+// DefaultAxisSpecs returns default AxisSpec definitions for all 12
+// axes. StrongEdgeTypes mirrors the AH RelationName entries used by
+// DefaultPropagationProfiles for the same axis (without the direction
+// and weight detail). Translation provenance from legacy is documented
+// in DefaultPropagationProfiles. These are used as fallback when
+// Firestore doesn't have custom specs.
 func DefaultAxisSpecs() map[string]AxisSpec {
 	return map[string]AxisSpec{
 		AxisLegalAccess: {
@@ -67,8 +78,18 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.95,
 			DefaultMaxHops:  5,
 			PropagationMode: "upstream",
-			StrongEdgeTypes: []string{"OWNS", "CONTROLS", "SUBSIDIARY_OF", "REGULATES"},
-			TransformsTo:    []string{AxisLegalCompliance},
+			StrongEdgeTypes: []string{
+				string(ah.RelationNameBeneficiallyOwns),
+				string(ah.RelationNameControlsVia),
+				string(ah.RelationNameSubsidiaryOf),
+				string(ah.RelationNameRegulates),
+				string(ah.RelationNameImposes),
+				string(ah.RelationNameWields),
+				string(ah.RelationNameGatekeeps),
+				string(ah.RelationNameInfluences),
+				string(ah.RelationNameOperates),
+			},
+			TransformsTo: []string{AxisLegalCompliance},
 		},
 		AxisLegalCompliance: {
 			Key:             AxisLegalCompliance,
@@ -76,8 +97,17 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.85,
 			DefaultMaxHops:  3,
 			PropagationMode: "both",
-			StrongEdgeTypes: []string{"PARTNERS_WITH", "SUPPLIES_TO", "DEPENDS_ON"},
-			TransformsTo:    []string{},
+			StrongEdgeTypes: []string{
+				string(ah.RelationNameJointVentureWith),
+				string(ah.RelationNameSupplies),
+				string(ah.RelationNameSubjectTo),
+				string(ah.RelationNameRegulates),
+				string(ah.RelationNameImposes),
+				string(ah.RelationNameInfluences),
+				string(ah.RelationNameWields),
+				string(ah.RelationNameGatekeeps),
+			},
+			TransformsTo: []string{},
 		},
 		AxisFinancialSettlement: {
 			Key:             AxisFinancialSettlement,
@@ -85,8 +115,14 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.80,
 			DefaultMaxHops:  4,
 			PropagationMode: "both",
-			StrongEdgeTypes: []string{"DEPENDS_ON", "OWNS", "INVESTS_IN", "TRADED_IN"},
-			TransformsTo:    []string{},
+			StrongEdgeTypes: []string{
+				string(ah.RelationNameSupplies),
+				string(ah.RelationNameBeneficiallyOwns),
+				string(ah.RelationNameInvestedIn),
+				string(ah.RelationNameSubjectTo),
+				string(ah.RelationNameListedOn),
+			},
+			TransformsTo: []string{},
 		},
 		AxisFinancialCredit: {
 			Key:             AxisFinancialCredit,
@@ -94,8 +130,14 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.80,
 			DefaultMaxHops:  4,
 			PropagationMode: "both",
-			StrongEdgeTypes: []string{"DEPENDS_ON", "OWNS", "INVESTS_IN", "TRADED_IN"},
-			TransformsTo:    []string{},
+			StrongEdgeTypes: []string{
+				string(ah.RelationNameSupplies),
+				string(ah.RelationNameBeneficiallyOwns),
+				string(ah.RelationNameInvestedIn),
+				string(ah.RelationNameSubjectTo),
+				string(ah.RelationNameListedOn),
+			},
+			TransformsTo: []string{},
 		},
 		AxisPhysicalFlowSupply: {
 			Key:             AxisPhysicalFlowSupply,
@@ -103,8 +145,19 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.75,
 			DefaultMaxHops:  4,
 			PropagationMode: "both",
-			StrongEdgeTypes: []string{"SUPPLIES_TO", "DEPENDS_ON", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "PRODUCES", "OWNS", "CONTROLS", "MANAGES", "OPERATES_IN", "PARTNERS_WITH"},
-			TransformsTo:    []string{},
+			StrongEdgeTypes: []string{
+				string(ah.RelationNameSupplies),
+				string(ah.RelationNameProduces),
+				string(ah.RelationNameRequiresCapability),
+				string(ah.RelationNameManagedBy),
+				string(ah.RelationNameControlsVia),
+				string(ah.RelationNameBeneficiallyOwns),
+				string(ah.RelationNameJointVentureWith),
+				string(ah.RelationNameLegConnects),
+				string(ah.RelationNamePassesThrough),
+				string(ah.RelationNameDisrupts),
+			},
+			TransformsTo: []string{},
 		},
 		AxisPhysicalFlowDemand: {
 			Key:             AxisPhysicalFlowDemand,
@@ -112,8 +165,14 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.75,
 			DefaultMaxHops:  4,
 			PropagationMode: "downstream",
-			StrongEdgeTypes: []string{"SUPPLIES_TO", "DEPENDS_ON", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "TRADED_IN"},
-			TransformsTo:    []string{},
+			StrongEdgeTypes: []string{
+				string(ah.RelationNameSupplies),
+				string(ah.RelationNameRequiresCapability),
+				string(ah.RelationNameProduces),
+				string(ah.RelationNameLegConnects),
+				string(ah.RelationNameInfluences),
+			},
+			TransformsTo: []string{},
 		},
 		AxisLogisticsCapacity: {
 			Key:             AxisLogisticsCapacity,
@@ -121,8 +180,13 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.70,
 			DefaultMaxHops:  3,
 			PropagationMode: "downstream",
-			StrongEdgeTypes: []string{"DEPENDS_ON", "LOCATED_IN", "OPERATES_IN"},
-			TransformsTo:    []string{},
+			StrongEdgeTypes: []string{
+				string(ah.RelationNameSupplies),
+				string(ah.RelationNameDisrupts),
+				string(ah.RelationNameLegConnects),
+				string(ah.RelationNamePassesThrough),
+			},
+			TransformsTo: []string{},
 		},
 		AxisLogisticsLatency: {
 			Key:             AxisLogisticsLatency,
@@ -130,8 +194,13 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.70,
 			DefaultMaxHops:  3,
 			PropagationMode: "downstream",
-			StrongEdgeTypes: []string{"DEPENDS_ON", "LOCATED_IN", "OPERATES_IN"},
-			TransformsTo:    []string{},
+			StrongEdgeTypes: []string{
+				string(ah.RelationNameSupplies),
+				string(ah.RelationNameDisrupts),
+				string(ah.RelationNameLegConnects),
+				string(ah.RelationNamePassesThrough),
+			},
+			TransformsTo: []string{},
 		},
 		AxisOperationalContinuity: {
 			Key:             AxisOperationalContinuity,
@@ -139,8 +208,13 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.70,
 			DefaultMaxHops:  3,
 			PropagationMode: "upstream",
-			StrongEdgeTypes: []string{"OWNS", "MANAGES", "PRODUCES"},
-			TransformsTo:    []string{},
+			StrongEdgeTypes: []string{
+				string(ah.RelationNameBeneficiallyOwns),
+				string(ah.RelationNameManagedBy),
+				string(ah.RelationNameProduces),
+				string(ah.RelationNameDisrupts),
+			},
+			TransformsTo: []string{},
 		},
 		AxisInfoUncertainty: {
 			Key:             AxisInfoUncertainty,
@@ -148,8 +222,18 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.60,
 			DefaultMaxHops:  2,
 			PropagationMode: "both",
-			StrongEdgeTypes: []string{"DEPENDS_ON", "PARTNERS_WITH"},
-			TransformsTo:    []string{},
+			StrongEdgeTypes: []string{
+				string(ah.RelationNameSupplies),
+				string(ah.RelationNameSubjectTo),
+				string(ah.RelationNameJointVentureWith),
+				string(ah.RelationNameMemberOf),
+				string(ah.RelationNameRegulates),
+				string(ah.RelationNameImposes),
+				string(ah.RelationNameInfluences),
+				string(ah.RelationNameWields),
+				string(ah.RelationNameGatekeeps),
+			},
+			TransformsTo: []string{},
 		},
 		AxisInfoReputation: {
 			Key:             AxisInfoReputation,
@@ -157,8 +241,13 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.60,
 			DefaultMaxHops:  2,
 			PropagationMode: "both",
-			StrongEdgeTypes: []string{"DEPENDS_ON", "PARTNERS_WITH"},
-			TransformsTo:    []string{},
+			StrongEdgeTypes: []string{
+				string(ah.RelationNameSupplies),
+				string(ah.RelationNameJointVentureWith),
+				string(ah.RelationNameMemberOf),
+				string(ah.RelationNameInfluences),
+			},
+			TransformsTo: []string{},
 		},
 		AxisGeoConflict: {
 			Key:             AxisGeoConflict,
@@ -166,8 +255,12 @@ func DefaultAxisSpecs() map[string]AxisSpec {
 			DefaultDamping:  0.80,
 			DefaultMaxHops:  2,
 			PropagationMode: "downstream",
-			StrongEdgeTypes: []string{"LOCATED_IN", "OPERATES_IN"},
-			TransformsTo:    []string{},
+			StrongEdgeTypes: []string{
+				string(ah.RelationNameDisrupts),
+				string(ah.RelationNamePassesThrough),
+				string(ah.RelationNameInfluences),
+			},
+			TransformsTo: []string{},
 		},
 	}
 }

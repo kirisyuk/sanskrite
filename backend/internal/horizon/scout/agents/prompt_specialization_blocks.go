@@ -7,7 +7,6 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/graphenrich"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
@@ -74,52 +73,52 @@ const (
 )
 
 func detectFacilityTaskSemantic(canonicalPath string, qualifiers map[string]interface{}, identifiers map[string]string) facilityTaskSemantic {
-	switch models.DetectFacilitySemantic(canonicalPath, qualifiers, identifiers, nil) {
-	case models.FacilitySemanticRoute:
+	switch DetectFacilitySemantic(canonicalPath, qualifiers, identifiers, nil) {
+	case FacilitySemanticRoute:
 		return facilityTaskSemanticRoute
-	case models.FacilitySemanticProcurement:
+	case FacilitySemanticProcurement:
 		return facilityTaskSemanticProcurement
-	case models.FacilitySemanticSupply:
+	case FacilitySemanticSupply:
 		return facilityTaskSemanticSupply
 	default:
 		return facilityTaskSemanticNone
 	}
 }
 
-func inferPromptFragmentType(canonicalPath string, fragmentType models.FragmentType) models.FragmentType {
+func inferPromptFragmentType(canonicalPath string, fragmentType FragmentType) FragmentType {
 	if strings.TrimSpace(string(fragmentType)) != "" {
 		return fragmentType
 	}
 	cp := strings.TrimSpace(strings.ToLower(canonicalPath))
 	switch {
 	case strings.HasPrefix(cp, "/org/"), strings.HasPrefix(cp, "/gov/"):
-		return models.FragmentTypeOrganization
+		return FragmentTypeOrganization
 	case strings.HasPrefix(cp, "/fac/"):
-		return models.FragmentTypeFacility
+		return FragmentTypeFacility
 	case strings.HasPrefix(cp, "/product/"):
-		return models.FragmentTypeProduct
+		return FragmentTypeProduct
 	case strings.HasPrefix(cp, "/market/"):
-		return models.FragmentTypeMarket
+		return FragmentTypeMarket
 	case strings.HasPrefix(cp, "/deposit/"):
-		return models.FragmentTypeDeposit
+		return FragmentTypeFacility
 	case strings.HasPrefix(cp, "/program/"):
-		return models.FragmentTypeProgram
+		return FragmentTypeOrganization
 	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/region/"), strings.HasPrefix(cp, "/geo/"):
-		return models.FragmentTypeGeoRegion
+		return FragmentTypeGeoRegion
 	default:
 		return ""
 	}
 }
 
-func buildObjectQualifierContractBlock(canonicalPath string, fragmentType models.FragmentType, communityType string) string {
+func buildObjectQualifierContractBlock(canonicalPath string, fragmentType FragmentType, communityType string) string {
 	_ = communityType
 	return buildObjectQualifierContractBlockWithHints(canonicalPath, fragmentType, nil, nil, nil)
 }
 
-func buildObjectQualifierContractBlockWithHints(canonicalPath string, fragmentType models.FragmentType, qualifiers map[string]interface{}, identifiers map[string]string, _ map[string]string) string {
+func buildObjectQualifierContractBlockWithHints(canonicalPath string, fragmentType FragmentType, qualifiers map[string]interface{}, identifiers map[string]string, _ map[string]string) string {
 	fragmentType = inferPromptFragmentType(canonicalPath, fragmentType)
-	allQualifiers := models.AllObjectQualifierStrings()
-	allowedQualifiers := models.AllowedObjectQualifierStringsForType(fragmentType, canonicalPath)
+	allQualifiers := AllObjectQualifierStrings()
+	allowedQualifiers := AllowedObjectQualifierStringsForType(fragmentType, canonicalPath)
 
 	var b strings.Builder
 	b.WriteString("OBJECT QUALIFIER CONTRACT (STRICT):\n")
@@ -143,12 +142,12 @@ func buildObjectQualifierContractBlockWithHints(canonicalPath string, fragmentTy
 	return b.String() + "\n"
 }
 
-func buildObjectTypeTaskSpecializationBlock(canonicalPath string, fragmentType models.FragmentType, communityType string) string {
+func buildObjectTypeTaskSpecializationBlock(canonicalPath string, fragmentType FragmentType, communityType string) string {
 	return buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath, fragmentType, communityType, nil, nil, nil)
 }
 
-func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragmentType models.FragmentType, communityType string, qualifiers map[string]interface{}, identifiers map[string]string, spherePaths []string) string {
-	key := entity_semantics.ResolveByPath(canonicalPath, fragmentType, communityType)
+func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragmentType FragmentType, communityType string, qualifiers map[string]interface{}, identifiers map[string]string, spherePaths []string) string {
+	key := entity_semantics.ResolveByPath(canonicalPath, fragmentType, "", communityType)
 	def := entity_semantics.GetDefinition(key)
 
 	var b strings.Builder

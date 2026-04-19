@@ -64,7 +64,7 @@ func (b *OrgHierarchyBuilder) EnsureOrgHierarchy(
 	if b == nil || b.fragmentsRepo == nil || b.edgesRepo == nil {
 		return nil
 	}
-	if fragment == nil || fragment.Type != models.FragmentTypeOrganization {
+	if fragment == nil || fragment.Class != FragmentTypeOrganization {
 		return nil
 	}
 	if fragmentID == "" {
@@ -152,7 +152,7 @@ func (b *OrgHierarchyBuilder) inferParentName(name string) string {
 // generateOrgPath creates a canonical path for an organization name.
 func (b *OrgHierarchyBuilder) generateOrgPath(name string) string {
 	fragment := &models.HorizonFragment{
-		Type: models.FragmentTypeOrganization,
+		Class: FragmentTypeOrganization,
 		Labels: map[string]string{
 			"en": strings.TrimSpace(name),
 		},
@@ -178,7 +178,7 @@ func (b *OrgHierarchyBuilder) ensureParentOrg(ctx context.Context, path, name, _
 	// Create minimal parent org fragment
 	f := &models.HorizonFragment{
 		CanonicalPath: path,
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		Labels: map[string]string{
 			"en": name,
 		},
@@ -202,7 +202,7 @@ func (b *OrgHierarchyBuilder) ensureParentOrg(ctx context.Context, path, name, _
 	// Deduplicate before creating (prevents parent-org duplicates like "Apple" being created many times).
 	if b.orgDedup != nil {
 		deduplicated, derr := b.orgDedup.DeduplicateOrg(ctx, f)
-		if derr == nil && deduplicated != nil && deduplicated.ID != "" && isDedupReplacementCompatible(f.Type, f.CanonicalPath, deduplicated) {
+		if derr == nil && deduplicated != nil && deduplicated.ID != "" && isDedupReplacementCompatible(f.Class, f.CanonicalPath, deduplicated) {
 			return deduplicated.ID, nil
 		}
 	}
@@ -218,7 +218,7 @@ func (b *OrgHierarchyBuilder) ensureParentOrg(ctx context.Context, path, name, _
 // ensureOwnsEdge creates an OWNS edge from parent to child if it doesn't exist.
 func (b *OrgHierarchyBuilder) ensureOwnsEdge(ctx context.Context, parentID, childID, provenanceMethod, sourceID string) error {
 	// Check if edge already exists
-	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", parentID, childID, models.DependencyTypeOwns)
+	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", parentID, childID, DependencyTypeOwns)
 	if err == nil {
 		return nil // Already exists
 	}
@@ -231,7 +231,7 @@ func (b *OrgHierarchyBuilder) ensureOwnsEdge(ctx context.Context, parentID, chil
 		TenantID:         "global",
 		SourceFragmentID: parentID,
 		TargetFragmentID: childID,
-		Type:             models.DependencyTypeOwns,
+		Relation:             DependencyTypeOwns,
 		Properties: models.EdgeProperties{
 			Criticality:   0.7,
 			Amplification: 1.0,

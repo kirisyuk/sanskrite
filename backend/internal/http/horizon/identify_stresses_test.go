@@ -343,8 +343,8 @@ func TestApplyFindingToArtifactUpdatesLegEdgeAndIndexes(t *testing.T) {
 	if len(parsed.Edges) != 1 || parsed.Edges[0].Qualifiers == nil {
 		t.Fatalf("expected edge qualifiers to be updated, got %+v", parsed.Edges)
 	}
-	if got := parsed.Edges[0].Qualifiers[horizonmodels.QualifierPathStressScore]; got == nil {
-		t.Fatalf("expected edge qualifier %q to be set", horizonmodels.QualifierPathStressScore)
+	if got := parsed.Edges[0].Qualifiers[QualifierPathStressScore]; got == nil {
+		t.Fatalf("expected edge qualifier %q to be set", QualifierPathStressScore)
 	}
 }
 

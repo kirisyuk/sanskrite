@@ -7,8 +7,8 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // =============================================================================
@@ -241,28 +241,28 @@ func buildEdgeDirectionRulesFromSemantics() []EdgeDirectionRuleLLM {
 
 	out := make([]EdgeDirectionRuleLLM, 0, len(types))
 	for _, t := range types {
-		rule := edgesemantics.EdgeDirectionPolicies[models.DependencyType(t)]
+		rule := edgesemantics.EdgeDirectionPolicies[ah.RelationName(t)]
 		out = append(out, EdgeDirectionRuleLLM{
 			EdgeType:    t,
-			Direction:   fmt.Sprintf("%s → %s", joinFragmentTypes(rule.ValidSourceTypes), joinFragmentTypes(rule.ValidTargetTypes)),
+			Direction:   fmt.Sprintf("%s → %s", joinFragmentTypes(rule.ValidSourceClasses), joinFragmentTypes(rule.ValidTargetClasses)),
 			Description: rule.Description,
-			ValidSource: fragmentTypesToStrings(rule.ValidSourceTypes),
-			ValidTarget: fragmentTypesToStrings(rule.ValidTargetTypes),
+			ValidSource: fragmentTypesToStrings(rule.ValidSourceClasses),
+			ValidTarget: fragmentTypesToStrings(rule.ValidTargetClasses),
 		})
 	}
 	return out
 }
 
 func buildSymmetricEdgesFromSemantics() []string {
-	out := make([]string, 0, len(models.SymmetricEdgeTypes))
-	for edgeType := range models.SymmetricEdgeTypes {
+	out := make([]string, 0, len(symmetricRelations))
+	for edgeType := range symmetricRelations {
 		out = append(out, string(edgeType))
 	}
 	sort.Strings(out)
 	return out
 }
 
-func fragmentTypesToStrings(types []models.FragmentType) []string {
+func fragmentTypesToStrings(types []ah.FragmentClass) []string {
 	if len(types) == 0 {
 		return nil
 	}
@@ -273,7 +273,7 @@ func fragmentTypesToStrings(types []models.FragmentType) []string {
 	return out
 }
 
-func joinFragmentTypes(types []models.FragmentType) string {
+func joinFragmentTypes(types []ah.FragmentClass) string {
 	if len(types) == 0 {
 		return "*"
 	}
@@ -460,7 +460,7 @@ func (r *TaxonomyRules) ValidatePersonPath(path string) (bool, string) {
 }
 
 // ValidateEdgeDirection checks if an edge has correct direction.
-func (r *TaxonomyRules) ValidateEdgeDirection(edgeType models.DependencyType, sourceType, targetType models.FragmentType) (bool, bool, string) {
+func (r *TaxonomyRules) ValidateEdgeDirection(edgeType ah.RelationName, sourceType, targetType ah.FragmentClass) (bool, bool, string) {
 	valid, shouldReverse, rule := edgesemantics.ValidateEdgeDirection(edgeType, sourceType, targetType)
 	if valid {
 		return true, false, ""
@@ -484,7 +484,7 @@ func (r *TaxonomyRules) ValidateEdgeDirection(edgeType models.DependencyType, so
 }
 
 // IsSymmetricEdge checks if an edge type is symmetric.
-func (r *TaxonomyRules) IsSymmetricEdge(edgeType models.DependencyType) bool {
+func (r *TaxonomyRules) IsSymmetricEdge(edgeType ah.RelationName) bool {
 	for _, sym := range r.SymmetricEdges {
 		if sym == string(edgeType) {
 			return true

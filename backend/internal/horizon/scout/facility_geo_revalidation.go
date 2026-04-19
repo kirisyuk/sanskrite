@@ -38,7 +38,7 @@ func RevalidateFacilityGeo(
 	geocodingClient coreontology.GeocodingClientInterface,
 ) (FacilityGeoRevalidationResult, error) {
 	var result FacilityGeoRevalidationResult
-	if fragment == nil || geocodingClient == nil || fragment.Type != models.FragmentTypeFacility {
+	if fragment == nil || geocodingClient == nil || fragment.Class != FragmentTypeFacility {
 		return result, nil
 	}
 
@@ -211,7 +211,7 @@ func RevalidateFacilityGeo(
 }
 
 func facilityGeoValidationQueries(fragment *models.HorizonFragment) []string {
-	if fragment == nil || fragment.Type != models.FragmentTypeFacility {
+	if fragment == nil || fragment.Class != FragmentTypeFacility {
 		return nil
 	}
 	requireStrongName := facilityHasStrongGeoResolvableName(fragment)

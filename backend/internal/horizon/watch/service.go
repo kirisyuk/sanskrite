@@ -337,7 +337,7 @@ func (s *Service) Search(ctx context.Context, query string, limit int) ([]Search
 		}
 		seen[path] = struct{}{}
 		out = append(out, SearchResult{
-			Kind:          strings.ToLower(string(fragment.Type)),
+			Kind:          strings.ToLower(string(fragment.Class)),
 			Label:         fragmentDisplayLabel(fragment.CanonicalPath, fragment.Labels),
 			CanonicalPath: fragment.CanonicalPath,
 			FragmentID:    fragment.ID,

@@ -223,11 +223,11 @@ func (s *OneHopDownstreamService) ExecuteJob(ctx context.Context, job *horizonmo
 	if err != nil {
 		return s.failJob(ctx, job, err, startedAt)
 	}
-	if !isSupportedAnchorType(anchor.Type) {
-		return s.failJob(ctx, job, fmt.Errorf("anchor must be ORG or FAC, got %s", anchor.Type), startedAt)
+	if !isSupportedAnchorType(anchor.Class) {
+		return s.failJob(ctx, job, fmt.Errorf("anchor must be ORG or FAC, got %s", anchor.Class), startedAt)
 	}
 	opts.AnchorRef = strings.TrimSpace(anchor.CanonicalPath)
-	opts.AnchorType = string(anchor.Type)
+	opts.AnchorType = string(anchor.Class)
 	contextData, err := s.collectContext(ctx, tenantID, anchor, opts)
 	if err != nil {
 		return s.failJob(ctx, job, err, startedAt)
@@ -238,7 +238,7 @@ func (s *OneHopDownstreamService) ExecuteJob(ctx context.Context, job *horizonmo
 		"lensId":        lensID,
 		"jobId":         strings.TrimSpace(job.ID),
 		"anchorRef":     anchor.CanonicalPath,
-		"anchorType":    string(anchor.Type),
+		"anchorType":    string(anchor.Class),
 		"scope":         "one_hop_downstream",
 		"status":        "context_ready",
 		"knownInputs":   len(contextData.InputProducts),
@@ -269,7 +269,7 @@ func (s *OneHopDownstreamService) ExecuteJob(ctx context.Context, job *horizonmo
 		"lensId":                 lensID,
 		"jobId":                  strings.TrimSpace(job.ID),
 		"anchorRef":              anchor.CanonicalPath,
-		"anchorType":             string(anchor.Type),
+		"anchorType":             string(anchor.Class),
 		"scope":                  "one_hop_downstream",
 		"status":                 "completed",
 		"fragmentsCreated":       stats.FragmentsCreated,
@@ -320,12 +320,12 @@ func (s *OneHopDownstreamService) collectContext(ctx context.Context, tenantID s
 	}
 
 	facilitySet := map[string]*horizonmodels.HorizonFragment{}
-	if anchor.Type == horizonmodels.FragmentTypeOrganization {
-		for _, edgeType := range []horizonmodels.DependencyType{
-			horizonmodels.DependencyTypeOwns,
-			horizonmodels.DependencyTypeControls,
-			horizonmodels.DependencyTypeOperatesIn,
-			horizonmodels.DependencyTypeManages,
+	if anchor.Class == FragmentTypeOrganization {
+		for _, edgeType := range []DependencyType{
+			DependencyTypeOwns,
+			DependencyTypeControls,
+			DependencyTypeOperatesIn,
+			DependencyTypeManages,
 		} {
 			edges, err := s.edgesRepo.ListBySource(ctx, tenantID, strings.TrimSpace(anchor.ID), &edgeType, 64)
 			if err != nil {
@@ -333,26 +333,26 @@ func (s *OneHopDownstreamService) collectContext(ctx context.Context, tenantID s
 			}
 			for _, edge := range edges {
 				target, err := s.fragmentsRepo.Get(ctx, strings.TrimSpace(edge.TargetFragmentID))
-				if err != nil || target == nil || target.Type != horizonmodels.FragmentTypeFacility {
+				if err != nil || target == nil || target.Class != FragmentTypeFacility {
 					continue
 				}
 				facilitySet[target.ID] = target
 			}
 		}
 	}
-	if anchor.Type == horizonmodels.FragmentTypeFacility {
+	if anchor.Class == FragmentTypeFacility {
 		out.RelatedFacilities = []*horizonmodels.HorizonFragment{anchor}
 	} else {
 		out.RelatedFacilities = sortFragmentsByPath(mapValuesFragments(facilitySet))
 	}
 
 	ownerSet := map[string]*horizonmodels.HorizonFragment{}
-	if anchor.Type == horizonmodels.FragmentTypeFacility {
-		for _, edgeType := range []horizonmodels.DependencyType{
-			horizonmodels.DependencyTypeOwns,
-			horizonmodels.DependencyTypeControls,
-			horizonmodels.DependencyTypeOperatesIn,
-			horizonmodels.DependencyTypeManages,
+	if anchor.Class == FragmentTypeFacility {
+		for _, edgeType := range []DependencyType{
+			DependencyTypeOwns,
+			DependencyTypeControls,
+			DependencyTypeOperatesIn,
+			DependencyTypeManages,
 		} {
 			edges, err := s.edgesRepo.ListByTarget(ctx, tenantID, strings.TrimSpace(anchor.ID), &edgeType, 32)
 			if err != nil {
@@ -360,7 +360,7 @@ func (s *OneHopDownstreamService) collectContext(ctx context.Context, tenantID s
 			}
 			for _, edge := range edges {
 				source, err := s.fragmentsRepo.Get(ctx, strings.TrimSpace(edge.SourceFragmentID))
-				if err != nil || source == nil || source.Type != horizonmodels.FragmentTypeOrganization {
+				if err != nil || source == nil || source.Class != FragmentTypeOrganization {
 					continue
 				}
 				ownerSet[source.ID] = source
@@ -377,7 +377,7 @@ func (s *OneHopDownstreamService) collectContext(ctx context.Context, tenantID s
 	}
 	actorIDs = compactUniqueStrings(actorIDs)
 
-	produceEdges, _ := s.edgesRepo.ListBySourceIDsAndType(ctx, tenantID, actorIDs, horizonmodels.DependencyTypeProduces)
+	produceEdges, _ := s.edgesRepo.ListBySourceIDsAndType(ctx, tenantID, actorIDs, DependencyTypeProduces)
 	productIDs := make([]string, 0, len(produceEdges))
 	for _, edge := range produceEdges {
 		if edge == nil {
@@ -387,12 +387,12 @@ func (s *OneHopDownstreamService) collectContext(ctx context.Context, tenantID s
 	}
 	if len(productIDs) > 0 {
 		if products, err := s.fragmentsRepo.GetMany(ctx, productIDs); err == nil {
-			out.OutputProducts = collectFragmentsByIDs(products, productIDs, horizonmodels.FragmentTypeProduct, maxPromptProducts)
+			out.OutputProducts = collectFragmentsByIDs(products, productIDs, FragmentTypeProduct, maxPromptProducts)
 		}
 	}
 
 	if opts.IncludeInputsContext {
-		incomingSupply, _ := s.edgesRepo.ListByTargetIDsAndType(ctx, tenantID, actorIDs, horizonmodels.DependencyTypeSuppliesTo)
+		incomingSupply, _ := s.edgesRepo.ListByTargetIDsAndType(ctx, tenantID, actorIDs, DependencyTypeSuppliesTo)
 		inputIDs := make([]string, 0, len(incomingSupply))
 		for _, edge := range incomingSupply {
 			if edge == nil {
@@ -402,12 +402,12 @@ func (s *OneHopDownstreamService) collectContext(ctx context.Context, tenantID s
 		}
 		if len(inputIDs) > 0 {
 			if inputs, err := s.fragmentsRepo.GetMany(ctx, inputIDs); err == nil {
-				out.InputProducts = collectFragmentsByIDs(inputs, inputIDs, horizonmodels.FragmentTypeProduct, maxPromptProducts)
+				out.InputProducts = collectFragmentsByIDs(inputs, inputIDs, FragmentTypeProduct, maxPromptProducts)
 			}
 		}
 	}
 
-	downstreamSupply, _ := s.edgesRepo.ListBySourceIDsAndType(ctx, tenantID, actorIDs, horizonmodels.DependencyTypeSuppliesTo)
+	downstreamSupply, _ := s.edgesRepo.ListBySourceIDsAndType(ctx, tenantID, actorIDs, DependencyTypeSuppliesTo)
 	downstreamIDs := make([]string, 0, len(downstreamSupply))
 	for _, edge := range downstreamSupply {
 		if edge == nil {
@@ -429,7 +429,7 @@ func (s *OneHopDownstreamService) collectContext(ctx context.Context, tenantID s
 	}
 	productEdges := make([]*horizonmodels.DependencyEdge, 0, 32)
 	if len(productPathIDs) > 0 {
-		for _, edgeType := range horizonmodels.ProductTransitionEdgeTypes() {
+		for _, edgeType := range ProductTransitionEdgeTypes() {
 			typedEdges, _ := s.edgesRepo.ListBySourceIDsAndType(ctx, tenantID, productPathIDs, edgeType)
 			productEdges = append(productEdges, typedEdges...)
 		}
@@ -552,7 +552,7 @@ func (s *OneHopDownstreamService) normalizeSteps(
 			normalized.SourceActorRef = strings.TrimSpace(anchor.CanonicalPath)
 		}
 		if normalized.SourceActorType == "" {
-			normalized.SourceActorType = normalizeActorType(string(anchor.Type))
+			normalized.SourceActorType = normalizeActorType(string(anchor.Class))
 		}
 		if normalized.SourceProductRef == "" || !strings.HasPrefix(normalized.SourceProductRef, "/product/") {
 			continue
@@ -698,7 +698,7 @@ func (s *OneHopDownstreamService) persistSteps(
 			}
 		}
 
-		if created, edge, err := s.ensureEdge(ctx, tenantID, sourceActor, sourceProduct, horizonmodels.DependencyTypeProduces, buildStepQualifiers(step, anchor, "actor_output")); err != nil {
+		if created, edge, err := s.ensureEdge(ctx, tenantID, sourceActor, sourceProduct, DependencyTypeProduces, buildStepQualifiers(step, anchor, "actor_output")); err != nil {
 			return stats, err
 		} else if created {
 			stats.EdgesCreated++
@@ -706,13 +706,13 @@ func (s *OneHopDownstreamService) persistSteps(
 		}
 
 		if targetActor != nil {
-			if created, edge, err := s.ensureEdge(ctx, tenantID, sourceActor, targetActor, horizonmodels.DependencyTypeSuppliesTo, buildStepQualifiers(step, anchor, "actor_continuation")); err != nil {
+			if created, edge, err := s.ensureEdge(ctx, tenantID, sourceActor, targetActor, DependencyTypeSuppliesTo, buildStepQualifiers(step, anchor, "actor_continuation")); err != nil {
 				return stats, err
 			} else if created {
 				stats.EdgesCreated++
 				_ = s.publishEdgeUpsert(ctx, tenantID, edge)
 			}
-			if created, edge, err := s.ensureEdge(ctx, tenantID, sourceProduct, targetActor, horizonmodels.DependencyTypeSuppliesTo, buildStepQualifiers(step, anchor, "input_context")); err != nil {
+			if created, edge, err := s.ensureEdge(ctx, tenantID, sourceProduct, targetActor, DependencyTypeSuppliesTo, buildStepQualifiers(step, anchor, "input_context")); err != nil {
 				return stats, err
 			} else if created {
 				stats.EdgesCreated++
@@ -726,7 +726,7 @@ func (s *OneHopDownstreamService) persistSteps(
 			}
 			edgeType := edgeTypeForStepKind(step.StepKind)
 			if s.productDict != nil {
-				if _, known, _, _, err := s.productDict.NormalizeProductEdgeType(ctx, edgeType, horizonmodels.FragmentTypeProduct, horizonmodels.FragmentTypeProduct, sourceProduct.CanonicalPath, targetProduct.CanonicalPath); err == nil && !known {
+				if _, known, _, _, err := s.productDict.NormalizeProductEdgeType(ctx, edgeType, FragmentTypeProduct, FragmentTypeProduct, sourceProduct.CanonicalPath, targetProduct.CanonicalPath); err == nil && !known {
 					stats.TransformCandidates++
 				}
 			}
@@ -737,7 +737,7 @@ func (s *OneHopDownstreamService) persistSteps(
 				_ = s.publishEdgeUpsert(ctx, tenantID, edge)
 			}
 			if targetActor != nil {
-				if created, edge, err := s.ensureEdge(ctx, tenantID, targetActor, targetProduct, horizonmodels.DependencyTypeProduces, buildStepQualifiers(step, anchor, "target_output")); err != nil {
+				if created, edge, err := s.ensureEdge(ctx, tenantID, targetActor, targetProduct, DependencyTypeProduces, buildStepQualifiers(step, anchor, "target_output")); err != nil {
 					return stats, err
 				} else if created {
 					stats.EdgesCreated++
@@ -789,14 +789,12 @@ func (s *OneHopDownstreamService) ensureFragmentByPath(
 	}
 	fragmentType := horizonscout.InferFragmentTypeFromCanonicalPath(path)
 	switch fragmentType {
-	case horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeFacility,
-		horizonmodels.FragmentTypeProduct,
-		horizonmodels.FragmentTypeDeposit,
-		horizonmodels.FragmentTypeProgram,
-		horizonmodels.FragmentTypeGeoRegion,
-		horizonmodels.FragmentTypeMarket,
-		horizonmodels.FragmentTypeCommunity:
+	case FragmentTypeOrganization,
+		FragmentTypeFacility,
+		FragmentTypeProduct,
+		FragmentTypeGeoRegion,
+		FragmentTypeMarket,
+		FragmentTypeCommunity:
 	default:
 		return nil, false, fmt.Errorf("unsupported fragment type for path %s", path)
 	}
@@ -804,7 +802,7 @@ func (s *OneHopDownstreamService) ensureFragmentByPath(
 	fragment := &horizonmodels.HorizonFragment{
 		TenantID:      "global",
 		CanonicalPath: path,
-		Type:          fragmentType,
+		Class:         fragmentType,
 		Labels:        map[string]string{"en": label},
 		Identifiers:   map[string]string{},
 		State:         map[string]horizonmodels.MetricValue{},
@@ -832,7 +830,7 @@ func (s *OneHopDownstreamService) ensureEdge(
 	tenantID string,
 	source *horizonmodels.HorizonFragment,
 	target *horizonmodels.HorizonFragment,
-	edgeType horizonmodels.DependencyType,
+	edgeType DependencyType,
 	qualifiers map[string]interface{},
 ) (bool, *horizonmodels.DependencyEdge, error) {
 	if s == nil || s.edgesRepo == nil || source == nil || target == nil {
@@ -846,7 +844,7 @@ func (s *OneHopDownstreamService) ensureEdge(
 		TenantID:         firstNonEmpty(strings.TrimSpace(tenantID), "global"),
 		SourceFragmentID: strings.TrimSpace(source.ID),
 		TargetFragmentID: strings.TrimSpace(target.ID),
-		Type:             edgeType,
+		Relation:         edgeType,
 		Properties: horizonmodels.EdgeProperties{
 			Criticality:   clamp01(floatOrDefault(qualifiers["confidence"], 0.75)),
 			Amplification: 1,
@@ -961,7 +959,7 @@ func (s *OneHopDownstreamService) buildPrompt(anchor *horizonmodels.HorizonFragm
 	payload := map[string]interface{}{
 		"anchor": map[string]interface{}{
 			"canonicalPath": strings.TrimSpace(anchor.CanonicalPath),
-			"type":          string(anchor.Type),
+			"type":          string(anchor.Class),
 			"label":         fragmentLabel(anchor),
 		},
 		"relatedFacilities":       summarizeFragments(contextData.RelatedFacilities, maxPromptFacilities),
@@ -1090,7 +1088,7 @@ func shouldMaterializeStep(step oneHopStep, sourceActor, targetActor *horizonmod
 	if sourceActor == nil || targetActor == nil {
 		return false
 	}
-	return sourceActor.Type == horizonmodels.FragmentTypeFacility && targetActor.Type == horizonmodels.FragmentTypeFacility
+	return sourceActor.Class == FragmentTypeFacility && targetActor.Class == FragmentTypeFacility
 }
 
 func buildStepQualifiers(step oneHopStep, anchor *horizonmodels.HorizonFragment, purpose string) map[string]interface{} {
@@ -1103,7 +1101,7 @@ func buildStepQualifiers(step oneHopStep, anchor *horizonmodels.HorizonFragment,
 		"whyNotBroaderStep": step.WhyNotBroaderStep,
 		"oneHopGenerated":   true,
 		"oneHopAnchorRef":   strings.TrimSpace(anchor.CanonicalPath),
-		"oneHopAnchorType":  string(anchor.Type),
+		"oneHopAnchorType":  string(anchor.Class),
 		"source_role":       "supplier",
 		"target_role":       "customer",
 		"evidence":          append([]string(nil), step.Evidence...),
@@ -1161,7 +1159,7 @@ func (s *OneHopDownstreamService) completeJob(
 	job.Result = map[string]interface{}{
 		"scope":                  "one_hop_downstream",
 		"anchorRef":              strings.TrimSpace(anchor.CanonicalPath),
-		"anchorType":             string(anchor.Type),
+		"anchorType":             string(anchor.Class),
 		"stepsAccepted":          len(steps),
 		"fragmentsCreated":       stats.FragmentsCreated,
 		"edgesCreated":           stats.EdgesCreated,
@@ -1224,7 +1222,7 @@ func (s *OneHopDownstreamService) publishNodeUpsert(ctx context.Context, tenantI
 		"tenantId":      firstNonEmpty(strings.TrimSpace(tenantID), "global"),
 		"fragmentId":    strings.TrimSpace(fragment.ID),
 		"canonicalPath": strings.TrimSpace(fragment.CanonicalPath),
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"label":         fragmentLabel(fragment),
 		"operation":     strings.TrimSpace(operation),
 		"updatedAt":     time.Now().UTC().Format(time.RFC3339Nano),
@@ -1253,7 +1251,7 @@ func (s *OneHopDownstreamService) publishEdgeUpsert(ctx context.Context, tenantI
 		"targetFragmentId":    strings.TrimSpace(edge.TargetFragmentID),
 		"sourceCanonicalPath": src,
 		"targetCanonicalPath": dst,
-		"type":                string(edge.Type),
+		"type":                string(edge.Relation),
 		"qualifiers":          cloneMap(edge.Qualifiers),
 		"properties":          edge.Properties,
 		"ts":                  time.Now().UTC().Format(time.RFC3339Nano),
@@ -1287,7 +1285,7 @@ func summarizeFragments(fragments []*horizonmodels.HorizonFragment, limit int) [
 		}
 		out = append(out, map[string]string{
 			"canonicalPath": strings.TrimSpace(fragment.CanonicalPath),
-			"type":          string(fragment.Type),
+			"type":          string(fragment.Class),
 			"label":         fragmentLabel(fragment),
 		})
 		if len(out) >= limit {
@@ -1306,7 +1304,7 @@ func summarizeProductEdges(edges []*horizonmodels.DependencyEdge) []map[string]s
 		out = append(out, map[string]string{
 			"sourceFragmentId": strings.TrimSpace(edge.SourceFragmentID),
 			"targetFragmentId": strings.TrimSpace(edge.TargetFragmentID),
-			"type":             string(edge.Type),
+			"type":             string(edge.Relation),
 		})
 	}
 	if len(out) > maxPromptProducts {
@@ -1332,12 +1330,12 @@ func summarizeArtifacts(artifacts []*horizonmodels.MaterializedArtifact) []map[s
 	return out
 }
 
-func collectFragmentsByIDs(items map[string]*horizonmodels.HorizonFragment, orderedIDs []string, fragmentType horizonmodels.FragmentType, limit int) []*horizonmodels.HorizonFragment {
+func collectFragmentsByIDs(items map[string]*horizonmodels.HorizonFragment, orderedIDs []string, fragmentType FragmentType, limit int) []*horizonmodels.HorizonFragment {
 	seen := map[string]struct{}{}
 	out := make([]*horizonmodels.HorizonFragment, 0, len(orderedIDs))
 	for _, id := range orderedIDs {
 		fragment := items[strings.TrimSpace(id)]
-		if fragment == nil || fragment.Type != fragmentType {
+		if fragment == nil || fragment.Class != fragmentType {
 			continue
 		}
 		cp := strings.TrimSpace(fragment.CanonicalPath)
@@ -1364,7 +1362,7 @@ func collectActorFragmentsByIDs(items map[string]*horizonmodels.HorizonFragment,
 		if fragment == nil {
 			continue
 		}
-		if fragment.Type != horizonmodels.FragmentTypeOrganization && fragment.Type != horizonmodels.FragmentTypeFacility {
+		if fragment.Class != FragmentTypeOrganization && fragment.Class != FragmentTypeFacility {
 			continue
 		}
 		cp := strings.TrimSpace(fragment.CanonicalPath)
@@ -1400,15 +1398,15 @@ func mapValuesFragments(in map[string]*horizonmodels.HorizonFragment) []*horizon
 	return out
 }
 
-func isSupportedAnchorType(ft horizonmodels.FragmentType) bool {
-	return ft == horizonmodels.FragmentTypeOrganization || ft == horizonmodels.FragmentTypeFacility
+func isSupportedAnchorType(ft FragmentType) bool {
+	return ft == FragmentTypeOrganization || ft == FragmentTypeFacility
 }
 
 func normalizeActorType(v string) string {
 	switch strings.ToUpper(strings.TrimSpace(v)) {
-	case "ORG", string(horizonmodels.FragmentTypeOrganization):
+	case "ORG", string(FragmentTypeOrganization):
 		return "ORG"
-	case "FAC", string(horizonmodels.FragmentTypeFacility):
+	case "FAC", string(FragmentTypeFacility):
 		return "FAC"
 	default:
 		return ""
@@ -1445,14 +1443,14 @@ func normalizeStepKind(v string) string {
 	}
 }
 
-func edgeTypeForStepKind(stepKind string) horizonmodels.DependencyType {
+func edgeTypeForStepKind(stepKind string) DependencyType {
 	switch strings.TrimSpace(stepKind) {
 	case "assembly":
-		return horizonmodels.DependencyTypeAssemblesInto
+		return DependencyTypeAssemblesInto
 	case "usage":
-		return horizonmodels.DependencyTypeUsedIn
+		return DependencyTypeUsedIn
 	default:
-		return horizonmodels.DependencyTypeTransformsInto
+		return DependencyTypeTransformsInto
 	}
 }
 

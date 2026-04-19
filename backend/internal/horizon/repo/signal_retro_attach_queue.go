@@ -55,8 +55,8 @@ func (r *SignalRetroAttachQueueRepository) UpsertObservation(ctx context.Context
 			if strings.TrimSpace(item.FragmentID) == "" {
 				item.FragmentID = strings.TrimSpace(prev.FragmentID)
 			}
-			if item.FragmentType == "" {
-				item.FragmentType = prev.FragmentType
+			if item.FragmentClass == "" {
+				item.FragmentClass = prev.FragmentClass
 			}
 			if item.FirstSeenAt.IsZero() || (!prev.FirstSeenAt.IsZero() && prev.FirstSeenAt.Before(item.FirstSeenAt)) {
 				item.FirstSeenAt = prev.FirstSeenAt

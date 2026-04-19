@@ -7,8 +7,8 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // CanonizationPolicy normalizes paths, types, names, and synonyms.
@@ -152,10 +152,14 @@ func (p *CanonizationPolicy) normalizeFallback(inputType, inputValue string) str
 	}
 }
 
-// normalizeFragmentType maps common human labels to FragmentType enum (hardcoded from canonicalizer.go).
-func (p *CanonizationPolicy) normalizeFragmentType(s string) horizonmodels.FragmentType {
-	// Keep fragment/entity type normalization aligned with unified edge semantics contract.
-	return edgesemantics.NormalizeFragmentTypeToken(s)
+// normalizeFragmentType maps common human labels to AH FragmentClass.
+// Subtype information returned by the underlying tokenizer is dropped here:
+// the legacy contract was a single string output. Callers that need (class,
+// subtype) pairs should use edgesemantics.NormalizeFragmentClassToken
+// directly.
+func (p *CanonizationPolicy) normalizeFragmentType(s string) ah.FragmentClass {
+	cls, _, _ := edgesemantics.NormalizeFragmentClassToken(s)
+	return cls
 }
 
 func (p *CanonizationPolicy) safeNormalizationFallback(inputType, inputValue string) string {

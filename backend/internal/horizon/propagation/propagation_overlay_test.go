@@ -8,7 +8,7 @@ import (
 
 func TestBuildPropagationNodeOverlay_UsesMarketDomainSemantics(t *testing.T) {
 	frag := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 		CanonicalPath: "/org/us/mastercard",
 		MarketDomain:  "finance",
 		MarketVertical:"payments",
@@ -24,7 +24,7 @@ func TestBuildPropagationNodeOverlay_UsesMarketDomainSemantics(t *testing.T) {
 
 func TestBuildPropagationNodeOverlay_UsesIndustrialLogisticsSemantics(t *testing.T) {
 	frag := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeFacility,
+		Class:         FragmentTypeFacility,
 		CanonicalPath: "/fac/de/port-of-hamburg",
 		MarketDomain:  "industrial",
 		MarketVertical:"port-services",
@@ -40,7 +40,7 @@ func TestBuildPropagationNodeOverlay_UsesIndustrialLogisticsSemantics(t *testing
 
 func TestBuildPropagationNodeOverlay_PrefersOrganizationManufacturingSemanticsOverNoisyLogisticsHints(t *testing.T) {
 	frag := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 		CanonicalPath: "/org/us/tesla",
 		MarketDomain:  "industrial",
 		MarketVertical:"port-services",
@@ -70,7 +70,7 @@ func TestBuildPropagationNodeOverlay_PrefersOrganizationManufacturingSemanticsOv
 
 func TestIsChokepointFragment_IgnoresNoisyOrgTags(t *testing.T) {
 	frag := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 		CanonicalPath: "/org/us/tesla",
 		GeoFeatureType:"port",
 		Tags:          []string{"chokepoint"},

@@ -51,7 +51,7 @@ func TestBuildAssemblyPayloadFromInputs_UsesProductRelationDictionaryBeforeHeuri
 		if edge.FromProductRef == "/product/finished/mechanical/assembly/helium" &&
 			edge.ToProductRef == "/product/finished/mechanical/assembly/mri-scanner" {
 			found = true
-			if edge.Relation != string(models.DependencyTypeUsedIn) {
+			if edge.Relation != string(DependencyTypeUsedIn) {
 				t.Fatalf("relation=%q, want USED_IN", edge.Relation)
 			}
 		}

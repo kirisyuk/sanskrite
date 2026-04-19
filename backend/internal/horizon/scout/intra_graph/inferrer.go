@@ -31,16 +31,16 @@ const (
 
 // fragmentTypes maps pair type to (source, target) FragmentType using the same
 // ontology as EdgeDirectionPolicies. /gov/ and /org/ entities share FragmentTypeOrganization.
-func (p PairType) fragmentTypes() (models.FragmentType, models.FragmentType) {
+func (p PairType) fragmentTypes() (FragmentType, FragmentType) {
 	switch p {
 	case PairTypeOrgOrg, PairTypeOrgGov, PairTypeGovOrg, PairTypeGovGov:
-		return models.FragmentTypeOrganization, models.FragmentTypeOrganization
+		return FragmentTypeOrganization, FragmentTypeOrganization
 	case PairTypePersonOrg, PairTypePersonGov:
-		return models.FragmentTypePerson, models.FragmentTypeOrganization
+		return FragmentTypePerson, FragmentTypeOrganization
 	case PairTypeOrgMarket:
-		return models.FragmentTypeOrganization, models.FragmentTypeMarket
+		return FragmentTypeOrganization, FragmentTypeMarket
 	case PairTypeOrgProduct:
-		return models.FragmentTypeOrganization, models.FragmentTypeProduct
+		return FragmentTypeOrganization, FragmentTypeProduct
 	default:
 		return "", ""
 	}
@@ -58,8 +58,8 @@ func (p PairType) AllowedRelationTypes() []string {
 
 	seen := make(map[string]struct{})
 	for edgeType, rule := range edgesemantics.EdgeDirectionPolicies {
-		fwd := containsFT(rule.ValidSourceTypes, srcType) && containsFT(rule.ValidTargetTypes, tgtType)
-		rev := containsFT(rule.ValidSourceTypes, tgtType) && containsFT(rule.ValidTargetTypes, srcType)
+		fwd := containsFT(rule.ValidSourceClasses, srcType) && containsFT(rule.ValidTargetClasses, tgtType)
+		rev := containsFT(rule.ValidSourceClasses, tgtType) && containsFT(rule.ValidTargetClasses, srcType)
 		if fwd || rev {
 			seen[string(edgeType)] = struct{}{}
 		}
@@ -73,7 +73,7 @@ func (p PairType) AllowedRelationTypes() []string {
 	return out
 }
 
-func containsFT(types []models.FragmentType, t models.FragmentType) bool {
+func containsFT(types []FragmentType, t FragmentType) bool {
 	for _, vt := range types {
 		if vt == t {
 			return true
@@ -230,7 +230,7 @@ func fragGovPath(f *models.HorizonFragment) bool {
 	return f != nil && strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/gov/")
 }
 func fragPersonPath(f *models.HorizonFragment) bool {
-	return f != nil && f.Type == models.FragmentTypePerson && strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/person/")
+	return f != nil && f.Class == FragmentTypePerson && strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/person/")
 }
 func fragMarketPath(f *models.HorizonFragment) bool {
 	return f != nil && strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/market/")
@@ -399,7 +399,7 @@ func (inf *Inferrer) buildExistingEdges(ctx context.Context, fragments []*models
 		if tgtPath == "" {
 			continue
 		}
-		out.add(ews.srcPath, tgtPath, string(ews.edge.Type))
+		out.add(ews.srcPath, tgtPath, string(ews.edge.Relation))
 	}
 	return out
 }

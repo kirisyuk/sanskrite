@@ -4,13 +4,15 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestGenerateVectorText_IncludesIdentityAndNeighborhood(t *testing.T) {
 	t.Parallel()
 
 	frag := &HorizonFragment{
-		Type:          FragmentTypeOrganization,
+		Class:         ah.FragmentClassOrg,
 		CanonicalPath: "/org/sa/acme-inc",
 		Labels: map[string]string{
 			"en":  "ACME",
@@ -50,7 +52,7 @@ func TestGenerateVectorText_LimitsMetricLines(t *testing.T) {
 		state[key] = MetricValue{Value: float64(i), Confidence: 0.8}
 	}
 	frag := &HorizonFragment{
-		Type:          FragmentTypeOrganization,
+		Class:         ah.FragmentClassOrg,
 		CanonicalPath: "/org/us/test-inc",
 		Labels:        map[string]string{"en": "Test"},
 		State:         state,

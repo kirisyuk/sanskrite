@@ -28,7 +28,7 @@ func (e *ScoutEngine) ensureSegmentDerivedMarketLinks(ctx context.Context, fragm
 		return
 	}
 	// Only link concrete actors (ORG/FAC). GOV is stored as ORGANIZATION and is included.
-	if fragment.Type != models.FragmentTypeOrganization && fragment.Type != models.FragmentTypeFacility {
+	if fragment.Class != FragmentTypeOrganization && fragment.Class != FragmentTypeFacility {
 		return
 	}
 	if len(fragment.MarketSegments) == 0 {
@@ -99,7 +99,7 @@ func (e *ScoutEngine) ensureSegmentDerivedMarketLinks(ctx context.Context, fragm
 			marketFrag = &models.HorizonFragment{
 				TenantID:      "global",
 				CanonicalPath: marketPath,
-				Type:          models.FragmentTypeMarket,
+				Class:          FragmentTypeMarket,
 				Labels:        map[string]string{"en": label},
 				Status:        string(models.FragmentStatusActive),
 				State:         map[string]models.MetricValue{},
@@ -142,7 +142,7 @@ func (e *ScoutEngine) ensureSegmentDerivedMarketLinks(ctx context.Context, fragm
 		}
 
 		// Ensure PARTICIPATES_IN edge exists: fragment -> market
-		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", fragment.ID, marketFrag.ID, models.DependencyTypeParticipatesIn); err == nil {
+		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", fragment.ID, marketFrag.ID, DependencyTypeParticipatesIn); err == nil {
 			continue
 		} else if !errors.Is(err, repo.ErrEdgeNotFound) {
 			continue
@@ -152,7 +152,7 @@ func (e *ScoutEngine) ensureSegmentDerivedMarketLinks(ctx context.Context, fragm
 			TenantID:         "global",
 			SourceFragmentID: fragment.ID,
 			TargetFragmentID: marketFrag.ID,
-			Type:             models.DependencyTypeParticipatesIn,
+			Relation:             DependencyTypeParticipatesIn,
 			Properties: models.EdgeProperties{
 				Criticality:   0.4,
 				Amplification: 1.0,

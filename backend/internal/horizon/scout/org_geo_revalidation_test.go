@@ -8,7 +8,7 @@ import (
 
 func TestOrgGeoValidationQueries_AddsDeterministicHints(t *testing.T) {
 	fragment := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/ua/ingas",
 		Labels: map[string]string{
 			"en": "Ingas LLC",
@@ -30,7 +30,7 @@ func TestOrgGeoValidationQueries_AddsDeterministicHints(t *testing.T) {
 
 func TestOrgGeoValidationQueries_UsesInferredPlaceHintFromName(t *testing.T) {
 	fragment := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/cn/jabil-circuit-wuxi",
 		Labels: map[string]string{
 			"en": "Jabil Circuit Wuxi",
@@ -52,7 +52,7 @@ func TestOrgGeoValidationQueries_UsesInferredPlaceHintFromName(t *testing.T) {
 
 func TestShouldAcceptOrgGeoResult_RejectsCountryOnlyMatchWithoutPlace(t *testing.T) {
 	fragment := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/ua/ingas",
 		Labels: map[string]string{
 			"en": "Ingas LLC",
@@ -66,7 +66,7 @@ func TestShouldAcceptOrgGeoResult_RejectsCountryOnlyMatchWithoutPlace(t *testing
 
 func TestShouldAcceptOrgGeoResult_RejectsCountryOnlyMatchWhenCountryHintComesFromName(t *testing.T) {
 	fragment := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/kz/intertop-kazakhstan",
 		Labels: map[string]string{
 			"en": "Intertop Kazakhstan",
@@ -80,7 +80,7 @@ func TestShouldAcceptOrgGeoResult_RejectsCountryOnlyMatchWhenCountryHintComesFro
 
 func TestShouldAcceptOrgGeoResult_AcceptsDeterministicSpecificMatch(t *testing.T) {
 	fragment := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/ua/ingas",
 		Labels: map[string]string{
 			"en": "Ingas LLC",
@@ -94,7 +94,7 @@ func TestShouldAcceptOrgGeoResult_AcceptsDeterministicSpecificMatch(t *testing.T
 
 func TestShouldAcceptOrgGeoResult_AcceptsSpecificPlaceMatchFromNameHint(t *testing.T) {
 	fragment := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/cn/jabil-circuit-wuxi",
 		Labels: map[string]string{
 			"en": "Jabil Circuit Wuxi",
@@ -108,7 +108,7 @@ func TestShouldAcceptOrgGeoResult_AcceptsSpecificPlaceMatchFromNameHint(t *testi
 
 func TestShouldAcceptOrgGeoResult_AcceptsStrongNameSpecificCountryMatch(t *testing.T) {
 	fragment := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/cn/envision-group",
 		Labels: map[string]string{
 			"en": "Envision Group",

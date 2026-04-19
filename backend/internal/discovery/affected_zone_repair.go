@@ -65,7 +65,7 @@ func (r *AffectedZoneRepairer) RepairFragment(
 	if r == nil || r.pipeline == nil || r.pipeline.fragmentsRepo == nil {
 		return nil, fmt.Errorf("affected zone repairer is not configured")
 	}
-	if frag == nil || frag.Type != horizonmodels.FragmentTypeAffectedZone {
+	if frag == nil || !frag.IsLegacyAffectedZone() {
 		return nil, nil
 	}
 	if now.IsZero() {
@@ -199,7 +199,7 @@ func (r *AffectedZoneRepairer) RelinkFragment(
 	if r == nil || r.pipeline == nil || r.pipeline.fragmentsRepo == nil {
 		return false, fmt.Errorf("affected zone repairer is not configured")
 	}
-	if frag == nil || frag.Type != horizonmodels.FragmentTypeAffectedZone {
+	if frag == nil || !frag.IsLegacyAffectedZone() {
 		return false, nil
 	}
 	event := synthesizeAffectedZoneEventFromFragment(frag)

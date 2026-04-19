@@ -12,6 +12,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // GetCockpitData получает данные для Cockpit UI (граф, метрики, узлы)
@@ -137,7 +138,7 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 			for _, p := range scopePaths {
 				ft := scout.InferFragmentTypeFromCanonicalPath(p)
 				if ft == "" {
-					ft = models.FragmentTypeOrganization
+					ft = ah.FragmentClassOrg
 				}
 				if rr, rerr := resolver.Resolve(r.Context(), p, ft); rerr == nil && rr != nil && strings.TrimSpace(rr.CanonicalPath) != "" {
 					cp := strings.TrimSpace(rr.CanonicalPath)
@@ -221,7 +222,7 @@ func (h *HorizonHandlers) GetCockpitData(w http.ResponseWriter, r *http.Request)
 			skippedIncomingDomainEdges++
 			return
 		}
-		k := edge.SourceFragmentID + "|" + edge.TargetFragmentID + "|" + string(edge.Type)
+		k := edge.SourceFragmentID + "|" + edge.TargetFragmentID + "|" + string(edge.Relation)
 		if _, ok := seenEdges[k]; ok {
 			return
 		}
@@ -438,9 +439,6 @@ func isSphereFragment(fragment *models.HorizonFragment) bool {
 	if fragment == nil {
 		return false
 	}
-	if fragment.Type == models.FragmentType("SPHERE") {
-		return true
-	}
 	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
 	return strings.HasPrefix(cp, "/sphere/")
 }
@@ -448,9 +446,6 @@ func isSphereFragment(fragment *models.HorizonFragment) bool {
 func isDomainFragment(fragment *models.HorizonFragment) bool {
 	if fragment == nil {
 		return false
-	}
-	if fragment.Type == models.FragmentTypeDomain {
-		return true
 	}
 	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
 	return strings.HasPrefix(cp, "/domain/")

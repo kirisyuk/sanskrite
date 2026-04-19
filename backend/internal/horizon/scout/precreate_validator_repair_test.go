@@ -12,7 +12,7 @@ func TestRepairInvalidPath_FinancialProductNotGeneric(t *testing.T) {
 	v := NewPreCreateValidator(nil, nil, nil)
 
 	frag := &models.HorizonFragment{
-		Type:          models.FragmentTypeProduct,
+		Class:          FragmentTypeProduct,
 		CanonicalPath: "/product/x",
 		Labels:        map[string]string{"en": "Corporate Loan"},
 		Identifiers:   map[string]string{},
@@ -39,7 +39,7 @@ func TestRepairInvalidPath_NonFinancialProductUsesGeneric(t *testing.T) {
 	v := NewPreCreateValidator(nil, nil, nil)
 
 	frag := &models.HorizonFragment{
-		Type:          models.FragmentTypeProduct,
+		Class:          FragmentTypeProduct,
 		CanonicalPath: "/product/x",
 		Labels:        map[string]string{"en": "Lithium Battery"},
 		Identifiers:   map[string]string{},

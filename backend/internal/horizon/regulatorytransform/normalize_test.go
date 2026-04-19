@@ -3,7 +3,7 @@ package regulatorytransform
 import (
 	"testing"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestNormalizeRegulatoryEdgeType_usesMechanism(t *testing.T) {
@@ -17,10 +17,10 @@ func TestNormalizeRegulatoryEdgeType_usesMechanism(t *testing.T) {
 	got, changed := reg.NormalizeRegulatoryEdgeType(
 		"/decision/regulatory/eu-cbam-rollout",
 		"/mechanism/regulatory/carbon-border-adjustment-mechanism",
-		models.DependencyTypeDependsOn,
+		ah.RelationNameInfluences,
 	)
-	if !changed || got != models.DependencyTypeUsesMechanism {
-		t.Fatalf("expected USES_MECHANISM, changed=%v got=%s", changed, got)
+	if !changed || got != ah.RelationNameWields {
+		t.Fatalf("expected wields, changed=%v got=%s", changed, got)
 	}
 }
 
@@ -34,10 +34,10 @@ func TestNormalizeRegulatoryEdgeType_imposesCondition(t *testing.T) {
 	got, changed := reg.NormalizeRegulatoryEdgeType(
 		"/mechanism/regulatory/carbon-border-adjustment-mechanism",
 		"/org/eu/steel-importer-acme",
-		models.DependencyTypeInfluences,
+		ah.RelationNameInfluences,
 	)
-	if !changed || got != models.DependencyTypeImposesCondition {
-		t.Fatalf("expected IMPOSES_CONDITION, changed=%v got=%s", changed, got)
+	if !changed || got != ah.RelationNameImposes {
+		t.Fatalf("expected imposes, changed=%v got=%s", changed, got)
 	}
 }
 
@@ -59,9 +59,9 @@ func TestRegisterPair_duplicateFromTo_lastWins(t *testing.T) {
 	got, changed := reg.NormalizeRegulatoryEdgeType(
 		"/decision/regulatory/a",
 		"/mechanism/regulatory/b",
-		models.DependencyTypeDependsOn,
+		ah.RelationNameInfluences,
 	)
-	if !changed || got != models.DependencyTypeImposesCondition {
-		t.Fatalf("expected last IMPOSES_CONDITION, changed=%v got=%s", changed, got)
+	if !changed || got != ah.RelationNameImposes {
+		t.Fatalf("expected last imposes, changed=%v got=%s", changed, got)
 	}
 }

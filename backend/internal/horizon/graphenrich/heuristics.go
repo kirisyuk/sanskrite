@@ -8,6 +8,7 @@ import (
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func ApplyFragmentHeuristics(fragment *horizonmodels.HorizonFragment) bool {
@@ -49,26 +50,27 @@ func ApplyEdgeHeuristics(edge *horizonmodels.DependencyEdge, sourcePath, targetP
 	if normalizeTemporalModality(edge) {
 		changed = true
 	}
-	if strings.TrimSpace(string(edge.GetFacet())) == "" {
+	if string(edgeFacet(edge)) == "" {
 		if facet := strings.TrimSpace(report.Facet.Value); facet != "" && report.Facet.Confidence >= 0.34 {
-			edge.Qualifiers["facet"] = facet
+			edge.Qualifiers[QualifierFacet] = facet
 			changed = true
 		}
 	}
 
-	switch edge.Type {
-	case horizonmodels.DependencyTypeOwns:
+	rel := edge.Relation
+	switch {
+	case rel == ah.RelationNameBeneficiallyOwns:
 		if syncOwnershipPercent(edge) {
 			changed = true
 		}
 		if !hasOwnershipPercent(edge) {
-			if addEdgeEnrichmentHint(edge, "What is the ownership percentage for this OWNS relation?") {
+			if addEdgeEnrichmentHint(edge, "What is the ownership percentage for this beneficially_owns relation?") {
 				changed = true
 			}
 		}
-	case horizonmodels.DependencyTypeInvestsIn:
+	case rel == ah.RelationNameInvestedIn:
 		if !hasInvestmentAmount(edge) {
-			if addEdgeEnrichmentHint(edge, "What was the investment amount for this INVESTS_IN relation?") {
+			if addEdgeEnrichmentHint(edge, "What was the investment amount for this invested_in relation?") {
 				changed = true
 			}
 		}
@@ -77,7 +79,7 @@ func ApplyEdgeHeuristics(edge *horizonmodels.DependencyEdge, sourcePath, targetP
 				changed = true
 			}
 		}
-	case horizonmodels.DependencyTypeDependsOn:
+	case edge.IsTransmissionSensitive():
 		if normalizeTransmissionQualifiers(edge) {
 			changed = true
 		}
@@ -90,11 +92,7 @@ func ApplyEdgeHeuristics(edge *horizonmodels.DependencyEdge, sourcePath, targetP
 		if addTransmissionHints(edge) {
 			changed = true
 		}
-	case horizonmodels.DependencyTypeSuppliesTo, horizonmodels.DependencyTypeExtractsFrom, horizonmodels.DependencyTypeProduces:
-		if applyTransmissionRouteHeuristics(edge, sourcePath, targetPath, normalizedVia) {
-			changed = true
-		}
-	case horizonmodels.DependencyTypeEmployedBy, horizonmodels.DependencyTypeBoardMemberOf, horizonmodels.DependencyTypeManages:
+	case isEmploymentRelation(rel):
 		if lacksTemporalClarity(edge) {
 			if addEdgeEnrichmentHint(edge, "Is this relationship current or historical? Provide edgeModality and validFrom/validTo dates when available.") {
 				changed = true
@@ -158,7 +156,7 @@ func normalizeTransportVia(q map[string]interface{}) []string {
 	if len(q) == 0 {
 		return nil
 	}
-	raw, found := q[horizonmodels.QualifierTransportVia]
+	raw, found := q[QualifierTransportVia]
 	if !found {
 		for _, alias := range []string{"transportVia", "route_via", "routeVia", "transit_via", "via"} {
 			if aliasRaw, aliasFound := q[alias]; aliasFound {
@@ -195,15 +193,15 @@ func normalizeTransportViaQualifiers(q map[string]interface{}) ([]string, bool) 
 	if len(normalized) == 0 {
 		return nil, false
 	}
-	if existing, ok := q[horizonmodels.QualifierTransportVia]; ok && sameTransportVia(existing, normalized) {
+	if existing, ok := q[QualifierTransportVia]; ok && sameTransportVia(existing, normalized) {
 		return normalized, false
 	}
-	q[horizonmodels.QualifierTransportVia] = normalized
+	q[QualifierTransportVia] = normalized
 	return normalized, true
 }
 
 func sameTransportVia(existing interface{}, want []string) bool {
-	got := normalizeTransportVia(map[string]interface{}{horizonmodels.QualifierTransportVia: existing})
+	got := normalizeTransportVia(map[string]interface{}{QualifierTransportVia: existing})
 	if len(got) != len(want) {
 		return false
 	}
@@ -517,11 +515,11 @@ func addTransmissionHints(edge *horizonmodels.DependencyEdge) bool {
 	if edge == nil {
 		return false
 	}
-	facet := edge.GetFacet()
+	facet := edgeFacet(edge)
 	if facet == "" {
-		return addEdgeEnrichmentHint(edge, "Classify DEPENDS_ON facet (logistics/infrastructure/supply/payment/distribution/regulatory/...) to improve transmission reasoning.")
+		return addEdgeEnrichmentHint(edge, "Classify edge facet (logistics/infrastructure/supply/payment/distribution/regulatory/...) to improve transmission reasoning.")
 	}
-	needsTransmissionQualifiers := facet == horizonmodels.FacetLogistics || facet == horizonmodels.FacetInfrastructure || facet == horizonmodels.FacetSupply || facet == horizonmodels.FacetDistribution || facet == horizonmodels.FacetPayment
+	needsTransmissionQualifiers := facet == FacetLogistics || facet == FacetInfrastructure || facet == FacetSupply || facet == FacetDistribution || facet == FacetPayment
 	if !needsTransmissionQualifiers {
 		return false
 	}
@@ -529,28 +527,27 @@ func addTransmissionHints(edge *horizonmodels.DependencyEdge) bool {
 	if !hasAnyNumericQualifier(edge, horizonmodels.QualifierThroughputShare, horizonmodels.QualifierCapacityConstraint, "substitutability") {
 		changed = addEdgeEnrichmentHint(edge, "Add at least one transmission qualifier: throughput_share (0..1), capacity_constraint (0..1), or substitutability (0..1).") || changed
 	}
-	if facet == horizonmodels.FacetLogistics && !hasAnyNumericQualifier(edge, horizonmodels.QualifierReroutePenalty, horizonmodels.QualifierRerouteLatencyDeltaHrs, horizonmodels.QualifierRerouteCostDeltaPct) {
+	if facet == FacetLogistics && !hasAnyNumericQualifier(edge, horizonmodels.QualifierReroutePenalty, horizonmodels.QualifierRerouteLatencyDeltaHrs, horizonmodels.QualifierRerouteCostDeltaPct) {
 		changed = addEdgeEnrichmentHint(edge, "For logistics dependencies, add reroute_penalty (0..1) and reroute latency/cost deltas (hours/percent).") || changed
 	}
 	return changed
 }
 
 func applyTransmissionContractMetadata(edge *horizonmodels.DependencyEdge) bool {
-	if edge == nil || edge.Type != horizonmodels.DependencyTypeDependsOn {
+	// Under AH the transmission gate is on edge.Relation +
+	// quantitative qualifier presence (see DependencyEdge.IsTransmission
+	// Sensitive). The legacy DEPENDS_ON+facet narrowing is gone.
+	if edge == nil || !edge.IsTransmissionSensitive() {
 		return false
 	}
 	if edge.Qualifiers == nil {
 		edge.Qualifiers = map[string]interface{}{}
 	}
-	facet := edge.GetFacet()
-	needsContract := edge.IsTransmissionSensitive() || facet == ""
-	if !needsContract {
-		return false
-	}
+	facet := edgeFacet(edge)
 	hasBase := hasAnyNumericQualifier(edge, horizonmodels.QualifierThroughputShare, horizonmodels.QualifierCapacityConstraint, "substitutability")
 	hasReroute := hasAnyNumericQualifier(edge, horizonmodels.QualifierReroutePenalty, horizonmodels.QualifierRerouteLatencyDeltaHrs, horizonmodels.QualifierRerouteCostDeltaPct)
 	hasAny := hasBase || hasReroute
-	status := horizonmodels.TransmissionContractStatusComplete
+	status := TransmissionContractStatusComplete
 	missing := make([]string, 0, 3)
 	if facet == "" {
 		missing = appendMissingTransmissionField(missing, "facet")
@@ -558,27 +555,27 @@ func applyTransmissionContractMetadata(edge *horizonmodels.DependencyEdge) bool 
 	if !hasBase {
 		missing = appendMissingTransmissionField(missing, "throughput_share|capacity_constraint|substitutability")
 	}
-	if facet == horizonmodels.FacetLogistics && !hasReroute {
+	if facet == FacetLogistics && !hasReroute {
 		missing = appendMissingTransmissionField(missing, "reroute_penalty|reroute_latency_delta_hours|reroute_cost_delta_pct")
 	}
 	if len(missing) > 0 {
 		if hasAny {
-			status = horizonmodels.TransmissionContractStatusPartial
+			status = TransmissionContractStatusPartial
 		} else {
-			status = horizonmodels.TransmissionContractStatusMissing
+			status = TransmissionContractStatusMissing
 		}
 	}
-	mode := horizonmodels.TransmissionContractModeInferred
+	mode := TransmissionContractModeInferred
 	if edge.HasAnyTransmissionQualifier() {
-		mode = horizonmodels.TransmissionContractModeExplicit
+		mode = TransmissionContractModeExplicit
 	}
-	changed := setQualifier(edge.Qualifiers, horizonmodels.QualifierTransmissionContractVersion, horizonmodels.TransmissionContractVersionV1)
-	changed = setQualifier(edge.Qualifiers, horizonmodels.QualifierTransmissionContractStatus, status) || changed
-	changed = setQualifier(edge.Qualifiers, horizonmodels.QualifierTransmissionContractMode, mode) || changed
+	changed := setQualifier(edge.Qualifiers, QualifierTransmissionContractVersion, TransmissionContractVersionV1)
+	changed = setQualifier(edge.Qualifiers, QualifierTransmissionContractStatus, status) || changed
+	changed = setQualifier(edge.Qualifiers, QualifierTransmissionContractMode, mode) || changed
 	if len(missing) > 0 {
-		changed = setQualifier(edge.Qualifiers, horizonmodels.QualifierTransmissionContractMissing, missing) || changed
-	} else if _, ok := edge.Qualifiers[horizonmodels.QualifierTransmissionContractMissing]; ok {
-		delete(edge.Qualifiers, horizonmodels.QualifierTransmissionContractMissing)
+		changed = setQualifier(edge.Qualifiers, QualifierTransmissionContractMissing, missing) || changed
+	} else if _, ok := edge.Qualifiers[QualifierTransmissionContractMissing]; ok {
+		delete(edge.Qualifiers, QualifierTransmissionContractMissing)
 		changed = true
 	}
 	return changed

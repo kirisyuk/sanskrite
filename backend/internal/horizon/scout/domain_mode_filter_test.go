@@ -13,14 +13,14 @@ func TestEdgeAllowlistByDomainMode_SupplyChainIncludesMarketAnchors(t *testing.T
 	allow := EdgeAllowlistByDomainMode(taxonomy.DomainModeSupplyChain)
 	operational := []string{"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "EXTRACTS_FROM"}
 	for _, ot := range operational {
-		if !AllowlistContains(allow, models.DependencyType(ot)) {
+		if !AllowlistContains(allow, DependencyType(ot)) {
 			t.Fatalf("supply_chain allowlist must include %s", ot)
 		}
 	}
-	if !AllowlistContains(allow, models.DependencyType("HAS_MARKET_SEGMENT")) {
+	if !AllowlistContains(allow, DependencyType("HAS_MARKET_SEGMENT")) {
 		t.Fatalf("supply_chain allowlist must include HAS_MARKET_SEGMENT")
 	}
-	if AllowlistContains(allow, models.DependencyType("DEPENDS_ON")) {
+	if AllowlistContains(allow, DependencyType("DEPENDS_ON")) {
 		t.Fatalf("supply_chain allowlist must exclude DEPENDS_ON (use SUPPLIES_TO, PARTICIPATES_IN instead)")
 	}
 }
@@ -48,17 +48,17 @@ func TestEdgeAllowlistByDomainMode_AssuranceExcludesLegacyAuditedBy(t *testing.T
 
 func TestEdgeAllowlistByDomainModes_ComposedFromContractSemantics(t *testing.T) {
 	allow := EdgeAllowlistByDomainModes([]string{taxonomy.DomainModeGovernance, taxonomy.DomainModeSupplyChain})
-	for _, want := range []models.DependencyType{
-		models.DependencyTypeProduces,
-		models.DependencyTypeSuppliesTo,
-		models.DependencyTypeOwns,
-		models.DependencyTypeBoardMemberOf,
+	for _, want := range []DependencyType{
+		DependencyTypeProduces,
+		DependencyTypeSuppliesTo,
+		DependencyTypeOwns,
+		DependencyTypeBoardMemberOf,
 	} {
 		if !AllowlistContains(allow, want) {
 			t.Fatalf("composed allowlist must include %s", want)
 		}
 	}
-	if AllowlistContains(allow, models.DependencyTypeInfluences) {
+	if AllowlistContains(allow, DependencyTypeInfluences) {
 		t.Fatalf("composed allowlist must not leak interpretive INFLUENCES into supply+governance runtime contract")
 	}
 }
@@ -115,7 +115,7 @@ func TestIsAllowedSupplyChainRuntimeRelation_DomainAnchorKeepsScaffold(t *testin
 	if !IsAllowedSupplyChainRuntimeRelation(
 		"/domain/v1/supply-chain/geo/kz/subject/samsung-electronics",
 		"/org/kr/samsung-electronics",
-		models.DependencyTypeFocusesOn,
+		DependencyTypeFocusesOn,
 	) {
 		t.Fatal("domain supply-chain anchor must allow FOCUSES_ON at runtime")
 	}
@@ -125,7 +125,7 @@ func TestIsAllowedSupplyChainPersistRelation_DomainAnchorKeepsScaffold(t *testin
 	if !IsAllowedSupplyChainPersistRelation(
 		"/domain/v1/supply-chain/geo/kz/subject/samsung-electronics",
 		"/org/kr/samsung-electronics",
-		models.DependencyTypeFocusesOn,
+		DependencyTypeFocusesOn,
 	) {
 		t.Fatal("domain supply-chain anchor must allow FOCUSES_ON at final persist gate")
 	}
@@ -135,7 +135,7 @@ func TestIsAllowedSupplyChainRuntimeRelation_MarketAnchorKeepsMarketRelation(t *
 	if !IsAllowedSupplyChainRuntimeRelation(
 		"/market/kz/consumer-electronics/retail",
 		"/market/kz/consumer-electronics/wholesale",
-		models.DependencyType("HAS_MARKET_SEGMENT"),
+		DependencyType("HAS_MARKET_SEGMENT"),
 	) {
 		t.Fatal("market supply-chain anchor must allow market relations at runtime")
 	}
@@ -145,7 +145,7 @@ func TestIsAllowedSupplyChainRuntimeRelation_OrgSourceStillRejectsFocusesOn(t *t
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/org/kr/samsung-electronics",
 		"/market/kz/consumer-electronics/retail",
-		models.DependencyTypeFocusesOn,
+		DependencyTypeFocusesOn,
 	) {
 		t.Fatal("non-domain/non-market source must not allow FOCUSES_ON in supply-chain runtime gate")
 	}
@@ -155,7 +155,7 @@ func TestIsAllowedSupplyChainPersistRelation_OrgSourceStillRejectsFocusesOn(t *t
 	if IsAllowedSupplyChainPersistRelation(
 		"/org/kr/samsung-electronics",
 		"/market/kz/consumer-electronics/retail",
-		models.DependencyTypeFocusesOn,
+		DependencyTypeFocusesOn,
 	) {
 		t.Fatal("non-domain/non-market source must not allow FOCUSES_ON at final persist gate")
 	}
@@ -314,28 +314,28 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantAdministersAndSubsidi
 	if !IsAllowedSupplyChainRuntimeRelation(
 		"/gov/us/department-of-the-navy",
 		"/gov/us/navy",
-		models.DependencyTypeAdministers,
+		DependencyTypeAdministers,
 	) {
 		t.Fatal("supply-chain runtime gate must allow ADMINISTERS for relevant governance overlays")
 	}
 	if !IsAllowedSupplyChainPersistRelation(
 		"/org/jp/toyota-industries",
 		"/org/jp/toyota-group",
-		models.DependencyTypeSubsidiaryOf,
+		DependencyTypeSubsidiaryOf,
 	) {
 		t.Fatal("supply-chain persist gate must allow SUBSIDIARY_OF for relevant ownership overlays")
 	}
 	if !IsAllowedSupplyChainRuntimeRelation(
 		"/program/ae/saber",
 		"/gov/ae/ministry-of-industry-and-advanced-technology",
-		models.DependencyTypeAdministers,
+		DependencyTypeAdministers,
 	) {
 		t.Fatal("runtime gate must keep reversible PROGRAM -> GOV ADMINISTERS edges so canonicalization can swap them")
 	}
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/gov/us/department-of-the-navy",
 		"/market/us/defense/naval-systems",
-		models.DependencyTypeAdministers,
+		DependencyTypeAdministers,
 	) {
 		t.Fatal("market target must remain out of contract for supply-chain ADMINISTERS")
 	}
@@ -345,28 +345,28 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantManagesAndAffects(t *
 	if !IsAllowedSupplyChainRuntimeRelation(
 		"/org/kz/damu-entrepreneurship-development-fund",
 		"/program/kz/business-roadmap-2025",
-		models.DependencyTypeManages,
+		DependencyTypeManages,
 	) {
 		t.Fatal("supply-chain runtime gate must allow MANAGES for org->program overlays")
 	}
 	if !IsAllowedSupplyChainPersistRelation(
 		"/org/kz/damu-entrepreneurship-development-fund",
 		"/market/kz/logistics/cross-border-trade",
-		models.DependencyTypeAffects,
+		DependencyTypeAffects,
 	) {
 		t.Fatal("supply-chain persist gate must allow AFFECTS for org->market overlays")
 	}
 	if !IsAllowedSupplyChainRuntimeRelation(
 		"/program/ae/saber",
 		"/community/global/professional/conformity-assessment-bodies",
-		models.DependencyTypeAffects,
+		DependencyTypeAffects,
 	) {
 		t.Fatal("supply-chain runtime gate must allow AFFECTS for program->community overlays")
 	}
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/product/finished/consumer/footwear",
 		"/market/kz/logistics/cross-border-trade",
-		models.DependencyTypeAffects,
+		DependencyTypeAffects,
 	) {
 		t.Fatal("product source must remain out of contract for supply-chain AFFECTS overlays")
 	}
@@ -377,85 +377,85 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantPolicyImpactOverlays(
 		name   string
 		source string
 		target string
-		typ    models.DependencyType
+		typ    DependencyType
 	}{
 		{
 			name:   "influences program to market pricing",
 			source: "/program/kz/digital-footwear-labeling",
 			target: "/market/kz/retail/apparel/footwear/pricing",
-			typ:    models.DependencyTypeInfluences,
+			typ:    DependencyTypeInfluences,
 		},
 		{
 			name:   "gatekeeps decision gov to decision",
 			source: "/gov/kz/ministry-of-industry-and-construction",
 			target: "/decision/trade/mandatory-labeling-enforcement",
-			typ:    models.DependencyTypeGatekeepsDecision,
+			typ:    DependencyTypeGatekeepsDecision,
 		},
 		{
 			name:   "uses mechanism decision to mechanism",
 			source: "/decision/trade/mandatory-labeling-enforcement",
 			target: "/mechanism/regulatory/compulsory-data-matrix-marking",
-			typ:    models.DependencyTypeUsesMechanism,
+			typ:    DependencyTypeUsesMechanism,
 		},
 		{
 			name:   "regulates gov to market",
 			source: "/gov/kz/ministry-of-industry-and-construction",
 			target: "/market/kz/retail/footwear",
-			typ:    models.DependencyTypeRegulates,
+			typ:    DependencyTypeRegulates,
 		},
 		{
 			name:   "imposes condition mechanism to market",
 			source: "/mechanism/technological/is-mtt-traceability-system",
 			target: "/market/kz/retail/footwear",
-			typ:    models.DependencyTypeImposesCondition,
+			typ:    DependencyTypeImposesCondition,
 		},
 		{
 			name:   "controls access org to market",
 			source: "/org/kz/kazakhtelecom",
 			target: "/market/kz/retail/footwear",
-			typ:    models.DependencyTypeControlsAccess,
+			typ:    DependencyTypeControlsAccess,
 		},
 		{
 			name:   "in geo scope program to geo",
 			source: "/program/ae/saber",
 			target: "/loc/ae",
-			typ:    models.DependencyTypeInGeoScope,
+			typ:    DependencyTypeInGeoScope,
 		},
 		{
 			name:   "operates via mechanism to mechanism",
 			source: "/mechanism/technological/is-mtt-traceability-system",
 			target: "/mechanism/regulatory/compulsory-data-matrix-marking",
-			typ:    models.DependencyTypeOperatesVia,
+			typ:    DependencyTypeOperatesVia,
 		},
 		{
 			name:   "direct competitor overlay on organizations",
 			source: "/org/de/infineon-technologies",
 			target: "/org/nl/nxp-semiconductors",
-			typ:    models.DependencyTypeCompetesWith,
+			typ:    DependencyTypeCompetesWith,
 		},
 		{
 			name:   "partnership overlay from org to program",
 			source: "/org/be/imec",
 			target: "/program/eu/european-chips-act",
-			typ:    models.DependencyTypePartnersWith,
+			typ:    DependencyTypePartnersWith,
 		},
 		{
 			name:   "operates via overlay from org to facility",
 			source: "/org/us/wolfspeed",
 			target: "/fac/de/ensdorf-fab",
-			typ:    models.DependencyTypeOperatesVia,
+			typ:    DependencyTypeOperatesVia,
 		},
 		{
 			name:   "membership overlay from org to program",
 			source: "/org/eu/chips-joint-undertaking",
 			target: "/program/eu/european-chips-act",
-			typ:    models.DependencyTypeMemberOf,
+			typ:    DependencyTypeMemberOf,
 		},
 		{
 			name:   "investment overlay from gov to org",
 			source: "/gov/eu/european-commission",
 			target: "/org/de/infineon",
-			typ:    models.DependencyTypeInvestsIn,
+			typ:    DependencyTypeInvestsIn,
 		},
 	}
 
@@ -471,21 +471,21 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantPolicyImpactOverlays(
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/product/finished/consumer/footwear",
 		"/decision/trade/mandatory-labeling-enforcement",
-		models.DependencyTypeGatekeepsDecision,
+		DependencyTypeGatekeepsDecision,
 	) {
 		t.Fatal("product source must remain out of contract for GATEKEEPS_DECISION")
 	}
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/decision/trade/mandatory-labeling-enforcement",
 		"/market/kz/retail/footwear",
-		models.DependencyTypeUsesMechanism,
+		DependencyTypeUsesMechanism,
 	) {
 		t.Fatal("USES_MECHANISM must still require a mechanism target")
 	}
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/product/finished/consumer/footwear",
 		"/mechanism/regulatory/compulsory-data-matrix-marking",
-		models.DependencyTypeOperatesVia,
+		DependencyTypeOperatesVia,
 	) {
 		t.Fatal("OPERATES_VIA must still reject product sources")
 	}

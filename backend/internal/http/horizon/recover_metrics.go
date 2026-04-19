@@ -544,7 +544,7 @@ func recoverMetricMissingKeys(fragment *horizonmodels.HorizonFragment, match *su
 		if len(fragment.TransportViaRefs) > 0 {
 			present["transportViaRefs"] = struct{}{}
 		}
-		if stringQualifier(fragment.Qualifiers, horizonmodels.QualifierRouteMode) != "" {
+		if stringQualifier(fragment.Qualifiers, QualifierRouteMode) != "" {
 			present["mode"] = struct{}{}
 		}
 		if stringQualifier(fragment.Qualifiers, "vesselType") != "" {
@@ -563,13 +563,13 @@ func recoverMetricMissingKeys(fragment *horizonmodels.HorizonFragment, match *su
 						present[strings.TrimSpace(key)] = struct{}{}
 					}
 				}
-				if routeMode := stringQualifier(edge.Qualifiers, horizonmodels.QualifierRouteMode); routeMode != "" {
+				if routeMode := stringQualifier(edge.Qualifiers, QualifierRouteMode); routeMode != "" {
 					present["mode"] = struct{}{}
 				}
 				if stringQualifier(edge.Qualifiers, "vesselType") != "" {
 					present["vesselType"] = struct{}{}
 				}
-				if len(interfaceToStrings(edge.Qualifiers[horizonmodels.QualifierTransportVia])) > 0 {
+				if len(interfaceToStrings(edge.Qualifiers[QualifierTransportVia])) > 0 {
 					present["transportViaRefs"] = struct{}{}
 				}
 			}
@@ -1035,10 +1035,10 @@ func (c *RecoverMetricsCanvas) applyRecoveryToFragment(fragment *horizonmodels.H
 	}
 	if len(recovery.TransportViaRefs) > 0 {
 		fragment.TransportViaRefs = uniqueCanonicalRefs(append(fragment.TransportViaRefs, recovery.TransportViaRefs...))
-		fragment.Qualifiers[horizonmodels.QualifierTransportVia] = append([]string(nil), fragment.TransportViaRefs...)
+		fragment.Qualifiers[QualifierTransportVia] = append([]string(nil), fragment.TransportViaRefs...)
 	}
 	if recovery.Mode != "" {
-		fragment.Qualifiers[horizonmodels.QualifierRouteMode] = strings.TrimSpace(recovery.Mode)
+		fragment.Qualifiers[QualifierRouteMode] = strings.TrimSpace(recovery.Mode)
 	}
 	if recovery.VesselType != "" {
 		fragment.Qualifiers["vesselType"] = strings.TrimSpace(recovery.VesselType)
@@ -1280,10 +1280,10 @@ func (c *RecoverMetricsCanvas) applyRecoveryToArtifact(ctx context.Context, tena
 			edge.Metrics[strings.TrimSpace(obs.MetricKey)] = makeRecoveredMetricValue(obs, sourceIDs, now)
 		}
 		if len(recovery.TransportViaRefs) > 0 {
-			edge.Qualifiers[horizonmodels.QualifierTransportVia] = uniqueCanonicalRefs(recovery.TransportViaRefs)
+			edge.Qualifiers[QualifierTransportVia] = uniqueCanonicalRefs(recovery.TransportViaRefs)
 		}
 		if recovery.Mode != "" {
-			edge.Qualifiers[horizonmodels.QualifierRouteMode] = strings.TrimSpace(recovery.Mode)
+			edge.Qualifiers[QualifierRouteMode] = strings.TrimSpace(recovery.Mode)
 		}
 		if recovery.VesselType != "" {
 			edge.Qualifiers["vesselType"] = strings.TrimSpace(recovery.VesselType)

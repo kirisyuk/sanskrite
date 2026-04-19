@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestBuildSupplyLinkOverlayRecord_UsesPrimaryEndpointsAndMetrics(t *testing.T) {
@@ -11,7 +12,9 @@ func TestBuildSupplyLinkOverlayRecord_UsesPrimaryEndpointsAndMetrics(t *testing.
 	product := "/product/raw/hydrocarbon/extraction/crude-oil"
 	customer := "/fac/gb/teesside-terminal"
 	link := &horizonmodels.HorizonFragment{
-		Type:             horizonmodels.FragmentTypeSupplyLink,
+		Class:            ah.FragmentClassSite,
+		Subtype:          "supply_link",
+		Identifiers:      map[string]string{"legacy_supply_link": "true"},
 		TenantID:         "global",
 		CanonicalPath:    "/supply-link/global/equinor/crude-oil/teesside-terminal",
 		SupplierRef:      &supplier,
@@ -56,7 +59,7 @@ func TestBuildSupplyLinkVirtualTraversals_IncludesSupplyAndRouteDependencies(t *
 	}
 
 	supplierTraversals := buildSupplyLinkVirtualTraversals(rec.SupplierPath, rec)
-	if len(supplierTraversals) != 1 || supplierTraversals[0].edgeType != horizonmodels.DependencyTypeSuppliesTo {
+	if len(supplierTraversals) != 1 || supplierTraversals[0].edgeType != DependencyTypeSuppliesTo {
 		t.Fatalf("supplier traversals=%+v, want one SUPPLIES_TO", supplierTraversals)
 	}
 
@@ -66,7 +69,7 @@ func TestBuildSupplyLinkVirtualTraversals_IncludesSupplyAndRouteDependencies(t *
 	}
 	foundRoute := false
 	for _, item := range customerTraversals {
-		if item.edgeType == horizonmodels.DependencyTypeDependsOn && item.targetPath == rec.TransportVia[0] {
+		if item.edgeType == DependencyTypeDependsOn && item.targetPath == rec.TransportVia[0] {
 			foundRoute = true
 		}
 	}
@@ -75,14 +78,14 @@ func TestBuildSupplyLinkVirtualTraversals_IncludesSupplyAndRouteDependencies(t *
 	}
 
 	viaTraversals := buildSupplyLinkVirtualTraversals(rec.TransportVia[0], rec)
-	if len(viaTraversals) != 1 || viaTraversals[0].edgeType != horizonmodels.DependencyTypeDependsOn || viaTraversals[0].traversalDirection != "target_to_source" {
+	if len(viaTraversals) != 1 || viaTraversals[0].edgeType != DependencyTypeDependsOn || viaTraversals[0].traversalDirection != "target_to_source" {
 		t.Fatalf("via traversals=%+v, want target_to_source DEPENDS_ON", viaTraversals)
 	}
 
 	geoTraversals := buildSupplyLinkVirtualTraversals(rec.SupplierGeoRef, rec)
 	foundGeoAffects := false
 	for _, item := range geoTraversals {
-		if item.edgeType == horizonmodels.DependencyTypeAffects && item.targetPath == rec.SupplierPath {
+		if item.edgeType == DependencyTypeAffects && item.targetPath == rec.SupplierPath {
 			foundGeoAffects = true
 		}
 	}
@@ -115,7 +118,7 @@ func TestBuildSupplyLinkQualifiers_LogisticsAddsTransmissionMetadata(t *testing.
 		RecoveryLatencyHrs: 72,
 	}
 	q := buildSupplyLinkQualifiers(rec, "logistics")
-	if q["facet"] != string(horizonmodels.FacetLogistics) {
+	if q["facet"] != string(FacetLogistics) {
 		t.Fatalf("facet=%v, want logistics", q["facet"])
 	}
 	if q[horizonmodels.QualifierThroughputShare] == nil {
@@ -124,10 +127,10 @@ func TestBuildSupplyLinkQualifiers_LogisticsAddsTransmissionMetadata(t *testing.
 	if q[horizonmodels.QualifierReroutePenalty] == nil {
 		t.Fatal("expected reroute penalty for constrained route")
 	}
-	if q[horizonmodels.QualifierTransmissionContractStatus] != horizonmodels.TransmissionContractStatusPartial {
-		t.Fatalf("transmission status=%v, want partial", q[horizonmodels.QualifierTransmissionContractStatus])
+	if q[QualifierTransmissionContractStatus] != TransmissionContractStatusPartial {
+		t.Fatalf("transmission status=%v, want partial", q[QualifierTransmissionContractStatus])
 	}
-	if q[horizonmodels.QualifierPathStressScore] == nil || q[horizonmodels.QualifierPathFragility] == nil {
+	if q[QualifierPathStressScore] == nil || q[QualifierPathFragility] == nil {
 		t.Fatal("expected path stress qualifiers")
 	}
 }

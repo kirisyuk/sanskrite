@@ -12,7 +12,8 @@ import (
 	grpcStatus "google.golang.org/grpc/status"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -36,8 +37,8 @@ type EdgesWriter interface {
 	Get(ctx context.Context, id string) (*horizonmodels.DependencyEdge, error)
 	Update(ctx context.Context, edge *horizonmodels.DependencyEdge) error
 	Delete(ctx context.Context, id string) error
-	ListBySource(ctx context.Context, tenantID, sourceID string, edgeType *horizonmodels.DependencyType, limit int) ([]*horizonmodels.DependencyEdge, error)
-	ListByTarget(ctx context.Context, tenantID, targetID string, edgeType *horizonmodels.DependencyType, limit int) ([]*horizonmodels.DependencyEdge, error)
+	ListBySource(ctx context.Context, tenantID, sourceID string, edgeType *ah.RelationName, limit int) ([]*horizonmodels.DependencyEdge, error)
+	ListByTarget(ctx context.Context, tenantID, targetID string, edgeType *ah.RelationName, limit int) ([]*horizonmodels.DependencyEdge, error)
 }
 
 // EnforcementJobsWriter provides read/write access to enforcement jobs.
@@ -57,7 +58,7 @@ type LensesWriter interface {
 // RedirectRecorder records canonical path redirects so Resolve() returns the final path.
 // Used when enforcement fixes a path (oldPath -> newPath) to avoid future duplicates.
 type RedirectRecorder interface {
-	RecordRedirect(ctx context.Context, fromPath, toPath string, fragmentType horizonmodels.FragmentType, reason string)
+	RecordRedirect(ctx context.Context, fromPath, toPath string, fragmentType ah.FragmentClass, reason string)
 }
 
 // EnforcementExecutor executes policy enforcement tasks.
@@ -448,7 +449,7 @@ func (e *EnforcementExecutor) executeFixPath(ctx context.Context, task Enforceme
 
 	// Record redirect so Resolve() returns the corrected path on future LLM outputs.
 	if e.redirectRecorder != nil && strings.TrimSpace(oldPath) != "" && newPath != "" && strings.TrimSpace(oldPath) != newPath {
-		e.redirectRecorder.RecordRedirect(ctx, strings.TrimSpace(oldPath), newPath, frag.Type, "enforcement_fix_path")
+		e.redirectRecorder.RecordRedirect(ctx, strings.TrimSpace(oldPath), newPath, frag.Class, "enforcement_fix_path")
 	}
 
 	// Deterministic: if this fix caused a canonicalPath collision (two fragment IDs now share the same canonicalPath),
@@ -611,8 +612,8 @@ func (e *EnforcementExecutor) executeCanonicalizeEdge(ctx context.Context, _ str
 		return nil, fmt.Errorf("failed to load edge: %w", err)
 	}
 
-	oldType := edge.Type
-	edge.Type = horizonmodels.DependencyType(newTypeStr)
+	oldType := edge.Relation
+	edge.Relation = ah.RelationName(newTypeStr)
 
 	if shouldSwap {
 		oldSource := edge.SourceFragmentID
@@ -621,8 +622,8 @@ func (e *EnforcementExecutor) executeCanonicalizeEdge(ctx context.Context, _ str
 	}
 
 	// Apply symmetric normalization if needed
-	edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = horizonmodels.NormalizeSymmetricEdge(
-		edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+	edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation, _ = NormalizeSymmetricEdge(
+		edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 
 	edge.Metadata.LastUpdatedAt = time.Now().UTC()
 
@@ -642,7 +643,7 @@ func (e *EnforcementExecutor) executeCanonicalizeEdge(ctx context.Context, _ str
 		Success:     true,
 		Action:      "edge_canonicalized",
 		AffectedIDs: []string{edgeID},
-		Details:     fmt.Sprintf("Changed edge type from %s to %s", oldType, edge.Type),
+		Details:     fmt.Sprintf("Changed edge type from %s to %s", oldType, edge.Relation),
 	}, nil
 }
 
@@ -749,8 +750,8 @@ func (e *EnforcementExecutor) executeNormalizeSymmetric(ctx context.Context, _ s
 		return nil, fmt.Errorf("failed to load edge: %w", err)
 	}
 
-	normalizedSource, normalizedTarget, _, swapped := horizonmodels.NormalizeSymmetricEdge(
-		edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+	normalizedSource, normalizedTarget, _, swapped := NormalizeSymmetricEdge(
+		edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 
 	if !swapped {
 		return &EnforcementResult{
@@ -886,10 +887,10 @@ func (e *EnforcementExecutor) executeFixISO2(ctx context.Context, task Enforceme
 			if ed == nil {
 				continue
 			}
-			et := strings.ToUpper(strings.TrimSpace(string(ed.Type)))
-			if et != string(horizonmodels.DependencyTypeLocatedIn) &&
-				et != string(horizonmodels.DependencyTypeOperatesIn) &&
-				et != string(horizonmodels.DependencyTypeAdministers) {
+			et := strings.ToUpper(strings.TrimSpace(string(ed.Relation)))
+			if et != string(relLocatedIn) &&
+				et != string(relOperatesIn) &&
+				et != string(relAdministers) {
 				continue
 			}
 			otherID := ""

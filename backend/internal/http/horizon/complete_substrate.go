@@ -1017,10 +1017,10 @@ func applySubstrateCompletionToArtifact(artifact *horizonmodels.MaterializedArti
 			edge.Qualifiers = map[string]interface{}{}
 		}
 		if len(completion.TransportViaRefs) > 0 {
-			edge.Qualifiers[horizonmodels.QualifierTransportVia] = uniqueCanonicalRefs(completion.TransportViaRefs)
+			edge.Qualifiers[QualifierTransportVia] = uniqueCanonicalRefs(completion.TransportViaRefs)
 		}
 		if completion.Mode != "" {
-			edge.Qualifiers[horizonmodels.QualifierRouteMode] = completion.Mode
+			edge.Qualifiers[QualifierRouteMode] = completion.Mode
 		}
 		if completion.VesselType != "" {
 			edge.Qualifiers["vesselType"] = completion.VesselType

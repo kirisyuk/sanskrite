@@ -81,8 +81,8 @@ func (b *DomainArtifactBuilder) MaterializeRelationsGraph(
 	seen := map[edgeKey]bool{}
 	var filteredEdges []*models.DependencyEdge
 	for _, e := range allEdges {
-		relType := strings.TrimSpace(string(e.Type))
-		if !isAllowedEdge(e.Type, allowedEdgeTypes) {
+		relType := strings.TrimSpace(string(e.Relation))
+		if !isAllowedEdge(e.Relation, allowedEdgeTypes) {
 			continue
 		}
 		k := edgeKey{e.SourceFragmentID, e.TargetFragmentID, relType}
@@ -138,7 +138,7 @@ func (b *DomainArtifactBuilder) MaterializeRelationsGraph(
 			name = inferNameFromPath(frag.CanonicalPath)
 		}
 		nodes = append(nodes, models.RelationsGraphNode{
-			Type: strings.ToLower(string(frag.Type)),
+			Type: strings.ToLower(string(frag.Class)),
 			Ref:  frag.CanonicalPath,
 			Name: name,
 		})
@@ -156,7 +156,7 @@ func (b *DomainArtifactBuilder) MaterializeRelationsGraph(
 		graphEdges = append(graphEdges, models.RelationsGraphEdge{
 			From:     fromIdx,
 			To:       toIdx,
-			Relation: string(e.Type),
+			Relation: string(e.Relation),
 		})
 	}
 
@@ -276,7 +276,7 @@ func (b *DomainArtifactBuilder) collectArtifactEdges(
 				continue
 			}
 			for _, e := range append(outEdges, inEdges...) {
-				if !isAllowedEdge(e.Type, allowedEdgeTypes) {
+				if !isAllowedEdge(e.Relation, allowedEdgeTypes) {
 					continue
 				}
 				for _, neighborID := range []string{e.SourceFragmentID, e.TargetFragmentID} {
@@ -332,7 +332,7 @@ func (b *DomainArtifactBuilder) collectGovernanceArtifactEdges(
 						continue
 					}
 					edges = appendGovernanceEdge(edges, seen, edge)
-					if cfg.ShouldExpand(edge.Type) && shouldTraverseGovernanceNode(b.loadGovernanceFragment(ctx, nodeCache, edge.TargetFragmentID)) {
+					if cfg.ShouldExpand(edge.Relation) && shouldTraverseGovernanceNode(b.loadGovernanceFragment(ctx, nodeCache, edge.TargetFragmentID)) {
 						if _, ok := visited[edge.TargetFragmentID]; !ok {
 							if _, ok := nextSeen[edge.TargetFragmentID]; !ok {
 								nextSeen[edge.TargetFragmentID] = struct{}{}
@@ -349,7 +349,7 @@ func (b *DomainArtifactBuilder) collectGovernanceArtifactEdges(
 						continue
 					}
 					edges = appendGovernanceEdge(edges, seen, edge)
-					if cfg.ShouldExpand(edge.Type) && shouldTraverseGovernanceNode(b.loadGovernanceFragment(ctx, nodeCache, edge.SourceFragmentID)) {
+					if cfg.ShouldExpand(edge.Relation) && shouldTraverseGovernanceNode(b.loadGovernanceFragment(ctx, nodeCache, edge.SourceFragmentID)) {
 						if _, ok := visited[edge.SourceFragmentID]; !ok {
 							if _, ok := nextSeen[edge.SourceFragmentID]; !ok {
 								nextSeen[edge.SourceFragmentID] = struct{}{}
@@ -386,76 +386,76 @@ func (b *DomainArtifactBuilder) collectGovernanceArtifactEdges(
 type governanceArtifactConfig struct {
 	GovernanceView string
 	MaxDepth       int
-	ExpandOutgoing []models.DependencyType
-	ExpandIncoming []models.DependencyType
-	PeopleEdges    []models.DependencyType
-	PrimaryEdges   map[models.DependencyType]struct{}
+	ExpandOutgoing []DependencyType
+	ExpandIncoming []DependencyType
+	PeopleEdges    []DependencyType
+	PrimaryEdges   map[DependencyType]struct{}
 }
 
 func governanceArtifactConfigForContractType(contractType string) governanceArtifactConfig {
 	ct := strings.TrimSpace(strings.ToLower(contractType))
 	switch ct {
 	case "control-map":
-		primary := map[models.DependencyType]struct{}{
-			models.DependencyTypeControls:    {},
-			models.DependencyTypeManages:     {},
-			models.DependencyTypeAdministers: {},
+		primary := map[DependencyType]struct{}{
+			DependencyTypeControls:    {},
+			DependencyTypeManages:     {},
+			DependencyTypeAdministers: {},
 		}
 		return governanceArtifactConfig{
 			GovernanceView: "control",
 			MaxDepth:       4,
-			ExpandOutgoing: []models.DependencyType{
-				models.DependencyTypeControls,
-				models.DependencyTypeManages,
-				models.DependencyTypeAdministers,
-				models.DependencyTypeOwns,
-				models.DependencyTypeInvestsIn,
+			ExpandOutgoing: []DependencyType{
+				DependencyTypeControls,
+				DependencyTypeManages,
+				DependencyTypeAdministers,
+				DependencyTypeOwns,
+				DependencyTypeInvestsIn,
 			},
-			ExpandIncoming: []models.DependencyType{
-				models.DependencyTypeControls,
-				models.DependencyTypeManages,
-				models.DependencyTypeAdministers,
-				models.DependencyTypeOwns,
-				models.DependencyTypeInvestsIn,
+			ExpandIncoming: []DependencyType{
+				DependencyTypeControls,
+				DependencyTypeManages,
+				DependencyTypeAdministers,
+				DependencyTypeOwns,
+				DependencyTypeInvestsIn,
 			},
-			PeopleEdges: []models.DependencyType{
-				models.DependencyTypeBoardMemberOf,
-				models.DependencyTypeEmployedBy,
+			PeopleEdges: []DependencyType{
+				DependencyTypeBoardMemberOf,
+				DependencyTypeEmployedBy,
 			},
 			PrimaryEdges: primary,
 		}
 	default:
-		primary := map[models.DependencyType]struct{}{
-			models.DependencyTypeOwns:         {},
-			models.DependencyTypeSubsidiaryOf: {},
-			models.DependencyTypeInvestsIn:    {},
+		primary := map[DependencyType]struct{}{
+			DependencyTypeOwns:         {},
+			DependencyTypeSubsidiaryOf: {},
+			DependencyTypeInvestsIn:    {},
 		}
 		return governanceArtifactConfig{
 			GovernanceView: "ownership",
 			MaxDepth:       4,
-			ExpandOutgoing: []models.DependencyType{
-				models.DependencyTypeOwns,
-				models.DependencyTypeSubsidiaryOf,
-				models.DependencyTypeControls,
-				models.DependencyTypeInvestsIn,
+			ExpandOutgoing: []DependencyType{
+				DependencyTypeOwns,
+				DependencyTypeSubsidiaryOf,
+				DependencyTypeControls,
+				DependencyTypeInvestsIn,
 			},
-			ExpandIncoming: []models.DependencyType{
-				models.DependencyTypeOwns,
-				models.DependencyTypeSubsidiaryOf,
-				models.DependencyTypeControls,
-				models.DependencyTypeInvestsIn,
+			ExpandIncoming: []DependencyType{
+				DependencyTypeOwns,
+				DependencyTypeSubsidiaryOf,
+				DependencyTypeControls,
+				DependencyTypeInvestsIn,
 			},
-			PeopleEdges: []models.DependencyType{
-				models.DependencyTypeBoardMemberOf,
-				models.DependencyTypeEmployedBy,
-				models.DependencyTypeFounded,
+			PeopleEdges: []DependencyType{
+				DependencyTypeBoardMemberOf,
+				DependencyTypeEmployedBy,
+				DependencyTypeFounded,
 			},
 			PrimaryEdges: primary,
 		}
 	}
 }
 
-func (c governanceArtifactConfig) ShouldExpand(edgeType models.DependencyType) bool {
+func (c governanceArtifactConfig) ShouldExpand(edgeType DependencyType) bool {
 	_, ok := c.PrimaryEdges[edgeType]
 	return ok
 }
@@ -492,12 +492,10 @@ func shouldTraverseGovernanceNode(frag *models.HorizonFragment) bool {
 	if frag == nil {
 		return false
 	}
-	switch frag.Type {
-	case models.FragmentTypeOrganization,
-		models.FragmentTypeFacility,
-		models.FragmentTypeDeposit,
-		models.FragmentTypeCommunity,
-		models.FragmentTypeProgram:
+	switch frag.Class {
+	case FragmentTypeOrganization,
+		FragmentTypeFacility,
+		FragmentTypeCommunity:
 		return true
 	default:
 		return false
@@ -508,11 +506,12 @@ func governanceAllowsPeopleLayer(governanceView string, frag *models.HorizonFrag
 	if frag == nil {
 		return false
 	}
-	switch frag.Type {
-	case models.FragmentTypeOrganization:
+	switch frag.Class {
+	case FragmentTypeOrganization:
+		if strings.TrimSpace(frag.Subtype) == "program" {
+			return strings.TrimSpace(governanceView) == "ownership"
+		}
 		return true
-	case models.FragmentTypeProgram:
-		return strings.TrimSpace(governanceView) == "ownership"
 	default:
 		return false
 	}
@@ -522,7 +521,7 @@ func appendGovernanceEdge(edges []*models.DependencyEdge, seen map[string]struct
 	if edge == nil {
 		return edges
 	}
-	key := strings.TrimSpace(edge.SourceFragmentID) + "|" + strings.TrimSpace(edge.TargetFragmentID) + "|" + strings.TrimSpace(string(edge.Type))
+	key := strings.TrimSpace(edge.SourceFragmentID) + "|" + strings.TrimSpace(edge.TargetFragmentID) + "|" + strings.TrimSpace(string(edge.Relation))
 	if key == "||" {
 		return edges
 	}
@@ -541,8 +540,8 @@ func dedupAllowedEdges(allEdges []*models.DependencyEdge, allowedEdgeTypes []str
 		if e == nil {
 			continue
 		}
-		relType := strings.TrimSpace(string(e.Type))
-		if !isAllowedEdge(e.Type, allowedEdgeTypes) {
+		relType := strings.TrimSpace(string(e.Relation))
+		if !isAllowedEdge(e.Relation, allowedEdgeTypes) {
 			continue
 		}
 		k := edgeKey{e.SourceFragmentID, e.TargetFragmentID, relType}
@@ -576,7 +575,7 @@ func domainEdgeTypes(domainMode string) []string {
 	return dependencyTypesToStrings(profile.AllowedEdges)
 }
 
-func isAllowedEdge(edgeType models.DependencyType, allowed []string) bool {
+func isAllowedEdge(edgeType DependencyType, allowed []string) bool {
 	t := strings.TrimSpace(string(edgeType))
 	for _, a := range allowed {
 		if strings.EqualFold(t, a) {
@@ -595,7 +594,7 @@ func inferNameFromPath(path string) string {
 	return strings.ReplaceAll(strings.ReplaceAll(last, "-", " "), "_", " ")
 }
 
-func dependencyTypesToStrings(values []models.DependencyType) []string {
+func dependencyTypesToStrings(values []DependencyType) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
 		if strings.TrimSpace(string(value)) == "" {

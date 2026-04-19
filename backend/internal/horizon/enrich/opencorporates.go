@@ -25,7 +25,7 @@ func AttachOpenCorporatesIDIfMissing(
 	if client == nil || fragment == nil {
 		return false, ""
 	}
-	if fragment.Type != hmodels.FragmentTypeOrganization {
+	if fragment.Class != FragmentTypeOrganization {
 		return false, ""
 	}
 	// Skip if already has OpenCorporates ID

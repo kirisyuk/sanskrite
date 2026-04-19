@@ -3,12 +3,12 @@ package policy
 import (
 	"strings"
 
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // EdgeDirectionAutoFix describes deterministic rewrite for an invalid edge triple.
 type EdgeDirectionAutoFix struct {
-	NewType    horizonmodels.DependencyType
+	NewType    ah.RelationName
 	ShouldSwap bool
 	Reason     string
 	Confidence float64
@@ -18,8 +18,8 @@ type EdgeDirectionAutoFix struct {
 // These rules are shared across policy checker, ingestion-time canonicalization and batch tools.
 // sourcePath/targetPath are optional; when provided, they enable GOV-aware exemptions.
 func ResolveEdgeDirectionAutoFix(
-	edgeType horizonmodels.DependencyType,
-	sourceType, targetType horizonmodels.FragmentType,
+	edgeType ah.RelationName,
+	sourceType, targetType ah.FragmentClass,
 	paths ...string,
 ) (EdgeDirectionAutoFix, bool) {
 	sourcePath := ""
@@ -32,220 +32,248 @@ func ResolveEdgeDirectionAutoFix(
 	}
 	_ = targetPath
 	switch {
-	case edgeType == horizonmodels.DependencyTypeDominates &&
-		sourceType == horizonmodels.FragmentTypeGeoRegion &&
-		targetType == horizonmodels.FragmentTypeMarket:
+	case edgeType == relDominates &&
+		sourceType == classGeoRegion &&
+		targetType == classMarket:
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeInfluences,
+			NewType:    relInfluences,
 			ShouldSwap: false,
 			Reason:     "canonicalize: GEO_REGION DOMINATES MARKET -> GEO_REGION INFLUENCES MARKET",
 			Confidence: 0.90,
 		}, true
-	case edgeType == horizonmodels.DependencyTypeOwns &&
-		sourceType == horizonmodels.FragmentTypeOrganization &&
-		targetType == horizonmodels.FragmentTypeProgram:
+	case edgeType == relOwns &&
+		sourceType == classOrganization &&
+		targetType == classProgram:
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeAdministers,
+			NewType:    relAdministers,
 			ShouldSwap: false,
 			Reason:     "canonicalize: ORGANIZATION OWNS PROGRAM -> ORGANIZATION ADMINISTERS PROGRAM",
 			Confidence: 0.95,
 		}, true
 	// GOV (/gov/...) -> MARKET with non-regulator edge: convert to REGULATES.
-	case edgeType != horizonmodels.DependencyTypeParticipatesIn &&
-		sourceType == horizonmodels.FragmentTypeOrganization &&
-		targetType == horizonmodels.FragmentTypeMarket &&
+	case edgeType != relParticipatesIn &&
+		sourceType == classOrganization &&
+		targetType == classMarket &&
 		!isGovRegulatorEdge(edgeType, sourcePath) &&
 		strings.HasPrefix(sourcePath, "/gov/"):
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeRegulates,
+			NewType:    relRegulates,
 			ShouldSwap: false,
 			Reason:     "canonicalize: GOV * MARKET -> GOV REGULATES MARKET",
 			Confidence: 0.95,
 		}, true
 	// MARKET * GOV: swap so GOV REGULATES MARKET.
-	case edgeType != horizonmodels.DependencyTypeParticipatesIn &&
-		sourceType == horizonmodels.FragmentTypeMarket &&
-		targetType == horizonmodels.FragmentTypeOrganization &&
+	case edgeType != relParticipatesIn &&
+		sourceType == classMarket &&
+		targetType == classOrganization &&
 		!isGovRegulatorEdge(edgeType, targetPath) &&
 		strings.HasPrefix(targetPath, "/gov/"):
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeRegulates,
+			NewType:    relRegulates,
 			ShouldSwap: true,
 			Reason:     "canonicalize: MARKET * GOV -> GOV REGULATES MARKET",
 			Confidence: 0.95,
 		}, true
 	// Non-GOV ORG -> MARKET: convert to PARTICIPATES_IN.
-	case edgeType != horizonmodels.DependencyTypeParticipatesIn &&
-		sourceType == horizonmodels.FragmentTypeOrganization &&
-		targetType == horizonmodels.FragmentTypeMarket &&
+	case edgeType != relParticipatesIn &&
+		sourceType == classOrganization &&
+		targetType == classMarket &&
 		!isGovRegulatorEdge(edgeType, sourcePath):
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeParticipatesIn,
+			NewType:    relParticipatesIn,
 			ShouldSwap: false,
 			Reason:     "canonicalize: ORGANIZATION * MARKET -> ORGANIZATION PARTICIPATES_IN MARKET",
 			Confidence: 0.95,
 		}, true
-	case edgeType != horizonmodels.DependencyTypeParticipatesIn &&
-		sourceType == horizonmodels.FragmentTypeMarket &&
-		targetType == horizonmodels.FragmentTypeOrganization &&
+	case edgeType != relParticipatesIn &&
+		sourceType == classMarket &&
+		targetType == classOrganization &&
 		!isGovRegulatorEdge(edgeType, targetPath):
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeParticipatesIn,
+			NewType:    relParticipatesIn,
 			ShouldSwap: true,
 			Reason:     "canonicalize: MARKET * ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET",
 			Confidence: 0.95,
 		}, true
 	// PRODUCT <-> MARKET should use TRADED_IN, not PARTICIPATES_IN/DEPENDS_ON.
-	case edgeType != horizonmodels.DependencyTypeTradedIn &&
-		sourceType == horizonmodels.FragmentTypeProduct &&
-		targetType == horizonmodels.FragmentTypeMarket:
+	case edgeType != relTradedIn &&
+		sourceType == classProduct &&
+		targetType == classMarket:
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeTradedIn,
+			NewType:    relTradedIn,
 			ShouldSwap: false,
 			Reason:     "canonicalize: PRODUCT * MARKET -> PRODUCT TRADED_IN MARKET",
 			Confidence: 0.95,
 		}, true
-	case edgeType != horizonmodels.DependencyTypeTradedIn &&
-		sourceType == horizonmodels.FragmentTypeMarket &&
-		targetType == horizonmodels.FragmentTypeProduct:
+	case edgeType != relTradedIn &&
+		sourceType == classMarket &&
+		targetType == classProduct:
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeTradedIn,
+			NewType:    relTradedIn,
 			ShouldSwap: true,
 			Reason:     "canonicalize: MARKET * PRODUCT -> PRODUCT TRADED_IN MARKET",
 			Confidence: 0.95,
 		}, true
-	case edgeType == horizonmodels.DependencyTypeInvestsIn &&
-		sourceType == horizonmodels.FragmentTypeMarket &&
-		targetType == horizonmodels.FragmentTypeOrganization:
+	case edgeType == relInvestsIn &&
+		sourceType == classMarket &&
+		targetType == classOrganization:
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeParticipatesIn,
+			NewType:    relParticipatesIn,
 			ShouldSwap: true,
 			Reason:     "canonicalize: MARKET INVESTS_IN ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET",
 			Confidence: 0.95,
 		}, true
-	case edgeType == horizonmodels.DependencyTypeOperatesIn &&
-		sourceType == horizonmodels.FragmentTypeMarket &&
-		targetType == horizonmodels.FragmentTypeOrganization:
+	case edgeType == relOperatesIn &&
+		sourceType == classMarket &&
+		targetType == classOrganization:
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeParticipatesIn,
+			NewType:    relParticipatesIn,
 			ShouldSwap: true,
 			Reason:     "canonicalize: MARKET OPERATES_IN ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET",
 			Confidence: 0.95,
 		}, true
-	case edgeType == horizonmodels.DependencyTypeRelatedTo &&
-		(sourceType == horizonmodels.FragmentTypeOrganization || sourceType == horizonmodels.FragmentTypeFacility || sourceType == horizonmodels.FragmentTypeCommunity || sourceType == horizonmodels.FragmentTypeProgram) &&
-		targetType == horizonmodels.FragmentTypeMarket:
+	case edgeType == relRelatedTo &&
+		(sourceType == classOrganization || sourceType == classFacility || sourceType == classCommunity || sourceType == classProgram) &&
+		targetType == classMarket:
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeParticipatesIn,
+			NewType:    relParticipatesIn,
 			ShouldSwap: false,
 			Reason:     "canonicalize: ENTITY RELATED_TO MARKET -> ENTITY PARTICIPATES_IN MARKET",
 			Confidence: 0.90,
 		}, true
-	case edgeType == horizonmodels.DependencyTypeRelatedTo &&
-		sourceType == horizonmodels.FragmentTypeMarket &&
-		(targetType == horizonmodels.FragmentTypeOrganization || targetType == horizonmodels.FragmentTypeFacility || targetType == horizonmodels.FragmentTypeCommunity || targetType == horizonmodels.FragmentTypeProgram):
+	case edgeType == relRelatedTo &&
+		sourceType == classMarket &&
+		(targetType == classOrganization || targetType == classFacility || targetType == classCommunity || targetType == classProgram):
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeParticipatesIn,
+			NewType:    relParticipatesIn,
 			ShouldSwap: true,
 			Reason:     "canonicalize: MARKET RELATED_TO ENTITY -> ENTITY PARTICIPATES_IN MARKET",
 			Confidence: 0.90,
 		}, true
-	case edgeType == horizonmodels.DependencyTypeProduces &&
-		sourceType == horizonmodels.FragmentTypeMarket &&
-		targetType == horizonmodels.FragmentTypeFacility:
+	case edgeType == relProduces &&
+		sourceType == classMarket &&
+		targetType == classFacility:
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeParticipatesIn,
+			NewType:    relParticipatesIn,
 			ShouldSwap: true,
 			Reason:     "canonicalize: MARKET PRODUCES FACILITY -> FACILITY PARTICIPATES_IN MARKET",
 			Confidence: 0.95,
 		}, true
-	case edgeType == horizonmodels.DependencyTypeLocatedIn &&
-		sourceType == horizonmodels.FragmentTypeOrganization &&
-		targetType == horizonmodels.FragmentTypeFacility:
+	case edgeType == relLocatedIn &&
+		sourceType == classOrganization &&
+		targetType == classFacility:
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeOperatesIn,
+			NewType:    relOperatesIn,
 			ShouldSwap: false,
 			Reason:     "canonicalize: ORGANIZATION LOCATED_IN FACILITY -> ORGANIZATION OPERATES_IN FACILITY",
 			Confidence: 0.95,
 		}, true
-	case edgeType == horizonmodels.DependencyTypeOwns &&
-		sourceType == horizonmodels.FragmentTypeGeoRegion &&
-		targetType == horizonmodels.FragmentTypeOrganization:
+	case edgeType == relOwns &&
+		sourceType == classGeoRegion &&
+		targetType == classOrganization:
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeLocatedIn,
+			NewType:    relLocatedIn,
 			ShouldSwap: true,
 			Reason:     "canonicalize: GEO_REGION OWNS ORGANIZATION -> ORGANIZATION LOCATED_IN GEO_REGION",
 			Confidence: 0.95,
 		}, true
-	case (edgeType == horizonmodels.DependencyTypeMemberOf ||
-		edgeType == horizonmodels.DependencyTypeHasSubgroup ||
-		edgeType == horizonmodels.DependencyTypeOwns) &&
-		sourceType == horizonmodels.FragmentTypeGeoRegion &&
-		(targetType == horizonmodels.FragmentTypeOrganization ||
-			targetType == horizonmodels.FragmentTypeFacility ||
-			targetType == horizonmodels.FragmentTypeCommunity ||
-			targetType == horizonmodels.FragmentTypePerson ||
-			targetType == horizonmodels.FragmentTypeDeposit ||
-			targetType == horizonmodels.FragmentTypeProgram):
+	// LOCATED_IN with GEO_REGION as source is always reversed: entity LOCATED_IN geo, not geo LOCATED_IN entity.
+	case edgeType == relLocatedIn &&
+		sourceType == classGeoRegion &&
+		(targetType == classOrganization ||
+			targetType == classFacility ||
+			targetType == classCommunity ||
+			targetType == classPerson ||
+			targetType == classDeposit ||
+			targetType == classProgram):
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeLocatedIn,
+			NewType:    relLocatedIn,
+			ShouldSwap: true,
+			Reason:     "canonicalize: GEO_REGION LOCATED_IN ENTITY -> ENTITY LOCATED_IN GEO_REGION (swap only)",
+			Confidence: 0.95,
+		}, true
+	// AFFILIATED_WITH with COMMUNITY as target should have COMMUNITY as source: entities affiliate with communities.
+	case edgeType == relAffiliatedWith &&
+		(sourceType == classOrganization ||
+			sourceType == classFacility ||
+			sourceType == classPerson ||
+			sourceType == classProgram) &&
+		targetType == classCommunity:
+		return EdgeDirectionAutoFix{
+			NewType:    relAffiliatedWith,
+			ShouldSwap: true,
+			Reason:     "canonicalize: ENTITY AFFILIATED_WITH COMMUNITY -> COMMUNITY AFFILIATED_WITH ENTITY (swap only)",
+			Confidence: 0.95,
+		}, true
+	case (edgeType == relMemberOf ||
+		edgeType == relHasSubgroup ||
+		edgeType == relOwns) &&
+		sourceType == classGeoRegion &&
+		(targetType == classOrganization ||
+			targetType == classFacility ||
+			targetType == classCommunity ||
+			targetType == classPerson ||
+			targetType == classDeposit ||
+			targetType == classProgram):
+		return EdgeDirectionAutoFix{
+			NewType:    relLocatedIn,
 			ShouldSwap: true,
 			Reason:     "canonicalize: GEO_REGION social/ownership inversion -> ENTITY LOCATED_IN GEO_REGION",
 			Confidence: 0.95,
 		}, true
-	case (edgeType == horizonmodels.DependencyTypeMemberOf ||
-		edgeType == horizonmodels.DependencyTypeHasSubgroup ||
-		edgeType == horizonmodels.DependencyTypeOwns) &&
-		targetType == horizonmodels.FragmentTypeGeoRegion &&
-		(sourceType == horizonmodels.FragmentTypeOrganization ||
-			sourceType == horizonmodels.FragmentTypeFacility ||
-			sourceType == horizonmodels.FragmentTypeCommunity ||
-			sourceType == horizonmodels.FragmentTypePerson ||
-			sourceType == horizonmodels.FragmentTypeDeposit ||
-			sourceType == horizonmodels.FragmentTypeProgram):
+	case (edgeType == relMemberOf ||
+		edgeType == relHasSubgroup ||
+		edgeType == relOwns) &&
+		targetType == classGeoRegion &&
+		(sourceType == classOrganization ||
+			sourceType == classFacility ||
+			sourceType == classCommunity ||
+			sourceType == classPerson ||
+			sourceType == classDeposit ||
+			sourceType == classProgram):
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeLocatedIn,
+			NewType:    relLocatedIn,
 			ShouldSwap: false,
 			Reason:     "canonicalize: ENTITY social/ownership edge to GEO_REGION -> ENTITY LOCATED_IN GEO_REGION",
 			Confidence: 0.95,
 		}, true
-	case edgeType == horizonmodels.DependencyTypeFounded &&
-		(sourceType == horizonmodels.FragmentTypeCommunity || sourceType == horizonmodels.FragmentTypeOrganization) &&
-		targetType == horizonmodels.FragmentTypePerson:
+	case edgeType == relFounded &&
+		(sourceType == classCommunity || sourceType == classOrganization) &&
+		targetType == classPerson:
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeFounded,
+			NewType:    relFounded,
 			ShouldSwap: true,
 			Reason:     "canonicalize: COMMUNITY/ORGANIZATION FOUNDED PERSON -> PERSON FOUNDED COMMUNITY/ORGANIZATION",
 			Confidence: 0.95,
 		}, true
 	// ADMINISTERS: source MUST be ORGANIZATION/GEO_REGION. FACILITY cannot administer.
 	// "Facility administered by org" → swap to ORG ADMINISTERS FACILITY.
-	case edgeType == horizonmodels.DependencyTypeAdministers &&
-		sourceType == horizonmodels.FragmentTypeFacility &&
-		(targetType == horizonmodels.FragmentTypeOrganization || targetType == horizonmodels.FragmentTypeProgram || targetType == horizonmodels.FragmentTypeGeoRegion):
+	case edgeType == relAdministers &&
+		sourceType == classFacility &&
+		(targetType == classOrganization || targetType == classProgram || targetType == classGeoRegion):
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeAdministers,
+			NewType:    relAdministers,
 			ShouldSwap: true,
 			Reason:     "canonicalize: FACILITY ADMINISTERS ORG -> ORG ADMINISTERS FACILITY (swap only)",
 			Confidence: 0.95,
 		}, true
 	// ADMINISTERS: DEPOSIT cannot administer. "Deposit administered by gov/org" → swap.
-	case edgeType == horizonmodels.DependencyTypeAdministers &&
-		sourceType == horizonmodels.FragmentTypeDeposit &&
-		(targetType == horizonmodels.FragmentTypeOrganization || targetType == horizonmodels.FragmentTypeProgram || targetType == horizonmodels.FragmentTypeGeoRegion):
+	case edgeType == relAdministers &&
+		sourceType == classDeposit &&
+		(targetType == classOrganization || targetType == classProgram || targetType == classGeoRegion):
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeAdministers,
+			NewType:    relAdministers,
 			ShouldSwap: true,
 			Reason:     "canonicalize: DEPOSIT ADMINISTERS ORG -> ORG ADMINISTERS DEPOSIT (swap only)",
 			Confidence: 0.95,
 		}, true
 	// CONTROLS: source MUST be ORG/PERSON/COMMUNITY. PRODUCT cannot control.
 	// "Product controlled by gov/org" → swap to ORG CONTROLS PRODUCT.
-	case edgeType == horizonmodels.DependencyTypeControls &&
-		sourceType == horizonmodels.FragmentTypeProduct &&
-		(targetType == horizonmodels.FragmentTypeOrganization || targetType == horizonmodels.FragmentTypeFacility):
+	case edgeType == relControls &&
+		sourceType == classProduct &&
+		(targetType == classOrganization || targetType == classFacility):
 		return EdgeDirectionAutoFix{
-			NewType:    horizonmodels.DependencyTypeControls,
+			NewType:    relControls,
 			ShouldSwap: true,
 			Reason:     "canonicalize: PRODUCT CONTROLS ORG -> ORG CONTROLS PRODUCT (swap only)",
 			Confidence: 0.95,
@@ -257,13 +285,13 @@ func ResolveEdgeDirectionAutoFix(
 
 // govRegulatorEdgeTypes are edge types that GOV entities legitimately use
 // towards MARKET targets. These must NOT be rewritten to PARTICIPATES_IN.
-var govRegulatorEdgeTypes = map[horizonmodels.DependencyType]bool{
-	horizonmodels.DependencyTypeRegulates:      true,
-	horizonmodels.DependencyTypeControlsAccess: true,
-	horizonmodels.DependencyTypeInfluences:     true,
-	horizonmodels.DependencyTypeAdministers:    true,
+var govRegulatorEdgeTypes = map[ah.RelationName]bool{
+	relRegulates:      true,
+	relControlsAccess: true,
+	relInfluences:     true,
+	relAdministers:    true,
 }
 
-func isGovRegulatorEdge(edgeType horizonmodels.DependencyType, entityPath string) bool {
+func isGovRegulatorEdge(edgeType ah.RelationName, entityPath string) bool {
 	return strings.HasPrefix(entityPath, "/gov/") && govRegulatorEdgeTypes[edgeType]
 }

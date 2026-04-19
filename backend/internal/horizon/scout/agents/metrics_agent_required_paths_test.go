@@ -3,11 +3,10 @@ package agents
 import (
 	"testing"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 func TestRequiredMetricPathsForType_IncludesDefaultsAndRequested(t *testing.T) {
-	paths := RequiredMetricPathsForType(models.FragmentTypePerson, []string{
+	paths := RequiredMetricPathsForType(FragmentTypePerson, []string{
 		"risk/custom_pressure",
 		"/metric/custom/special_signal",
 		"risk/custom_pressure", // duplicate

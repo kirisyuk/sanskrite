@@ -27,8 +27,8 @@ func (e *PropagationEngine) enrichSignalRegulatoryContextFromSeeds(ctx context.C
 			continue
 		}
 		cp := strings.TrimSpace(frag.CanonicalPath)
-		switch frag.Type {
-		case horizonmodels.FragmentTypeMechanism:
+		switch frag.Class {
+		case FragmentTypeMechanism:
 			if !strings.HasPrefix(cp, "/mechanism/") {
 				continue
 			}
@@ -43,7 +43,7 @@ func (e *PropagationEngine) enrichSignalRegulatoryContextFromSeeds(ctx context.C
 				signal.Mechanism = lastPathSegment(cp)
 			}
 			return
-		case horizonmodels.FragmentTypeDecisionPoint:
+		case FragmentTypeDecisionPoint:
 			if strings.HasPrefix(cp, "/decision/") {
 				signal.RegulatoryContext = &horizonmodels.SignalRegulatoryContext{
 					Jurisdiction:  regulatoryJurisdictionHintFromPath(cp),
@@ -52,7 +52,7 @@ func (e *PropagationEngine) enrichSignalRegulatoryContextFromSeeds(ctx context.C
 				return
 			}
 		default:
-			if frag.Type == horizonmodels.FragmentTypeOrganization && strings.HasPrefix(cp, "/gov/") {
+			if frag.Class == FragmentTypeOrganization && strings.HasPrefix(cp, "/gov/") {
 				signal.RegulatoryContext = &horizonmodels.SignalRegulatoryContext{
 					Jurisdiction: regulatoryJurisdictionHintFromPath(cp),
 				}

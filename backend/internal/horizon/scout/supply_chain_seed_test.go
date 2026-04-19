@@ -43,7 +43,7 @@ func TestFilterEmptySupplyChains_AllEmpty(t *testing.T) {
 func TestBuildSeedSupplyChain(t *testing.T) {
 	frag := &models.HorizonFragment{
 		CanonicalPath: "/org/de/robert-bosch",
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		Identifiers:   map[string]string{"legalName": "Robert Bosch GmbH"},
 	}
 	seed := buildSeedSupplyChain(frag)
@@ -71,7 +71,7 @@ func TestBuildSeedSupplyChain(t *testing.T) {
 func TestBuildSeedSupplyChain_FallbackName(t *testing.T) {
 	frag := &models.HorizonFragment{
 		CanonicalPath: "/org/de/robert-bosch",
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 	}
 	seed := buildSeedSupplyChain(frag)
 	if seed == nil {
@@ -84,7 +84,7 @@ func TestBuildSeedSupplyChain_FallbackName(t *testing.T) {
 
 func TestBuildSeedSupplyChain_NilPath(t *testing.T) {
 	frag := &models.HorizonFragment{
-		Type: models.FragmentTypeOrganization,
+		Class: FragmentTypeOrganization,
 	}
 	seed := buildSeedSupplyChain(frag)
 	if seed != nil {

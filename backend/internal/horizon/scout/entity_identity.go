@@ -78,14 +78,14 @@ func bestNameForIdentityFromFragment(f *models.HorizonFragment) string {
 	return strings.TrimSpace(f.Labels["en"])
 }
 
-func buildRelationTargetIdentityKey(rel agents.DiscoveredRelation, canonicalPath string, fragType models.FragmentType) string {
+func buildRelationTargetIdentityKey(rel agents.DiscoveredRelation, canonicalPath string, fragType FragmentType) string {
 	if fragType == "" {
 		fragType = InferFragmentTypeFromCanonicalPath(strings.TrimSpace(canonicalPath))
 	}
 	name := bestNameForIdentityFromRelation(rel)
 	nameNorm := normalizeIdentityText(name)
 	switch fragType {
-	case models.FragmentTypeProduct:
+	case FragmentTypeProduct:
 		slug := leafSlug(canonicalPath)
 		if slug != "" && slug != "na" {
 			return "product|slug=" + slug
@@ -93,7 +93,7 @@ func buildRelationTargetIdentityKey(rel agents.DiscoveredRelation, canonicalPath
 		if nameNorm != "" {
 			return "product|name=" + nameNorm
 		}
-	case models.FragmentTypeOrganization:
+	case FragmentTypeOrganization:
 		cc := extractPathJurisdiction(canonicalPath)
 		slug := stripSlugLegalForm(leafSlug(canonicalPath))
 		orgNorm := NormalizeLegalName(name)
@@ -112,7 +112,7 @@ func buildRelationTargetIdentityKey(rel agents.DiscoveredRelation, canonicalPath
 		if len(parts) > 1 {
 			return strings.Join(parts, "|")
 		}
-	case models.FragmentTypeMarket:
+	case FragmentTypeMarket:
 		geo, domain := extractMarketPathGeoDomain(canonicalPath)
 		slug := leafSlug(canonicalPath)
 		parts := []string{"market"}
@@ -151,7 +151,7 @@ func buildFragmentIdentityKey(fragment *models.HorizonFragment) string {
 	if fragment == nil {
 		return ""
 	}
-	ft := fragment.Type
+	ft := fragment.Class
 	if ft == "" {
 		ft = InferFragmentTypeFromCanonicalPath(strings.TrimSpace(fragment.CanonicalPath))
 	}

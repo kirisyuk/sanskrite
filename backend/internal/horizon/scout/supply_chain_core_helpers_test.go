@@ -105,18 +105,18 @@ func TestBuildOperationalEdgesFromSegments_CompletesTriad(t *testing.T) {
 			continue
 		}
 		switch {
-		case edge.RelationType == string(models.DependencyTypeProduces) &&
+		case edge.RelationType == string(DependencyTypeProduces) &&
 			edge.SourceCanonicalPath == "/fac/jp/panasonic-giga-nevada-lines" &&
 			edge.TargetCanonicalPath == "/product/component/electronic/assembly/ev-battery-cell":
 			hasProduces = true
-		case edge.RelationType == string(models.DependencyTypeSuppliesTo) &&
+		case edge.RelationType == string(DependencyTypeSuppliesTo) &&
 			edge.SourceCanonicalPath == "/product/component/electronic/assembly/ev-battery-cell" &&
 			edge.TargetCanonicalPath == "/org/us/tesla":
 			hasProductSupply = true
 			if got := extractProductQualifier(edge.Qualifiers); got != "/product/component/electronic/assembly/ev-battery-cell" {
 				t.Fatalf("product->customer qualifier=%q", got)
 			}
-		case edge.RelationType == string(models.DependencyTypeSuppliesTo) &&
+		case edge.RelationType == string(DependencyTypeSuppliesTo) &&
 			edge.SourceCanonicalPath == "/fac/jp/panasonic-giga-nevada-lines" &&
 			edge.TargetCanonicalPath == "/org/us/tesla":
 			hasActorSupply = true
@@ -163,11 +163,11 @@ func TestDeriveSupplyLinkSegmentsFromEdges_DirectActorSupply(t *testing.T) {
 		{
 			SourceCanonicalPath: "/fac/kr/wroclaw-plant",
 			TargetCanonicalPath: "/org/be/umicore",
-			RelationType:        string(models.DependencyTypeSuppliesTo),
+			RelationType:        string(DependencyTypeSuppliesTo),
 			Confidence:          0.72,
 			Qualifiers: map[string]interface{}{
 				"product_ref":                "/product/component/electronic/assembly/lithium-ion-battery-cells",
-				models.QualifierTransportVia: []string{"/fac/pl/port-gdansk"},
+				QualifierTransportVia: []string{"/fac/pl/port-gdansk"},
 			},
 		},
 	})
@@ -188,16 +188,16 @@ func TestDeriveSupplyLinkSegmentsFromEdges_ComposesFromTriadEdges(t *testing.T) 
 		{
 			SourceCanonicalPath: "/fac/fr/billy-berclau-douvrin-gigafactory",
 			TargetCanonicalPath: "/product/component/electronic/assembly/battery-cell",
-			RelationType:        string(models.DependencyTypeProduces),
+			RelationType:        string(DependencyTypeProduces),
 			Confidence:          0.61,
 		},
 		{
 			SourceCanonicalPath: "/product/component/electronic/assembly/battery-cell",
 			TargetCanonicalPath: "/org/be/umicore",
-			RelationType:        string(models.DependencyTypeSuppliesTo),
+			RelationType:        string(DependencyTypeSuppliesTo),
 			Confidence:          0.77,
 			Qualifiers: map[string]interface{}{
-				models.QualifierTransportVia: []string{"/fac/be/port-of-antwerp-bruges"},
+				QualifierTransportVia: []string{"/fac/be/port-of-antwerp-bruges"},
 			},
 		},
 	})
@@ -226,7 +226,7 @@ func TestRewriteChainEdgeWithPathRewrites_RewritesQualifierRefs(t *testing.T) {
 	edge := rewriteChainEdgeWithPathRewrites(&ChainEdge{
 		SourceCanonicalPath: "/org/jp/yazaki",
 		TargetCanonicalPath: "/fac/toyota-motor-corp/toyota-city-plant",
-		RelationType:        string(models.DependencyTypeSuppliesTo),
+		RelationType:        string(DependencyTypeSuppliesTo),
 		Confidence:          0.7,
 		Qualifiers: map[string]interface{}{
 			"product_ref": "/product/component/electrical/manufacturing/automotive-wire-harness",

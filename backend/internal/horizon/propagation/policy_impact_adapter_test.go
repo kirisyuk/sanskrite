@@ -63,7 +63,7 @@ func TestPolicyImpactAdapter_TransferHook_EvasionRedirect(t *testing.T) {
 		Polarity:  "risk",
 	}
 	edge := &horizonmodels.DependencyEdge{
-		Type: horizonmodels.DependencyTypeInfluences,
+		Relation: DependencyTypeInfluences,
 		Qualifiers: map[string]interface{}{
 			"pass_through_estimate": 0.6,
 			"channel_type":          "evasion",
@@ -135,7 +135,7 @@ func TestPolicyImpactAdapter_Decode_ReturnsMacroMetricSet(t *testing.T) {
 func TestPolicyImpactAdapter_Decode_BlocksOutOfScopeNode(t *testing.T) {
 	a := NewPolicyImpactAdapter()
 	out, err := a.Decode(context.Background(), &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class:         FragmentTypeOrganization,
 		CanonicalPath: "/org/ae/mubadala",
 	}, []AccumulatedSignal{
 		{Axis: horizonmodels.AxisFinancialSettlement, Amplitude: 0.30},

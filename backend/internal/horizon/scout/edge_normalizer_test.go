@@ -4,42 +4,48 @@ import (
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
+
+// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassSite collapsed onto
+// (site, deposit). Class-only assertions in this file now use
+// ah.FragmentClassSite — the DEPOSIT subtype distinction is no longer
+// observable through FragmentClass alone.
 
 func TestEdgeDirectionPolicies_EXTRACTS_FROM(t *testing.T) {
 	// Verify EXTRACTS_FROM policy exists and is correct
-	rule, exists := EdgeDirectionPolicies[models.DependencyTypeExtractsFrom]
+	rule, exists := EdgeDirectionPolicies[DependencyTypeExtractsFrom]
 	if !exists {
 		t.Fatal("EXTRACTS_FROM edge direction policy not found")
 	}
 
 	// Verify valid source types (only FACILITY)
-	if len(rule.ValidSourceTypes) != 1 {
-		t.Errorf("EXTRACTS_FROM should have exactly 1 valid source type, got %d", len(rule.ValidSourceTypes))
+	if len(rule.ValidSourceClasses) != 1 {
+		t.Errorf("EXTRACTS_FROM should have exactly 1 valid source type, got %d", len(rule.ValidSourceClasses))
 	}
-	if rule.ValidSourceTypes[0] != models.FragmentTypeFacility {
-		t.Errorf("EXTRACTS_FROM source should be FACILITY, got %s", rule.ValidSourceTypes[0])
+	if rule.ValidSourceClasses[0] != FragmentTypeFacility {
+		t.Errorf("EXTRACTS_FROM source should be FACILITY, got %s", rule.ValidSourceClasses[0])
 	}
 
 	// Verify valid target types (only DEPOSIT)
-	if len(rule.ValidTargetTypes) != 1 {
-		t.Errorf("EXTRACTS_FROM should have exactly 1 valid target type, got %d", len(rule.ValidTargetTypes))
+	if len(rule.ValidTargetClasses) != 1 {
+		t.Errorf("EXTRACTS_FROM should have exactly 1 valid target type, got %d", len(rule.ValidTargetClasses))
 	}
-	if rule.ValidTargetTypes[0] != models.FragmentTypeDeposit {
-		t.Errorf("EXTRACTS_FROM target should be DEPOSIT, got %s", rule.ValidTargetTypes[0])
+	if rule.ValidTargetClasses[0] != ah.FragmentClassSite {
+		t.Errorf("EXTRACTS_FROM target should be DEPOSIT, got %s", rule.ValidTargetClasses[0])
 	}
 }
 
 func TestEdgeDirectionPolicies_OWNS_IncludesDeposit(t *testing.T) {
 	// Verify OWNS policy includes DEPOSIT as valid target
-	rule, exists := EdgeDirectionPolicies[models.DependencyTypeOwns]
+	rule, exists := EdgeDirectionPolicies[DependencyTypeOwns]
 	if !exists {
 		t.Fatal("OWNS edge direction policy not found")
 	}
 
 	hasDeposit := false
-	for _, targetType := range rule.ValidTargetTypes {
-		if targetType == models.FragmentTypeDeposit {
+	for _, targetType := range rule.ValidTargetClasses {
+		if targetType == ah.FragmentClassSite {
 			hasDeposit = true
 			break
 		}
@@ -50,14 +56,14 @@ func TestEdgeDirectionPolicies_OWNS_IncludesDeposit(t *testing.T) {
 }
 
 func TestEdgeDirectionPolicies_OWNS_IncludesCommunitySource(t *testing.T) {
-	rule, exists := EdgeDirectionPolicies[models.DependencyTypeOwns]
+	rule, exists := EdgeDirectionPolicies[DependencyTypeOwns]
 	if !exists {
 		t.Fatal("OWNS edge direction policy not found")
 	}
 
 	hasCommunity := false
-	for _, sourceType := range rule.ValidSourceTypes {
-		if sourceType == models.FragmentTypeCommunity {
+	for _, sourceType := range rule.ValidSourceClasses {
+		if sourceType == FragmentTypeCommunity {
 			hasCommunity = true
 			break
 		}
@@ -69,14 +75,14 @@ func TestEdgeDirectionPolicies_OWNS_IncludesCommunitySource(t *testing.T) {
 
 func TestEdgeDirectionPolicies_PRODUCES_IncludesDeposit(t *testing.T) {
 	// Verify PRODUCES policy includes DEPOSIT as valid source
-	rule, exists := EdgeDirectionPolicies[models.DependencyTypeProduces]
+	rule, exists := EdgeDirectionPolicies[DependencyTypeProduces]
 	if !exists {
 		t.Fatal("PRODUCES edge direction policy not found")
 	}
 
 	hasDeposit := false
-	for _, sourceType := range rule.ValidSourceTypes {
-		if sourceType == models.FragmentTypeDeposit {
+	for _, sourceType := range rule.ValidSourceClasses {
+		if sourceType == ah.FragmentClassSite {
 			hasDeposit = true
 			break
 		}
@@ -88,14 +94,14 @@ func TestEdgeDirectionPolicies_PRODUCES_IncludesDeposit(t *testing.T) {
 
 func TestEdgeDirectionPolicies_LOCATED_IN_IncludesDeposit(t *testing.T) {
 	// Verify LOCATED_IN policy includes DEPOSIT as valid source
-	rule, exists := EdgeDirectionPolicies[models.DependencyTypeLocatedIn]
+	rule, exists := EdgeDirectionPolicies[DependencyTypeLocatedIn]
 	if !exists {
 		t.Fatal("LOCATED_IN edge direction policy not found")
 	}
 
 	hasDeposit := false
-	for _, sourceType := range rule.ValidSourceTypes {
-		if sourceType == models.FragmentTypeDeposit {
+	for _, sourceType := range rule.ValidSourceClasses {
+		if sourceType == ah.FragmentClassSite {
 			hasDeposit = true
 			break
 		}
@@ -107,14 +113,14 @@ func TestEdgeDirectionPolicies_LOCATED_IN_IncludesDeposit(t *testing.T) {
 
 func TestEdgeDirectionPolicies_OPERATES_IN_IncludesDeposit(t *testing.T) {
 	// Verify OPERATES_IN policy includes DEPOSIT as valid target
-	rule, exists := EdgeDirectionPolicies[models.DependencyTypeOperatesIn]
+	rule, exists := EdgeDirectionPolicies[DependencyTypeOperatesIn]
 	if !exists {
 		t.Fatal("OPERATES_IN edge direction policy not found")
 	}
 
 	hasDeposit := false
-	for _, targetType := range rule.ValidTargetTypes {
-		if targetType == models.FragmentTypeDeposit {
+	for _, targetType := range rule.ValidTargetClasses {
+		if targetType == ah.FragmentClassSite {
 			hasDeposit = true
 			break
 		}
@@ -125,12 +131,12 @@ func TestEdgeDirectionPolicies_OPERATES_IN_IncludesDeposit(t *testing.T) {
 }
 
 func TestEdgeDirectionPolicies_CanonicalAndLegacyAliasCoverage(t *testing.T) {
-	cases := []models.DependencyType{
-		models.DependencyTypeAssociatedWith,
-		models.DependencyTypeCorporateTransition,
-		models.DependencyTypeDomainRelation,
-		models.DependencyTypeSubsidiaryOf,
-		models.DependencyTypeHasSubmarket,
+	cases := []DependencyType{
+		DependencyTypeAssociatedWith,
+		DependencyTypeCorporateTransition,
+		DependencyTypeDomainRelation,
+		DependencyTypeSubsidiaryOf,
+		DependencyTypeHasSubmarket,
 	}
 	for _, edgeType := range cases {
 		if _, exists := EdgeDirectionPolicies[edgeType]; !exists {
@@ -144,7 +150,7 @@ func TestNormalizeSymmetricEdge(t *testing.T) {
 		name        string
 		sourceID    string
 		targetID    string
-		edgeType    models.DependencyType
+		edgeType    DependencyType
 		wantSource  string
 		wantTarget  string
 		wantSwapped bool
@@ -153,7 +159,7 @@ func TestNormalizeSymmetricEdge(t *testing.T) {
 			name:        "symmetric COMPETES_WITH - no swap needed",
 			sourceID:    "aaa",
 			targetID:    "bbb",
-			edgeType:    models.DependencyTypeCompetesWith,
+			edgeType:    DependencyTypeCompetesWith,
 			wantSource:  "aaa",
 			wantTarget:  "bbb",
 			wantSwapped: false,
@@ -162,7 +168,7 @@ func TestNormalizeSymmetricEdge(t *testing.T) {
 			name:        "symmetric COMPETES_WITH - swap needed",
 			sourceID:    "bbb",
 			targetID:    "aaa",
-			edgeType:    models.DependencyTypeCompetesWith,
+			edgeType:    DependencyTypeCompetesWith,
 			wantSource:  "aaa",
 			wantTarget:  "bbb",
 			wantSwapped: true,
@@ -171,7 +177,7 @@ func TestNormalizeSymmetricEdge(t *testing.T) {
 			name:        "non-symmetric OWNS - never swaps",
 			sourceID:    "bbb",
 			targetID:    "aaa",
-			edgeType:    models.DependencyTypeOwns,
+			edgeType:    DependencyTypeOwns,
 			wantSource:  "bbb",
 			wantTarget:  "aaa",
 			wantSwapped: false,
@@ -180,7 +186,7 @@ func TestNormalizeSymmetricEdge(t *testing.T) {
 			name:        "non-symmetric EXTRACTS_FROM - never swaps",
 			sourceID:    "facility-z",
 			targetID:    "deposit-a",
-			edgeType:    models.DependencyTypeExtractsFrom,
+			edgeType:    DependencyTypeExtractsFrom,
 			wantSource:  "facility-z",
 			wantTarget:  "deposit-a",
 			wantSwapped: false,
@@ -206,127 +212,127 @@ func TestNormalizeSymmetricEdge(t *testing.T) {
 func TestCanonicalizeEdge_ProductOwnsOrganization_ToProduces(t *testing.T) {
 	tests := []struct {
 		name       string
-		edgeType   models.DependencyType
-		sourceType models.FragmentType
-		targetType models.FragmentType
-		wantType   models.DependencyType
+		edgeType   DependencyType
+		sourceType FragmentType
+		targetType FragmentType
+		wantType   DependencyType
 		wantSwap   bool
 		wantChange bool
 	}{
 		{
 			name:       "PRODUCT OWNS ORGANIZATION -> PRODUCES with swap",
-			edgeType:   models.DependencyTypeOwns,
-			sourceType: models.FragmentTypeProduct,
-			targetType: models.FragmentTypeOrganization,
-			wantType:   models.DependencyTypeProduces,
+			edgeType:   DependencyTypeOwns,
+			sourceType: FragmentTypeProduct,
+			targetType: FragmentTypeOrganization,
+			wantType:   DependencyTypeProduces,
 			wantSwap:   true,
 			wantChange: true,
 		},
 		{
 			name:       "ORGANIZATION OWNS PRODUCT stays OWNS (no canonicalization)",
-			edgeType:   models.DependencyTypeOwns,
-			sourceType: models.FragmentTypeOrganization,
-			targetType: models.FragmentTypeProduct,
-			wantType:   models.DependencyTypeOwns,
+			edgeType:   DependencyTypeOwns,
+			sourceType: FragmentTypeOrganization,
+			targetType: FragmentTypeProduct,
+			wantType:   DependencyTypeOwns,
 			wantSwap:   false,
 			wantChange: false,
 		},
 		{
 			name:       "PRODUCT PRODUCES ORGANIZATION (nonsense) is not rewritten here (direction rules handle it)",
-			edgeType:   models.DependencyTypeProduces,
-			sourceType: models.FragmentTypeProduct,
-			targetType: models.FragmentTypeOrganization,
-			wantType:   models.DependencyTypeProduces,
+			edgeType:   DependencyTypeProduces,
+			sourceType: FragmentTypeProduct,
+			targetType: FragmentTypeOrganization,
+			wantType:   DependencyTypeProduces,
 			wantSwap:   false,
 			wantChange: false,
 		},
 		{
 			name:       "PRODUCT PRODUCES PRODUCT -> TRANSFORMS_INTO",
-			edgeType:   models.DependencyTypeProduces,
-			sourceType: models.FragmentTypeProduct,
-			targetType: models.FragmentTypeProduct,
-			wantType:   models.DependencyTypeTransformsInto,
+			edgeType:   DependencyTypeProduces,
+			sourceType: FragmentTypeProduct,
+			targetType: FragmentTypeProduct,
+			wantType:   DependencyTypeTransformsInto,
 			wantSwap:   false,
 			wantChange: true,
 		},
 		{
 			name:       "ORGANIZATION EXTRACTS_FROM DEPOSIT -> OPERATES_IN (best-effort)",
-			edgeType:   models.DependencyTypeExtractsFrom,
-			sourceType: models.FragmentTypeOrganization,
-			targetType: models.FragmentTypeDeposit,
-			wantType:   models.DependencyTypeOperatesIn,
+			edgeType:   DependencyTypeExtractsFrom,
+			sourceType: FragmentTypeOrganization,
+			targetType: ah.FragmentClassSite,
+			wantType:   DependencyTypeOperatesIn,
 			wantSwap:   false,
 			wantChange: true,
 		},
 		{
 			name:       "DEPOSIT EXTRACTS_FROM ORGANIZATION -> OPERATES_IN with swap (best-effort)",
-			edgeType:   models.DependencyTypeExtractsFrom,
-			sourceType: models.FragmentTypeDeposit,
-			targetType: models.FragmentTypeOrganization,
-			wantType:   models.DependencyTypeOperatesIn,
+			edgeType:   DependencyTypeExtractsFrom,
+			sourceType: ah.FragmentClassSite,
+			targetType: FragmentTypeOrganization,
+			wantType:   DependencyTypeOperatesIn,
 			wantSwap:   true,
 			wantChange: true,
 		},
 		{
 			name:       "ENTITY APPLIES_TO MECHANISM -> swap to MECHANISM APPLIES_TO ENTITY",
-			edgeType:   models.DependencyTypeAppliesTo,
-			sourceType: models.FragmentTypeOrganization,
-			targetType: models.FragmentTypeMechanism,
-			wantType:   models.DependencyTypeAppliesTo,
+			edgeType:   DependencyTypeAppliesTo,
+			sourceType: FragmentTypeOrganization,
+			targetType: FragmentTypeMechanism,
+			wantType:   DependencyTypeAppliesTo,
 			wantSwap:   true,
 			wantChange: true,
 		},
 		{
 			name:       "Non-mechanism APPLIES_TO -> INFLUENCES",
-			edgeType:   models.DependencyTypeAppliesTo,
-			sourceType: models.FragmentTypeOrganization,
-			targetType: models.FragmentTypeMarket,
-			wantType:   models.DependencyTypeInfluences,
+			edgeType:   DependencyTypeAppliesTo,
+			sourceType: FragmentTypeOrganization,
+			targetType: FragmentTypeMarket,
+			wantType:   DependencyTypeInfluences,
 			wantSwap:   false,
 			wantChange: true,
 		},
 		{
 			name:       "COMMUNITY FOUNDED PERSON -> swap to PERSON FOUNDED COMMUNITY",
-			edgeType:   models.DependencyTypeFounded,
-			sourceType: models.FragmentTypeCommunity,
-			targetType: models.FragmentTypePerson,
-			wantType:   models.DependencyTypeFounded,
+			edgeType:   DependencyTypeFounded,
+			sourceType: FragmentTypeCommunity,
+			targetType: FragmentTypePerson,
+			wantType:   DependencyTypeFounded,
 			wantSwap:   true,
 			wantChange: true,
 		},
 		{
 			name:       "ORGANIZATION FOUNDED PERSON -> swap to PERSON FOUNDED ORGANIZATION",
-			edgeType:   models.DependencyTypeFounded,
-			sourceType: models.FragmentTypeOrganization,
-			targetType: models.FragmentTypePerson,
-			wantType:   models.DependencyTypeFounded,
+			edgeType:   DependencyTypeFounded,
+			sourceType: FragmentTypeOrganization,
+			targetType: FragmentTypePerson,
+			wantType:   DependencyTypeFounded,
 			wantSwap:   true,
 			wantChange: true,
 		},
 		{
 			name:       "MARKET INVESTS_IN ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET (swap)",
-			edgeType:   models.DependencyTypeInvestsIn,
-			sourceType: models.FragmentTypeMarket,
-			targetType: models.FragmentTypeOrganization,
-			wantType:   models.DependencyTypeParticipatesIn,
+			edgeType:   DependencyTypeInvestsIn,
+			sourceType: FragmentTypeMarket,
+			targetType: FragmentTypeOrganization,
+			wantType:   DependencyTypeParticipatesIn,
 			wantSwap:   true,
 			wantChange: true,
 		},
 		{
 			name:       "ORGANIZATION RELATED_TO MARKET -> ORGANIZATION PARTICIPATES_IN MARKET",
-			edgeType:   models.DependencyTypeRelatedTo,
-			sourceType: models.FragmentTypeOrganization,
-			targetType: models.FragmentTypeMarket,
-			wantType:   models.DependencyTypeParticipatesIn,
+			edgeType:   DependencyTypeRelatedTo,
+			sourceType: FragmentTypeOrganization,
+			targetType: FragmentTypeMarket,
+			wantType:   DependencyTypeParticipatesIn,
 			wantSwap:   false,
 			wantChange: true,
 		},
 		{
 			name:       "MARKET RELATED_TO ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET (swap)",
-			edgeType:   models.DependencyTypeRelatedTo,
-			sourceType: models.FragmentTypeMarket,
-			targetType: models.FragmentTypeOrganization,
-			wantType:   models.DependencyTypeParticipatesIn,
+			edgeType:   DependencyTypeRelatedTo,
+			sourceType: FragmentTypeMarket,
+			targetType: FragmentTypeOrganization,
+			wantType:   DependencyTypeParticipatesIn,
 			wantSwap:   true,
 			wantChange: true,
 		},
@@ -349,14 +355,14 @@ func TestCanonicalizeEdge_ProductOwnsOrganization_ToProduces(t *testing.T) {
 }
 
 func TestNormalizeRelationEdge_OwnsCommunityToOrganization_IsPreserved(t *testing.T) {
-	sourceFrag := &models.HorizonFragment{Type: models.FragmentTypeCommunity}
+	sourceFrag := &models.HorizonFragment{Class: FragmentTypeCommunity}
 
 	gotSource, gotTarget, gotType, changed := normalizeRelationEdge(
 		sourceFrag,
 		"community-id",
 		"org-id",
-		models.DependencyTypeOwns,
-		models.FragmentTypeOrganization,
+		DependencyTypeOwns,
+		FragmentTypeOrganization,
 		false,
 		nil,
 	)
@@ -366,7 +372,7 @@ func TestNormalizeRelationEdge_OwnsCommunityToOrganization_IsPreserved(t *testin
 	if gotSource != "community-id" || gotTarget != "org-id" {
 		t.Fatalf("expected source/target unchanged, got %q -> %q", gotSource, gotTarget)
 	}
-	if gotType != models.DependencyTypeOwns {
+	if gotType != DependencyTypeOwns {
 		t.Fatalf("expected OWNS, got %s", gotType)
 	}
 }

@@ -24,7 +24,7 @@ func TestBestEffortEnrichRelationTargetGeo_FacilityUsesParentAndCandidateGeocodi
 	}
 	parentCC := "KR"
 	parent := &models.HorizonFragment{
-		Type:        models.FragmentTypeOrganization,
+		Class:        FragmentTypeOrganization,
 		Labels:      map[string]string{"en": "S-Oil"},
 		Coordinates: &models.Coordinates{Lat: 0.0, Lon: 0.0},
 		HomeLocation: &models.Location{
@@ -32,7 +32,7 @@ func TestBestEffortEnrichRelationTargetGeo_FacilityUsesParentAndCandidateGeocodi
 		},
 	}
 	target := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/kr/onsan-refinery",
 		Labels:        map[string]string{"en": "Onsan Refinery"},
 	}
@@ -57,14 +57,14 @@ func TestBestEffortEnrichRelationTargetGeo_FacilityFallsBackToParentCoordinates(
 	engine := &ScoutEngine{}
 	parentCC := "SA"
 	parent := &models.HorizonFragment{
-		Type:        models.FragmentTypeOrganization,
+		Class:        FragmentTypeOrganization,
 		Coordinates: &models.Coordinates{Lat: 26.7070, Lon: 50.0407},
 		HomeLocation: &models.Location{
 			ISO3166_1: &parentCC,
 		},
 	}
 	target := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/sa/ras-tanura-terminal",
 	}
 
@@ -96,7 +96,7 @@ func TestBestEffortEnrichRelationTargetGeo_OrganizationUsesCanonicalCountryAndGe
 		},
 	}
 	target := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/sa/bahri-chemicals",
 		Labels:        map[string]string{"en": "Bahri Chemicals"},
 	}
@@ -141,7 +141,7 @@ func TestBestEffortEnrichRelationTargetGeo_FacilityUsesFullNameForResolve(t *tes
 	}
 	engine := &ScoutEngine{geocodingClient: geocoder}
 	target := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:          FragmentTypeFacility,
 		CanonicalPath: "/fac/cn/jiuquan-satellite-launch-center",
 		Labels:        map[string]string{"en": "Jiuquan Satellite Launch Center"},
 	}

@@ -167,8 +167,8 @@ func IsChokepointFragment(fragment *horizonmodels.HorizonFragment) bool {
 		return false
 	}
 	path := strings.TrimSpace(fragment.CanonicalPath)
-	switch fragment.Type {
-	case horizonmodels.FragmentTypeOrganization, horizonmodels.FragmentTypeProgram:
+	switch fragment.Class {
+	case FragmentTypeOrganization:
 		// Organizations and institutions may be strategically important, but they are not
 		// geographic chokepoints just because noisy enrichment attached port/strait-style tags.
 		return isStrategicChokepointPath(path)

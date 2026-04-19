@@ -9,6 +9,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 const defaultFirestoreCollection = "horizon_regulatory_transform_pairs"
@@ -54,7 +55,11 @@ func LoadRegistryFromFirestore(ctx context.Context, db *firestore.Client) (*Regi
 		}
 		p := Pair{FromPath: from, ToPath: to, RelationKind: strings.TrimSpace(row.RelationKind)}
 		if ct := strings.TrimSpace(row.CanonicalEdgeType); ct != "" {
-			p.CanonicalType = models.DependencyType(ct)
+			if rel, ok := models.NormalizeWireRelationStrict(ct); ok {
+				p.CanonicalType = rel
+			} else {
+				p.CanonicalType = ah.RelationName(strings.ToLower(ct))
+			}
 		}
 		reg.RegisterPair(p)
 	}

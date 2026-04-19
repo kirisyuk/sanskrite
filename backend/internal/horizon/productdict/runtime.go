@@ -18,6 +18,20 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+)
+
+// Legacy product-to-product edge labels that this dictionary operates on.
+// These are NOT canonical AH relations (in AH they are folded onto
+// siteTransforms attributes per migration_map.yaml). They are retained
+// here as ah.RelationName-typed string constants so the supervisor /
+// LLM wire layer can continue to record candidate observations until
+// the materialized-payload-rewrite phase swaps them out for siteTransforms.
+const (
+	ProductEdgeTransformsInto ah.RelationName = "transforms_into"
+	ProductEdgeAssemblesInto  ah.RelationName = "assembles_into"
+	ProductEdgeUsedIn         ah.RelationName = "used_in"
+	ProductEdgeDependsOn      ah.RelationName = "depends_on"
 )
 
 const (
@@ -45,12 +59,12 @@ type ProductTransformPair struct {
 }
 
 type ProductRelationResolution struct {
-	Known        bool                  `json:"known"`
-	Swapped      bool                  `json:"swapped"`
-	FromPath     string                `json:"fromPath"`
-	ToPath       string                `json:"toPath"`
-	RelationKind string                `json:"relationKind"`
-	EdgeType     models.DependencyType `json:"edgeType"`
+	Known        bool            `json:"known"`
+	Swapped      bool            `json:"swapped"`
+	FromPath     string          `json:"fromPath"`
+	ToPath       string          `json:"toPath"`
+	RelationKind string          `json:"relationKind"`
+	EdgeType     ah.RelationName `json:"edgeType"`
 }
 
 type ProductStreamNode struct {
@@ -101,7 +115,7 @@ type TransformObservation struct {
 	TenantID         string
 	FromPath         string
 	ToPath           string
-	ObservedEdgeType models.DependencyType
+	ObservedEdgeType ah.RelationName
 	RelationHint     string
 	SourceKind       string
 	EdgeID           string
@@ -414,13 +428,13 @@ func (r *Runtime) ExpandProductStreamForTenant(ctx context.Context, tenantID str
 
 func (r *Runtime) NormalizeProductEdgeType(
 	ctx context.Context,
-	edgeType models.DependencyType,
-	sourceType models.FragmentType,
-	targetType models.FragmentType,
+	edgeType ah.RelationName,
+	sourceClass ah.FragmentClass,
+	targetClass ah.FragmentClass,
 	sourcePath string,
 	targetPath string,
-) (models.DependencyType, bool, string, bool, error) {
-	return r.NormalizeProductEdgeTypeForTenant(ctx, "", edgeType, sourceType, targetType, sourcePath, targetPath)
+) (ah.RelationName, bool, string, bool, error) {
+	return r.NormalizeProductEdgeTypeForTenant(ctx, "", edgeType, sourceClass, targetClass, sourcePath, targetPath)
 }
 
 func (r *Runtime) ResolveProductRelation(ctx context.Context, sourcePath string, targetPath string) (ProductRelationResolution, error) {
@@ -476,15 +490,15 @@ func (r *Runtime) ResolveProductRelationForTenant(ctx context.Context, tenantID 
 func (r *Runtime) NormalizeProductEdgeTypeForTenant(
 	ctx context.Context,
 	tenantID string,
-	edgeType models.DependencyType,
-	sourceType models.FragmentType,
-	targetType models.FragmentType,
+	edgeType ah.RelationName,
+	sourceClass ah.FragmentClass,
+	targetClass ah.FragmentClass,
 	sourcePath string,
 	targetPath string,
-) (models.DependencyType, bool, string, bool, error) {
+) (ah.RelationName, bool, string, bool, error) {
 	sourcePath = strings.TrimSpace(sourcePath)
 	targetPath = strings.TrimSpace(targetPath)
-	if r == nil || sourceType != models.FragmentTypeProduct || targetType != models.FragmentTypeProduct {
+	if r == nil || sourceClass != ah.FragmentClassProduct || targetClass != ah.FragmentClassProduct {
 		return edgeType, false, "", false, nil
 	}
 	if !supportsProductRelationDictionary(edgeType) {
@@ -1176,32 +1190,32 @@ func (r *Runtime) queryTransformAdjacencyDocs(ctx context.Context, tenantID, fie
 		GetAll()
 }
 
-func supportsProductRelationDictionary(edgeType models.DependencyType) bool {
+func supportsProductRelationDictionary(edgeType ah.RelationName) bool {
 	switch edgeType {
-	case models.DependencyTypeTransformsInto, models.DependencyTypeAssemblesInto, models.DependencyTypeUsedIn, models.DependencyTypeDependsOn:
+	case ProductEdgeTransformsInto, ProductEdgeAssemblesInto, ProductEdgeUsedIn, ProductEdgeDependsOn:
 		return true
 	default:
 		return false
 	}
 }
 
-func desiredEdgeTypeForKind(kind string) models.DependencyType {
+func desiredEdgeTypeForKind(kind string) ah.RelationName {
 	switch normalizeRelationKind(kind) {
 	case "assembly":
-		return models.DependencyTypeAssemblesInto
+		return ProductEdgeAssemblesInto
 	case "usage":
-		return models.DependencyTypeUsedIn
+		return ProductEdgeUsedIn
 	}
-	return models.DependencyTypeTransformsInto
+	return ProductEdgeTransformsInto
 }
 
-func relationHintForEdgeType(edgeType models.DependencyType) string {
+func relationHintForEdgeType(edgeType ah.RelationName) string {
 	switch edgeType {
-	case models.DependencyTypeAssemblesInto:
+	case ProductEdgeAssemblesInto:
 		return "assembly"
-	case models.DependencyTypeUsedIn:
+	case ProductEdgeUsedIn:
 		return "usage"
-	case models.DependencyTypeTransformsInto:
+	case ProductEdgeTransformsInto:
 		return "transformation"
 	default:
 		return ""

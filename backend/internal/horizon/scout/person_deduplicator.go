@@ -69,7 +69,7 @@ func (d *PersonDeduplicator) DeduplicatePerson(ctx context.Context, fragment *mo
 	if d == nil || d.fragmentsRepo == nil {
 		return nil, nil
 	}
-	if fragment == nil || fragment.Type != models.FragmentTypePerson {
+	if fragment == nil || fragment.Class != FragmentTypePerson {
 		return nil, nil
 	}
 	atomic.AddInt64(&d.calls, 1)
@@ -91,7 +91,7 @@ func (d *PersonDeduplicator) DeduplicatePerson(ctx context.Context, fragment *mo
 	// Tier 1: Exact legalName match
 	// =========================================================================
 	if legalName := strings.TrimSpace(fragment.Identifiers["legalName"]); legalName != "" {
-		existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "legalName", legalName, models.FragmentTypePerson)
+		existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "legalName", legalName, FragmentTypePerson)
 		if err == nil && len(existing) > 0 {
 			for _, e := range existing {
 				if e.ID != "" && e.ID != fragment.ID {
@@ -107,7 +107,7 @@ func (d *PersonDeduplicator) DeduplicatePerson(ctx context.Context, fragment *mo
 	// Tier 2: Exact shortName match
 	// =========================================================================
 	if shortName := strings.TrimSpace(fragment.Identifiers["shortName"]); shortName != "" {
-		existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", shortName, models.FragmentTypePerson)
+		existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", shortName, FragmentTypePerson)
 		if err == nil && len(existing) > 0 {
 			for _, e := range existing {
 				if e.ID != "" && e.ID != fragment.ID {
@@ -123,7 +123,7 @@ func (d *PersonDeduplicator) DeduplicatePerson(ctx context.Context, fragment *mo
 	// Tier 2: Exact label[en] match
 	// =========================================================================
 	if labelEN := strings.TrimSpace(fragment.Labels["en"]); labelEN != "" {
-		existing, err := d.fragmentsRepo.FindByLabel(ctx, "en", labelEN, models.FragmentTypePerson)
+		existing, err := d.fragmentsRepo.FindByLabel(ctx, "en", labelEN, FragmentTypePerson)
 		if err == nil && len(existing) > 0 {
 			for _, e := range existing {
 				if e.ID != "" && e.ID != fragment.ID {
@@ -223,7 +223,7 @@ func (d *PersonDeduplicator) findByPhoneticKey(ctx context.Context, phoneticKey 
 
 	// Get all PERSON fragments and check phonetic match
 	// Note: This is a scan operation; for production, consider adding a phonetic index field to fragments
-	persons, err := d.fragmentsRepo.ListByTypeAndTenant(ctx, string(models.FragmentTypePerson), "global", 10000)
+	persons, err := d.fragmentsRepo.ListByTypeAndTenant(ctx, string(FragmentTypePerson), "global", 10000)
 	if err != nil {
 		return nil, err
 	}
@@ -250,7 +250,7 @@ func (d *PersonDeduplicator) findByWikidataID(ctx context.Context, wikidataID st
 	}
 
 	// Search by identifier
-	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "wikidataId", wikidataID, models.FragmentTypePerson)
+	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "wikidataId", wikidataID, FragmentTypePerson)
 	if err == nil && len(existing) > 0 {
 		return existing[0], nil
 	}
@@ -518,7 +518,7 @@ func (d *PersonDeduplicator) findByTokenSubset(ctx context.Context, inputFragmen
 	}
 
 	// Get all PERSON fragments
-	persons, err := d.fragmentsRepo.ListByTypeAndTenant(ctx, "global", models.FragmentTypePerson, 10000)
+	persons, err := d.fragmentsRepo.ListByTypeAndTenant(ctx, "global", FragmentTypePerson, 10000)
 	if err != nil {
 		return nil, err
 	}

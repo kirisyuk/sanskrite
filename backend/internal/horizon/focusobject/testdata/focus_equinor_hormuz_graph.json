@@ -165,11 +165,14 @@
       }
     },
     {
-      "id": "edge-qatargas-hormuz",
+      "id": "edge-hormuz-disrupts-qatargas",
       "tenantId": "global",
-      "sourceFragmentId": "frag-qatargas",
-      "targetFragmentId": "frag-hormuz",
-      "type": "DEPENDS_ON",
+      "sourceFragmentId": "frag-hormuz",
+      "targetFragmentId": "frag-qatargas",
+      "relation": "disrupts",
+      "qualifiers": {
+        "disruption_kind": "blockade"
+      },
       "properties": {
         "criticality": 0.95,
         "amplification": 1.0,

@@ -1149,7 +1149,7 @@ func hydrateSupplyChainTraceEndpoints(
 		endpoint := &horizonmodels.SupplyChainTraceEndpoint{CanonicalPath: ref}
 		if fragment := resolved[ref]; fragment != nil {
 			endpoint.Label = fragmentTraceFragmentLabel(fragment)
-			endpoint.Type = string(fragment.Type)
+			endpoint.Type = string(fragment.Class)
 			endpoint.Coordinates = fragment.Coordinates
 			endpoint.Resolved = endpoint.Label != ""
 		}

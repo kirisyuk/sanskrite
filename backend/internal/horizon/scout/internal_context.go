@@ -61,7 +61,7 @@ func (e *ScoutEngine) buildGraphBackedInternalContext(ctx context.Context, tenan
 	b.WriteString("INTERNAL GRAPH CONTEXT (deterministic, from system state)\n")
 	b.WriteString("Target:\n")
 	b.WriteString(fmt.Sprintf("- canonicalPath: %s\n", strings.TrimSpace(target.CanonicalPath)))
-	b.WriteString(fmt.Sprintf("- type: %s\n", strings.TrimSpace(string(target.Type))))
+	b.WriteString(fmt.Sprintf("- type: %s\n", strings.TrimSpace(string(target.Class))))
 	if name := fragmentBestName(target); name != "" {
 		b.WriteString(fmt.Sprintf("- name: %s\n", name))
 	}
@@ -122,7 +122,7 @@ func (e *ScoutEngine) buildGraphBackedInternalContext(ctx context.Context, tenan
 				}
 				neighbors++
 				b.WriteString(fmt.Sprintf("  - [%s] %s (%s)\n",
-					strings.TrimSpace(string(ed.Type)),
+					strings.TrimSpace(string(ed.Relation)),
 					strings.TrimSpace(other.CanonicalPath),
 					truncText(fragmentBestName(other), 80),
 				))

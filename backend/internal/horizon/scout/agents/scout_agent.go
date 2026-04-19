@@ -14,6 +14,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // ScoutAgent извлекает структурированные данные из сырого контента
@@ -368,35 +369,39 @@ func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, conte
 	normalizeDiscoveredRelationsNames(scoutResult.Relations)
 
 	// Ensure Type is set
-	if scoutResult.Fragment.Type == "" {
+	if scoutResult.Fragment.Class == "" {
 		// Infer type from canonicalPath (stable namespaces) or default to Organization.
 		switch {
 		case strings.Contains(targetCanonicalPath, "/domain/"):
-			scoutResult.Fragment.Type = models.FragmentTypeDomain
+			scoutResult.Fragment.Class = ah.FragmentClassEvidence
+			scoutResult.Fragment.Subtype = "domain_legacy"
 		case strings.Contains(targetCanonicalPath, "/media/"):
-			scoutResult.Fragment.Type = models.FragmentTypeMediaChannel
+			scoutResult.Fragment.Class = ah.FragmentClassOrg
+			scoutResult.Fragment.Subtype = "media_channel"
 		case strings.Contains(targetCanonicalPath, "/person/"):
-			scoutResult.Fragment.Type = models.FragmentTypePerson
+			scoutResult.Fragment.Class = FragmentTypePerson
 		case strings.Contains(targetCanonicalPath, "/org/"):
-			scoutResult.Fragment.Type = models.FragmentTypeOrganization
+			scoutResult.Fragment.Class = FragmentTypeOrganization
 		case strings.Contains(targetCanonicalPath, "/gov/"):
-			scoutResult.Fragment.Type = models.FragmentTypeOrganization
+			scoutResult.Fragment.Class = FragmentTypeOrganization
 		case strings.Contains(targetCanonicalPath, "/product/"):
-			scoutResult.Fragment.Type = models.FragmentTypeProduct
+			scoutResult.Fragment.Class = FragmentTypeProduct
 		case strings.Contains(targetCanonicalPath, "/program/"):
-			scoutResult.Fragment.Type = models.FragmentTypeProgram
+			scoutResult.Fragment.Class = ah.FragmentClassOrg
+			scoutResult.Fragment.Subtype = "program"
 		case strings.Contains(targetCanonicalPath, "/market/"):
-			scoutResult.Fragment.Type = models.FragmentTypeMarket
+			scoutResult.Fragment.Class = FragmentTypeMarket
 		case strings.Contains(targetCanonicalPath, "/fac/"):
-			scoutResult.Fragment.Type = models.FragmentTypeFacility
+			scoutResult.Fragment.Class = FragmentTypeFacility
 		case strings.Contains(targetCanonicalPath, "/deposit/"):
-			scoutResult.Fragment.Type = models.FragmentTypeDeposit
+			scoutResult.Fragment.Class = ah.FragmentClassSite
+			scoutResult.Fragment.Subtype = "deposit"
 		case strings.Contains(targetCanonicalPath, "/loc/") || strings.Contains(targetCanonicalPath, "/region/"):
-			scoutResult.Fragment.Type = models.FragmentTypeGeoRegion
+			scoutResult.Fragment.Class = FragmentTypeGeoRegion
 		case strings.Contains(targetCanonicalPath, "/event/"):
-			scoutResult.Fragment.Type = models.FragmentTypeEvent
+			scoutResult.Fragment.Class = FragmentTypeEvent
 		default:
-			scoutResult.Fragment.Type = models.FragmentTypeOrganization
+			scoutResult.Fragment.Class = FragmentTypeOrganization
 		}
 	}
 
@@ -738,7 +743,7 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 	canonicalRulesBlock := taxonomy.ExtendedCanonicalPathRulesPrompt()
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
 	// Object detail: from entity_semantics (unified per type). Supply-chain mode uses operational-only blocks.
-	typeBlock := entity_semantics.ExtractionBlockForPathAndDomainModes(targetCanonicalPath, "", "", domainModes)
+	typeBlock := entity_semantics.ExtractionBlockForPathAndDomainModes(targetCanonicalPath, "", "", "", domainModes)
 	if typeBlock != "" {
 		typeBlock = typeBlock + "\n\n"
 	}

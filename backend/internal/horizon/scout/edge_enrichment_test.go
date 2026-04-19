@@ -9,7 +9,7 @@ import (
 
 func TestApplyBestEffortEdgeEnrichment_OwnsSyncsOwnershipPercent(t *testing.T) {
 	edge := &models.DependencyEdge{
-		Type:       models.DependencyTypeOwns,
+		Relation:       DependencyTypeOwns,
 		Qualifiers: map[string]interface{}{},
 		Metrics: map[string]models.MetricValue{
 			"ownership_percent": {Value: 62.5},
@@ -23,7 +23,7 @@ func TestApplyBestEffortEdgeEnrichment_OwnsSyncsOwnershipPercent(t *testing.T) {
 
 func TestApplyBestEffortEdgeEnrichment_OwnsBackfillsMetricFromQualifier(t *testing.T) {
 	edge := &models.DependencyEdge{
-		Type:       models.DependencyTypeOwns,
+		Relation:       DependencyTypeOwns,
 		Qualifiers: map[string]interface{}{"stake_pct": "45%"},
 	}
 	applyBestEffortEdgeEnrichment(edge)
@@ -38,7 +38,7 @@ func TestApplyBestEffortEdgeEnrichment_OwnsBackfillsMetricFromQualifier(t *testi
 
 func TestApplyBestEffortEdgeEnrichment_AddsTemporalHintForHistoricalEmployment(t *testing.T) {
 	edge := &models.DependencyEdge{
-		Type:       models.DependencyTypeEmployedBy,
+		Relation:       DependencyTypeEmployedBy,
 		Qualifiers: map[string]interface{}{"edgeModality": "historical"},
 	}
 	applyBestEffortEdgeEnrichment(edge)
@@ -51,7 +51,7 @@ func TestApplyBestEffortEdgeEnrichment_AddsTemporalHintForHistoricalEmployment(t
 func TestApplyBestEffortEdgeEnrichment_SetsHistoricalFromDates(t *testing.T) {
 	past := time.Now().Add(-24 * time.Hour)
 	edge := &models.DependencyEdge{
-		Type:       models.DependencyTypeManages,
+		Relation:       DependencyTypeManages,
 		Qualifiers: map[string]interface{}{},
 		ValidTo:    &past,
 	}
@@ -63,7 +63,7 @@ func TestApplyBestEffortEdgeEnrichment_SetsHistoricalFromDates(t *testing.T) {
 
 func TestApplyBestEffortEdgeEnrichment_DependsOnNormalizesTransmissionQualifiers(t *testing.T) {
 	edge := &models.DependencyEdge{
-		Type: models.DependencyTypeDependsOn,
+		Relation: DependencyTypeDependsOn,
 		Qualifiers: map[string]interface{}{
 			"facet":               "logistics",
 			"throughputShare":     "0.72",
@@ -90,7 +90,7 @@ func TestApplyBestEffortEdgeEnrichment_DependsOnNormalizesTransmissionQualifiers
 
 func TestApplyBestEffortEdgeEnrichment_DependsOnAddsTransmissionHintsWhenMissing(t *testing.T) {
 	edge := &models.DependencyEdge{
-		Type: models.DependencyTypeDependsOn,
+		Relation: DependencyTypeDependsOn,
 		Qualifiers: map[string]interface{}{
 			"facet": "logistics",
 		},
@@ -103,7 +103,7 @@ func TestApplyBestEffortEdgeEnrichment_DependsOnAddsTransmissionHintsWhenMissing
 
 func TestApplyBestEffortEdgeEnrichment_DependsOnSetsTransmissionContractComplete(t *testing.T) {
 	edge := &models.DependencyEdge{
-		Type: models.DependencyTypeDependsOn,
+		Relation: DependencyTypeDependsOn,
 		Qualifiers: map[string]interface{}{
 			"facet":                         "logistics",
 			models.QualifierThroughputShare: 0.62,
@@ -113,20 +113,20 @@ func TestApplyBestEffortEdgeEnrichment_DependsOnSetsTransmissionContractComplete
 
 	applyBestEffortEdgeEnrichment(edge)
 
-	if got := edge.Qualifiers[models.QualifierTransmissionContractStatus]; got != models.TransmissionContractStatusComplete {
+	if got := edge.Qualifiers[QualifierTransmissionContractStatus]; got != TransmissionContractStatusComplete {
 		t.Fatalf("expected contract status complete, got %v", got)
 	}
-	if got := edge.Qualifiers[models.QualifierTransmissionContractMode]; got != models.TransmissionContractModeExplicit {
+	if got := edge.Qualifiers[QualifierTransmissionContractMode]; got != TransmissionContractModeExplicit {
 		t.Fatalf("expected contract mode explicit, got %v", got)
 	}
-	if got := edge.Qualifiers[models.QualifierTransmissionContractVersion]; got != models.TransmissionContractVersionV1 {
-		t.Fatalf("expected contract version %s, got %v", models.TransmissionContractVersionV1, got)
+	if got := edge.Qualifiers[QualifierTransmissionContractVersion]; got != TransmissionContractVersionV1 {
+		t.Fatalf("expected contract version %s, got %v", TransmissionContractVersionV1, got)
 	}
 }
 
 func TestApplyBestEffortEdgeEnrichment_DependsOnSetsTransmissionContractPartial(t *testing.T) {
 	edge := &models.DependencyEdge{
-		Type: models.DependencyTypeDependsOn,
+		Relation: DependencyTypeDependsOn,
 		Qualifiers: map[string]interface{}{
 			"facet":                         "logistics",
 			models.QualifierThroughputShare: 0.62,
@@ -135,10 +135,10 @@ func TestApplyBestEffortEdgeEnrichment_DependsOnSetsTransmissionContractPartial(
 
 	applyBestEffortEdgeEnrichment(edge)
 
-	if got := edge.Qualifiers[models.QualifierTransmissionContractStatus]; got != models.TransmissionContractStatusPartial {
+	if got := edge.Qualifiers[QualifierTransmissionContractStatus]; got != TransmissionContractStatusPartial {
 		t.Fatalf("expected contract status partial, got %v", got)
 	}
-	missing, ok := edge.Qualifiers[models.QualifierTransmissionContractMissing]
+	missing, ok := edge.Qualifiers[QualifierTransmissionContractMissing]
 	if !ok || missing == nil {
 		t.Fatalf("expected missing fields for partial contract")
 	}
@@ -146,16 +146,16 @@ func TestApplyBestEffortEdgeEnrichment_DependsOnSetsTransmissionContractPartial(
 
 func TestApplyBestEffortEdgeEnrichment_DependsOnSetsTransmissionContractMissing(t *testing.T) {
 	edge := &models.DependencyEdge{
-		Type:       models.DependencyTypeDependsOn,
+		Relation:       DependencyTypeDependsOn,
 		Qualifiers: map[string]interface{}{},
 	}
 
 	applyBestEffortEdgeEnrichment(edge)
 
-	if got := edge.Qualifiers[models.QualifierTransmissionContractStatus]; got != models.TransmissionContractStatusMissing {
+	if got := edge.Qualifiers[QualifierTransmissionContractStatus]; got != TransmissionContractStatusMissing {
 		t.Fatalf("expected contract status missing, got %v", got)
 	}
-	if got := edge.Qualifiers[models.QualifierTransmissionContractMode]; got != models.TransmissionContractModeInferred {
+	if got := edge.Qualifiers[QualifierTransmissionContractMode]; got != TransmissionContractModeInferred {
 		t.Fatalf("expected contract mode inferred, got %v", got)
 	}
 }
@@ -173,9 +173,9 @@ func assertHasNumericQualifier(t *testing.T, edge *models.DependencyEdge, key st
 
 func TestWithDeterministicDirectionalRoleQualifiers_OwnsFillsMissingRoles(t *testing.T) {
 	quals, changed := withDeterministicDirectionalRoleQualifiers(
-		models.DependencyTypeOwns,
-		models.FragmentTypeOrganization,
-		models.FragmentTypeOrganization,
+		DependencyTypeOwns,
+		FragmentTypeOrganization,
+		FragmentTypeOrganization,
 		nil,
 	)
 	if !changed {
@@ -197,9 +197,9 @@ func TestWithDeterministicDirectionalRoleQualifiers_DoesNotOverrideExisting(t *t
 		"source_role": "investor",
 	}
 	quals, changed := withDeterministicDirectionalRoleQualifiers(
-		models.DependencyTypeInvestsIn,
-		models.FragmentTypeOrganization,
-		models.FragmentTypeOrganization,
+		DependencyTypeInvestsIn,
+		FragmentTypeOrganization,
+		FragmentTypeOrganization,
 		in,
 	)
 	if !changed {
@@ -223,9 +223,9 @@ func TestWithDeterministicDirectionalRoleQualifiers_RepairsInvalidDirectionalPay
 		"direction_basis": "to_target",
 	}
 	quals, changed := withDeterministicDirectionalRoleQualifiers(
-		models.DependencyTypeOwns,
-		models.FragmentTypeOrganization,
-		models.FragmentTypeOrganization,
+		DependencyTypeOwns,
+		FragmentTypeOrganization,
+		FragmentTypeOrganization,
 		in,
 	)
 	if !changed {
@@ -244,9 +244,9 @@ func TestWithDeterministicDirectionalRoleQualifiers_RepairsInvalidDirectionalPay
 
 func TestWithDeterministicDirectionalRoleQualifiers_SkipsNonAmbiguousTypePairs(t *testing.T) {
 	quals, changed := withDeterministicDirectionalRoleQualifiers(
-		models.DependencyTypeDependsOn,
-		models.FragmentTypeOrganization,
-		models.FragmentTypeProduct,
+		DependencyTypeDependsOn,
+		FragmentTypeOrganization,
+		FragmentTypeProduct,
 		nil,
 	)
 	if changed {
@@ -259,9 +259,9 @@ func TestWithDeterministicDirectionalRoleQualifiers_SkipsNonAmbiguousTypePairs(t
 
 func TestWithDeterministicDirectionalRoleQualifiers_ControlsAccessFillsPolicyRoles(t *testing.T) {
 	quals, changed := withDeterministicDirectionalRoleQualifiers(
-		models.DependencyTypeControlsAccess,
-		models.FragmentTypeOrganization,
-		models.FragmentTypeMarket,
+		DependencyTypeControlsAccess,
+		FragmentTypeOrganization,
+		FragmentTypeMarket,
 		nil,
 	)
 	if !changed {
@@ -285,9 +285,9 @@ func TestWithDeterministicDirectionalRoleQualifiers_InGeoScopeRepairsAliases(t *
 		"direction_basis": "instrument_to_jurisdiction",
 	}
 	quals, changed := withDeterministicDirectionalRoleQualifiers(
-		models.DependencyTypeInGeoScope,
-		models.FragmentTypeMechanism,
-		models.FragmentTypeGeoRegion,
+		DependencyTypeInGeoScope,
+		FragmentTypeMechanism,
+		FragmentTypeGeoRegion,
 		in,
 	)
 	if !changed {

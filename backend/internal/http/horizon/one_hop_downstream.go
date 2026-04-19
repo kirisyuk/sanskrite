@@ -118,7 +118,7 @@ func (h *HorizonHandlers) StartFragmentOneHopDownstream(w http.ResponseWriter, r
 	_ = json.NewDecoder(r.Body).Decode(&req)
 	opts := requestToOptions(req)
 	opts.AnchorRef = strings.TrimSpace(fragment.CanonicalPath)
-	opts.AnchorType = string(fragment.Type)
+	opts.AnchorType = string(fragment.Class)
 	jobID, err := h.createOneHopJob(r.Context(), authInfo.UID, authInfo.TenantID, "", "", opts)
 	if err != nil {
 		http.Error(w, fmt.Sprintf("Failed to create one-hop downstream job: %v", err), http.StatusInternalServerError)

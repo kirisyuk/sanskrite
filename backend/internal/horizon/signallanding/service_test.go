@@ -10,6 +10,7 @@ import (
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestLandEventRequiresPreciseZoneForShockSignals(t *testing.T) {
@@ -178,7 +179,7 @@ func TestRetroAttachScoreMatchesMissingCandidateAndCountry(t *testing.T) {
 	svc := &Service{}
 	ua := "UA"
 	fragment := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeFacility,
+		Class:         FragmentTypeFacility,
 		CanonicalPath: "/fac/ua/port-of-odessa",
 		Labels:        map[string]string{"en": "Port of Odesa"},
 		HomeLocation:  &horizonmodels.Location{Name: "Odesa", ISO3166_1: &ua},
@@ -213,7 +214,8 @@ func TestBackfillAffectedZoneCoordinatesUsesGeocoding(t *testing.T) {
 		},
 	})
 	zone := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Class:         ah.FragmentClassGeo,
+		Subtype:       "affected_zone",
 		CanonicalPath: "/zone/int/military_conflict/strait-of-hormuz",
 		Labels:        map[string]string{"en": "Strait of Hormuz (armed tension)"},
 		Qualifiers: map[string]interface{}{
@@ -250,7 +252,8 @@ func TestApplySignalLandingZoneActivityMarksZoneVisible(t *testing.T) {
 		UpdatedAt:  now,
 	}
 	zone := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeAffectedZone,
+		Class:         ah.FragmentClassGeo,
+		Subtype:       "affected_zone",
 		CanonicalPath: "/zone/ir/military_conflict/kharg-island-crude-oil-export-terminal",
 		Qualifiers:    map[string]interface{}{},
 	}

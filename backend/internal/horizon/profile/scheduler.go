@@ -44,7 +44,7 @@ func NewScheduler(
 
 // RefreshResult contains the result of a scheduled refresh run.
 type RefreshResult struct {
-	FragmentType    models.FragmentType
+	FragmentType    FragmentType
 	CandidatesFound int
 	ProfilesCreated int
 	ProfilesSkipped int
@@ -54,7 +54,7 @@ type RefreshResult struct {
 }
 
 // RunRefresh executes a refresh run for a specific fragment type.
-func (s *Scheduler) RunRefresh(ctx context.Context, fragmentType models.FragmentType) (*RefreshResult, error) {
+func (s *Scheduler) RunRefresh(ctx context.Context, fragmentType FragmentType) (*RefreshResult, error) {
 	startTime := time.Now()
 	result := &RefreshResult{
 		FragmentType: fragmentType,
@@ -168,14 +168,14 @@ type fragmentWithDegree struct {
 // findCandidates finds the top N% fragments by edge count.
 func (s *Scheduler) findCandidates(
 	ctx context.Context,
-	fragmentType models.FragmentType,
+	fragmentType FragmentType,
 	policy *models.FragmentProfileRefreshPolicy,
 ) ([]*models.HorizonFragment, error) {
 	// For GOV entities, we use ORGANIZATION type with /gov/ path prefix
 	isGov := fragmentType == "GOV" || fragmentType == "GOVERNMENT"
 	actualType := fragmentType
 	if isGov {
-		actualType = models.FragmentTypeOrganization
+		actualType = FragmentTypeOrganization
 	}
 
 	// Get all fragments of this type
@@ -268,8 +268,8 @@ func (s *Scheduler) findCandidates(
 }
 
 // RunAllTypes runs refresh for all enabled fragment types.
-func (s *Scheduler) RunAllTypes(ctx context.Context) (map[models.FragmentType]*RefreshResult, error) {
-	results := make(map[models.FragmentType]*RefreshResult)
+func (s *Scheduler) RunAllTypes(ctx context.Context) (map[FragmentType]*RefreshResult, error) {
+	results := make(map[FragmentType]*RefreshResult)
 
 	policies, err := s.policiesRepo.List(ctx)
 	if err != nil {
@@ -286,17 +286,17 @@ func (s *Scheduler) RunAllTypes(ctx context.Context) (map[models.FragmentType]*R
 			continue
 		}
 
-		result, err := s.RunRefresh(ctx, policy.FragmentType)
+		result, err := s.RunRefresh(ctx, policy.FragmentClass)
 		if err != nil {
-			log.Printf("[ProfileScheduler] Error running refresh for %s: %v", policy.FragmentType, err)
-			results[policy.FragmentType] = &RefreshResult{
-				FragmentType: policy.FragmentType,
+			log.Printf("[ProfileScheduler] Error running refresh for %s: %v", policy.FragmentClass, err)
+			results[policy.FragmentClass] = &RefreshResult{
+				FragmentType: policy.FragmentClass,
 				Errors:       []string{err.Error()},
 			}
 			continue
 		}
 
-		results[policy.FragmentType] = result
+		results[policy.FragmentClass] = result
 	}
 
 	return results, nil

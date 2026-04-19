@@ -222,7 +222,7 @@ func ScoreSnapshot(snap Snapshot, cfg Config) Scorecard {
 
 	structuralRaw := 0.0
 	semanticGroups := map[string]struct{}{}
-	neighborTypes := map[horizonmodels.FragmentType]struct{}{}
+	neighborTypes := map[FragmentType]struct{}{}
 	businessEdges := 0
 	contextEdges := 0
 	strongEdgeFamilies := map[string]struct{}{}
@@ -236,12 +236,12 @@ func ScoreSnapshot(snap Snapshot, cfg Config) Scorecard {
 		if neighbor == nil {
 			continue
 		}
-		semanticGroups[horizonmodels.SemanticGroupForEdgeType(edge.Type)] = struct{}{}
-		neighborTypes[neighbor.Type] = struct{}{}
-		if isBusinessType(neighbor.Type) {
+		semanticGroups[SemanticGroupForEdgeType(edge.Relation)] = struct{}{}
+		neighborTypes[neighbor.Class] = struct{}{}
+		if isBusinessType(neighbor) {
 			businessEdges++
 		}
-		if isContextType(neighbor.Type) {
+		if isContextType(neighbor) {
 			contextEdges++
 		}
 		strong, family := directEdgeImportanceContribution(root, neighbor, edge, snap.RootID)
@@ -403,7 +403,7 @@ func axisReachScore(snap Snapshot, cfg Config, axis string) float64 {
 				continue
 			}
 			best[step.nextID] = pathWeight
-			if step.nextID != snap.RootID && isBusinessType(nextFrag.Type) {
+			if step.nextID != snap.RootID && isBusinessType(nextFrag) {
 				tails[step.nextID] = math.Max(tails[step.nextID], pathWeight*axisBusinessTailWeight(axis, nextFrag))
 			}
 			queue = append(queue, queueState{id: step.nextID, strength: pathWeight, hops: cur.hops + 1})
@@ -503,7 +503,7 @@ func traversalEdgeBreakdown(
 	}
 	neighborBoost := 1.0
 	if nextFrag != nil {
-		neighborBoost = 0.88 + 0.18*typeTransmissionWeight(nextFrag.Type)
+		neighborBoost = 0.88 + 0.18*typeTransmissionWeight(nextFrag)
 	}
 	return traversalBreakdown{
 		Base:                base,
@@ -529,8 +529,10 @@ func strongTraversalWeight(profile horizonmodels.PropagationProfile, edge *horiz
 	if edge == nil {
 		return 0
 	}
+	edgeRel := strings.TrimSpace(string(edge.Relation))
 	for _, spec := range profile.StrongEdges {
-		if strings.TrimSpace(spec.Type) != strings.TrimSpace(string(edge.Type)) {
+		specRaw := strings.TrimSpace(spec.Type)
+		if specRaw == "" || specRaw != edgeRel {
 			continue
 		}
 		switch strings.TrimSpace(spec.Direction) {
@@ -553,46 +555,46 @@ func fallbackTraversalWeight(axis string, edge *horizonmodels.DependencyEdge) fl
 	if edge == nil {
 		return 0
 	}
-	group := horizonmodels.SemanticGroupForEdgeType(edge.Type)
+	group := SemanticGroupForEdgeType(edge.Relation)
 	switch strings.TrimSpace(axis) {
 	case horizonmodels.AxisGeoConflict:
 		switch group {
-		case horizonmodels.SemanticGroupSupplyChain:
+		case SemanticGroupSupplyChain:
 			return 0.54
-		case horizonmodels.SemanticGroupStrategic, horizonmodels.SemanticGroupGovernance:
+		case SemanticGroupStrategic, SemanticGroupGovernance:
 			return 0.48
-		case horizonmodels.SemanticGroupMarket:
+		case SemanticGroupMarket:
 			return 0.34
-		case horizonmodels.SemanticGroupDomain:
+		case SemanticGroupDomain:
 			return 0.18
 		default:
-			if edge.Type == horizonmodels.DependencyTypeAffects || edge.Type == horizonmodels.DependencyTypeLocatedIn || edge.Type == horizonmodels.DependencyTypeOperatesIn {
+			if edge.Relation == DependencyTypeAffects || edge.Relation == DependencyTypeLocatedIn || edge.Relation == DependencyTypeOperatesIn {
 				return 0.68
 			}
 			return 0.22
 		}
 	case horizonmodels.AxisPhysicalFlowSupply, horizonmodels.AxisLogisticsCapacity, horizonmodels.AxisLogisticsLatency:
 		switch group {
-		case horizonmodels.SemanticGroupSupplyChain:
+		case SemanticGroupSupplyChain:
 			return 0.58
-		case horizonmodels.SemanticGroupMarket:
+		case SemanticGroupMarket:
 			return 0.36
-		case horizonmodels.SemanticGroupGovernance, horizonmodels.SemanticGroupStrategic:
+		case SemanticGroupGovernance, SemanticGroupStrategic:
 			return 0.28
-		case horizonmodels.SemanticGroupDomain:
+		case SemanticGroupDomain:
 			return 0.16
 		default:
 			return 0.20
 		}
 	case horizonmodels.AxisOperationalContinuity:
 		switch group {
-		case horizonmodels.SemanticGroupGovernance:
+		case SemanticGroupGovernance:
 			return 0.52
-		case horizonmodels.SemanticGroupSupplyChain:
+		case SemanticGroupSupplyChain:
 			return 0.44
-		case horizonmodels.SemanticGroupStrategic:
+		case SemanticGroupStrategic:
 			return 0.34
-		case horizonmodels.SemanticGroupMarket:
+		case SemanticGroupMarket:
 			return 0.26
 		default:
 			return 0.20
@@ -610,10 +612,10 @@ func axisNodeWeight(axis string, frag *horizonmodels.HorizonFragment) float64 {
 	weight := 0.76 + 0.14*overlay.OperationalScore + 0.10*overlay.CriticalityScore
 	switch strings.TrimSpace(axis) {
 	case horizonmodels.AxisGeoConflict:
-		if isBusinessType(frag.Type) {
+		if isBusinessType(frag) {
 			weight += 0.08
 		}
-		if frag.Type == horizonmodels.FragmentTypeAffectedZone || frag.Type == horizonmodels.FragmentTypeGeoRegion {
+		if frag.IsLegacyAffectedZone() || frag.Class == FragmentTypeGeoRegion {
 			weight += 0.06
 		}
 		if overlay.PrimaryRole == "chokepoint" {
@@ -629,18 +631,18 @@ func axisNodeWeight(axis string, frag *horizonmodels.HorizonFragment) float64 {
 		if overlay.HasExposure("energy_input") {
 			weight += 0.08
 		}
-		if isBusinessType(frag.Type) {
+		if isBusinessType(frag) {
 			weight += 0.06
 		}
 	case horizonmodels.AxisOperationalContinuity:
-		if frag.Type == horizonmodels.FragmentTypeFacility || frag.Type == horizonmodels.FragmentTypeOrganization || frag.Type == horizonmodels.FragmentTypeDeposit {
+		if frag.Class == FragmentTypeFacility || frag.Class == FragmentTypeOrganization || frag.IsLegacyDeposit() {
 			weight += 0.10
 		}
 		if overlay.HasRole("controller") {
 			weight += 0.06
 		}
 	}
-	if isWeakContextType(frag.Type) {
+	if isWeakContextType(frag) {
 		weight -= 0.16
 	}
 	return clamp(weight, 0.42, 1.24)
@@ -652,19 +654,23 @@ func axisBusinessTailWeight(axis string, frag *horizonmodels.HorizonFragment) fl
 	}
 	overlay := propagation.BuildPropagationNodeOverlay(frag)
 	weight := 1.0
-	switch frag.Type {
-	case horizonmodels.FragmentTypeFacility:
-		weight += 0.16
-	case horizonmodels.FragmentTypeOrganization:
-		weight += 0.10
-	case horizonmodels.FragmentTypeMarket:
-		weight += 0.12
-	case horizonmodels.FragmentTypeDeposit, horizonmodels.FragmentTypeProduct:
+	if frag.IsLegacyDeposit() {
 		weight += 0.08
+	} else {
+		switch frag.Class {
+		case FragmentTypeFacility:
+			weight += 0.16
+		case FragmentTypeOrganization:
+			weight += 0.10
+		case FragmentTypeMarket:
+			weight += 0.12
+		case FragmentTypeProduct:
+			weight += 0.08
+		}
 	}
 	switch strings.TrimSpace(axis) {
 	case horizonmodels.AxisGeoConflict:
-		if frag.Type == horizonmodels.FragmentTypeFacility || frag.Type == horizonmodels.FragmentTypeMarket || frag.Type == horizonmodels.FragmentTypeDeposit {
+		if frag.Class == FragmentTypeFacility || frag.Class == FragmentTypeMarket || frag.IsLegacyDeposit() {
 			weight += 0.14
 		}
 	case horizonmodels.AxisPhysicalFlowSupply, horizonmodels.AxisLogisticsCapacity, horizonmodels.AxisLogisticsLatency:
@@ -687,8 +693,8 @@ func directEdgeImportanceContribution(
 	if root == nil || neighbor == nil || edge == nil {
 		return 0, ""
 	}
-	edgeTypeWeight := directEdgeTypeWeight(edge.Type)
-	neighborWeight := typeTransmissionWeight(neighbor.Type)
+	edgeTypeWeight := directEdgeTypeWeight(edge.Relation)
+	neighborWeight := typeTransmissionWeight(neighbor)
 	directionWeight := 0.94
 	if strings.TrimSpace(edge.SourceFragmentID) == strings.TrimSpace(rootID) {
 		directionWeight = 1.0
@@ -699,71 +705,78 @@ func directEdgeImportanceContribution(
 		qualifierBonus += edge.GetThroughputShare() * 0.10
 		qualifierBonus += edge.GetCapacityConstraint() * 0.08
 		qualifierBonus += edge.GetReroutePenalty() * 0.06
-		qualifierBonus -= edge.GetSubstitutability() * 0.05
+		qualifierBonus -= edgeSubstitutability(edge) * 0.05
 	}
 	family := propagation.ApplyEdgeFamilyPhysics(horizonmodels.AxisPhysicalFlowSupply, root, edge, propagation.DefaultEdgeFamilyPhysicsProfile()).Family
 	return clamp(edgeTypeWeight*neighborWeight*directionWeight*criticalityFactor+qualifierBonus, 0, 1.35), family
 }
 
-func directEdgeTypeWeight(edgeType horizonmodels.DependencyType) float64 {
+func directEdgeTypeWeight(edgeType DependencyType) float64 {
 	switch edgeType {
-	case horizonmodels.DependencyTypeAffects,
-		horizonmodels.DependencyTypeControlsAccess,
-		horizonmodels.DependencyTypeGatekeepsDecision,
-		horizonmodels.DependencyTypeDependsOn:
+	case DependencyTypeAffects,
+		DependencyTypeControlsAccess,
+		DependencyTypeGatekeepsDecision,
+		DependencyTypeDependsOn:
 		return 0.98
-	case horizonmodels.DependencyTypeSuppliesTo,
-		horizonmodels.DependencyTypeProduces,
-		horizonmodels.DependencyTypeTransformsInto,
-		horizonmodels.DependencyTypeAssemblesInto,
-		horizonmodels.DependencyTypeExtractsFrom,
-		horizonmodels.DependencyTypeRegulates,
-		horizonmodels.DependencyTypeControls,
-		horizonmodels.DependencyTypeOwns:
+	case DependencyTypeSuppliesTo,
+		DependencyTypeProduces,
+		DependencyTypeTransformsInto,
+		DependencyTypeAssemblesInto,
+		DependencyTypeExtractsFrom,
+		DependencyTypeRegulates,
+		DependencyTypeControls,
+		DependencyTypeOwns:
 		return 0.86
-	case horizonmodels.DependencyTypeParticipatesIn,
-		horizonmodels.DependencyTypeHasMarketSegment,
-		horizonmodels.DependencyTypeDominates,
-		horizonmodels.DependencyTypeOperatesIn,
-		horizonmodels.DependencyTypeLocatedIn,
-		horizonmodels.DependencyTypeAdministers:
+	case DependencyTypeParticipatesIn,
+		DependencyTypeHasMarketSegment,
+		DependencyTypeDominates,
+		DependencyTypeOperatesIn,
+		DependencyTypeLocatedIn,
+		DependencyTypeAdministers:
 		return 0.66
-	case horizonmodels.DependencyTypeFocusesOn,
-		horizonmodels.DependencyTypeSurfaces,
-		horizonmodels.DependencyTypeInGeoScope,
-		horizonmodels.DependencyTypeAbout:
+	case DependencyTypeFocusesOn,
+		DependencyTypeSurfaces,
+		DependencyTypeInGeoScope,
+		DependencyTypeAbout:
 		return 0.34
-	case horizonmodels.DependencyTypeInfluences:
+	case DependencyTypeInfluences:
 		return 0.26
 	default:
 		return 0.42
 	}
 }
 
-func typeTransmissionWeight(t horizonmodels.FragmentType) float64 {
-	switch t {
-	case horizonmodels.FragmentTypeFacility:
-		return 1.00
-	case horizonmodels.FragmentTypeOrganization:
-		return 0.96
-	case horizonmodels.FragmentTypeMarket:
-		return 0.92
-	case horizonmodels.FragmentTypeProduct:
-		return 0.88
-	case horizonmodels.FragmentTypeDeposit:
+func typeTransmissionWeight(frag *horizonmodels.HorizonFragment) float64 {
+	if frag == nil {
+		return 0.62
+	}
+	if frag.IsLegacyDeposit() {
 		return 0.90
-	case horizonmodels.FragmentTypeAffectedZone:
+	}
+	if frag.IsLegacyAffectedZone() {
 		return 0.90
-	case horizonmodels.FragmentTypeGeoRegion:
-		return 0.76
-	case horizonmodels.FragmentTypeDecisionPoint, horizonmodels.FragmentTypeMechanism:
-		return 0.78
-	case horizonmodels.FragmentTypeEvent:
-		return 0.70
-	case horizonmodels.FragmentTypeDomain:
+	}
+	if frag.IsLegacyDomain() {
 		return 0.50
-	case horizonmodels.FragmentTypeSphere:
+	}
+	if frag.IsLegacySphere() {
 		return 0.34
+	}
+	switch frag.Class {
+	case FragmentTypeFacility:
+		return 1.00
+	case FragmentTypeOrganization:
+		return 0.96
+	case FragmentTypeMarket:
+		return 0.92
+	case FragmentTypeProduct:
+		return 0.88
+	case FragmentTypeGeoRegion:
+		return 0.76
+	case FragmentTypeDecisionPoint, FragmentTypeMechanism:
+		return 0.78
+	case FragmentTypeEvent:
+		return 0.70
 	default:
 		return 0.62
 	}
@@ -868,43 +881,48 @@ func normalizedCount(n, capN int) float64 {
 	return float64(n) / float64(capN)
 }
 
-func isBusinessType(t horizonmodels.FragmentType) bool {
-	switch t {
-	case horizonmodels.FragmentTypeOrganization,
-		horizonmodels.FragmentTypeFacility,
-		horizonmodels.FragmentTypeMarket,
-		horizonmodels.FragmentTypeProduct,
-		horizonmodels.FragmentTypeDeposit,
-		horizonmodels.FragmentTypeProgram:
+func isBusinessType(frag *horizonmodels.HorizonFragment) bool {
+	if frag == nil {
+		return false
+	}
+	if frag.IsLegacyDeposit() || frag.IsLegacyProgram() {
+		return true
+	}
+	switch frag.Class {
+	case FragmentTypeOrganization,
+		FragmentTypeFacility,
+		FragmentTypeMarket,
+		FragmentTypeProduct:
 		return true
 	default:
 		return false
 	}
 }
 
-func isContextType(t horizonmodels.FragmentType) bool {
-	switch t {
-	case horizonmodels.FragmentTypeGeoRegion,
-		horizonmodels.FragmentTypeAffectedZone,
-		horizonmodels.FragmentTypeEvent,
-		horizonmodels.FragmentTypeDomain,
-		horizonmodels.FragmentTypeSphere,
-		horizonmodels.FragmentTypeDecisionPoint,
-		horizonmodels.FragmentTypeMechanism,
-		horizonmodels.FragmentTypeOrganization:
+func isContextType(frag *horizonmodels.HorizonFragment) bool {
+	if frag == nil {
+		return false
+	}
+	if frag.IsLegacyAffectedZone() || frag.IsLegacyDomain() || frag.IsLegacySphere() {
+		return true
+	}
+	switch frag.Class {
+	case FragmentTypeGeoRegion,
+		FragmentTypeEvent,
+		FragmentTypeDecisionPoint,
+		FragmentTypeMechanism,
+		FragmentTypeOrganization:
 		return true
 	default:
 		return false
 	}
 }
 
-func isWeakContextType(t horizonmodels.FragmentType) bool {
-	switch t {
-	case horizonmodels.FragmentTypeDomain, horizonmodels.FragmentTypeSphere:
-		return true
-	default:
+func isWeakContextType(frag *horizonmodels.HorizonFragment) bool {
+	if frag == nil {
 		return false
 	}
+	return frag.IsLegacyDomain() || frag.IsLegacySphere()
 }
 
 func normalizeTenant(tenantID string, fragment *horizonmodels.HorizonFragment) string {

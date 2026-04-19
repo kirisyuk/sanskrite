@@ -166,7 +166,7 @@ func (e *MacroEconomicalEngine) TransferHook(ctx context.Context, signal *horizo
 	debugFactors := map[string]float64{
 		"base_factor": 1.0,
 	}
-	if edgeFactor, ok := policyImpactTransferFactor(edge.Type, signal.Axis); ok {
+	if edgeFactor, ok := policyImpactTransferFactor(edge.Relation, signal.Axis); ok {
 		factor *= edgeFactor
 		debugFactors["semantics_edge_axis_factor"] = edgeFactor
 	} else {
@@ -239,26 +239,26 @@ func (e *MacroEconomicalEngine) TransferHook(ctx context.Context, signal *horizo
 		debugFactors["channel_factor"] = 0.95
 	}
 
-	switch edge.Type {
-	case horizonmodels.DependencyTypeAppliesTo, horizonmodels.DependencyTypeImposesCondition, horizonmodels.DependencyTypeControlsAccess:
+	switch edge.Relation {
+	case DependencyTypeAppliesTo, DependencyTypeImposesCondition, DependencyTypeControlsAccess:
 		factor *= 1.05
 		debugFactors["edge_type_factor"] = 1.05
-	case horizonmodels.DependencyTypeDependsOn:
+	case DependencyTypeDependsOn:
 		factor *= 0.95
 		debugFactors["edge_type_factor"] = 0.95
-	case horizonmodels.DependencyTypeRegulates:
+	case DependencyTypeRegulates:
 		factor *= 1.03
 		debugFactors["edge_type_factor"] = 1.03
-	case horizonmodels.DependencyTypeGatekeepsDecision:
+	case DependencyTypeGatekeepsDecision:
 		factor *= 1.04
 		debugFactors["edge_type_factor"] = 1.04
-	case horizonmodels.DependencyTypeUsesMechanism:
+	case DependencyTypeUsesMechanism:
 		factor *= 1.02
 		debugFactors["edge_type_factor"] = 1.02
-	case horizonmodels.DependencyTypeProduces, horizonmodels.DependencyTypeTransformsInto, horizonmodels.DependencyTypeAssemblesInto, horizonmodels.DependencyTypeUsedIn:
+	case DependencyTypeProduces, DependencyTypeTransformsInto, DependencyTypeAssemblesInto, DependencyTypeUsedIn:
 		factor *= 0.98
 		debugFactors["edge_type_factor"] = 0.98
-	case horizonmodels.DependencyTypeExtractsFrom:
+	case DependencyTypeExtractsFrom:
 		factor *= 0.97
 		debugFactors["edge_type_factor"] = 0.97
 	}

@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type SignalRetroAttachStatus string
@@ -19,10 +21,11 @@ const (
 type SignalRetroAttachQueueItem struct {
 	ID            string                  `json:"id" firestore:"id"`
 	TenantID      string                  `json:"tenantId" firestore:"tenantId"`
-	FragmentID    string                  `json:"fragmentId,omitempty" firestore:"fragmentId,omitempty"`
-	CanonicalPath string                  `json:"canonicalPath" firestore:"canonicalPath"`
-	FragmentType  FragmentType            `json:"fragmentType,omitempty" firestore:"fragmentType,omitempty"`
-	Source        string                  `json:"source,omitempty" firestore:"source,omitempty"`
+	FragmentID      string                  `json:"fragmentId,omitempty" firestore:"fragmentId,omitempty"`
+	CanonicalPath   string                  `json:"canonicalPath" firestore:"canonicalPath"`
+	FragmentClass   ah.FragmentClass        `json:"fragmentClass,omitempty" firestore:"fragmentClass,omitempty"`
+	FragmentSubtype string                  `json:"fragmentSubtype,omitempty" firestore:"fragmentSubtype,omitempty"`
+	Source          string                  `json:"source,omitempty" firestore:"source,omitempty"`
 	Status        SignalRetroAttachStatus `json:"status,omitempty" firestore:"status,omitempty"`
 	ObservedCount int                     `json:"observedCount,omitempty" firestore:"observedCount,omitempty"`
 	AttemptCount  int                     `json:"attemptCount,omitempty" firestore:"attemptCount,omitempty"`

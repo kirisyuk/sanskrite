@@ -67,7 +67,7 @@ func inferOrgGeoTokenFromHints(label string, fragment *models.HorizonFragment) s
 }
 
 func inferOrgCanonicalPathFromHints(fragment *models.HorizonFragment) string {
-	if fragment == nil || fragment.Type != models.FragmentTypeOrganization {
+	if fragment == nil || fragment.Class != FragmentTypeOrganization {
 		return ""
 	}
 	label := orgCanonicalizationLabel(fragment, strings.TrimSpace(fragment.CanonicalPath))

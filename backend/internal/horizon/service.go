@@ -596,9 +596,27 @@ func uniqueVertexStringValues(values []string) []string {
 	return out
 }
 
-// SearchDomainFragments performs best-effort search for DOMAIN fragments.
-// It uses the same underlying search pipeline as SearchFragments (Vertex preferred, Firestore prefix fallback),
-// but filters results to Type==DOMAIN.
+// isLegacyDomainFragment reports whether a fragment is a legacy DOMAIN-class
+// document. The DOMAIN class is removed in AH (see migration_map.yaml:
+// fold_to_attributes; documents are deleted by migrate-cli and the domain
+// identity survives as the {domain-slug} slot on /decision/* canonical paths
+// and as attributes.domain on relevant fragments). Until migrate-cli has
+// finished, we still detect legacy survivors by canonical path prefix.
+//
+// TODO(cleanup-code): once migrate-cli has run on all environments and the
+// /domain/* paths no longer exist, delete this predicate and the
+// SearchDomainFragments / FindDomainByCanonicalPathBestEffort wrappers (and
+// fix the single caller in http/horizon/lenses_preflight.go to drop the
+// hasDomains branch entirely).
+func isLegacyDomainFragment(f *models.HorizonFragment) bool {
+	if f == nil {
+		return false
+	}
+	return strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/domain/")
+}
+
+// SearchDomainFragments performs best-effort search for legacy DOMAIN
+// fragments. Post-AH this is a transitional shim — see isLegacyDomainFragment.
 func (s *HorizonService) SearchDomainFragments(ctx context.Context, query string, limit int) ([]*models.HorizonFragment, error) {
 	all, err := s.SearchFragments(ctx, query, limit*3)
 	if err != nil {
@@ -610,7 +628,7 @@ func (s *HorizonService) SearchDomainFragments(ctx context.Context, query string
 		if f == nil {
 			continue
 		}
-		if strings.TrimSpace(string(f.Type)) != string(models.FragmentTypeDomain) {
+		if !isLegacyDomainFragment(f) {
 			continue
 		}
 		cp := strings.TrimSpace(f.CanonicalPath)
@@ -643,10 +661,10 @@ func (s *HorizonService) FindDomainByCanonicalPathBestEffort(ctx context.Context
 	// 1) Firestore exact lookup (best).
 	if s != nil && s.fragmentsRepo != nil {
 		if frag, err := s.fragmentsRepo.GetByCanonicalPath(ctx, cp); err == nil && frag != nil {
-			if strings.TrimSpace(string(frag.Type)) == string(models.FragmentTypeDomain) {
+			if isLegacyDomainFragment(frag) {
 				return frag, nil
 			}
-			// Not a domain; treat as no-match.
+			// Not a legacy DOMAIN fragment; treat as no-match.
 			return nil, nil
 		}
 	}
@@ -659,7 +677,7 @@ func (s *HorizonService) FindDomainByCanonicalPathBestEffort(ctx context.Context
 		if c == nil {
 			continue
 		}
-		if strings.TrimSpace(c.CanonicalPath) == cp && strings.TrimSpace(string(c.Type)) == string(models.FragmentTypeDomain) {
+		if strings.TrimSpace(c.CanonicalPath) == cp && isLegacyDomainFragment(c) {
 			return c, nil
 		}
 	}

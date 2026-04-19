@@ -4,33 +4,41 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
-func TestDomainScaffoldRelationTypes_AreBackedByDirectionPolicy(t *testing.T) {
-	for _, rt := range DomainScaffoldRelationTypes() {
-		rule, ok := EdgeDirectionPolicies[rt]
-		if !ok {
-			t.Fatalf("domain scaffold type %s is missing in direction policy", rt)
-		}
-		hasDomainSource := false
-		for _, src := range rule.ValidSourceTypes {
-			if src == models.FragmentTypeDomain {
-				hasDomainSource = true
-				break
-			}
-		}
-		if !hasDomainSource {
-			t.Fatalf("domain scaffold type %s does not allow DOMAIN as source", rt)
+// TestDomainScaffoldRelations_AreBackedByDirectionPolicy ensures every
+// declared domain-scaffold relation has a direction-policy entry. Under
+// the AH taxonomy /domain/ paths are folded into evidence (see
+// migration_map.yaml: DOMAIN→evidence/domain_legacy), so we no longer
+// require a literal "DOMAIN" source class — instead we only assert the
+// rule exists. The legacy DOMAIN→/scaffold relationships will be
+// rewritten by migrate-cli during the data migration phase.
+func TestDomainScaffoldRelations_AreBackedByDirectionPolicy(t *testing.T) {
+	for _, rel := range DomainScaffoldRelations() {
+		if _, ok := EdgeDirectionPolicies[rel]; !ok {
+			t.Fatalf("domain scaffold relation %s missing in direction policy", rel)
 		}
 	}
 }
 
-func TestDomainScaffoldRelationTypesString_ContainsAllTypes(t *testing.T) {
-	csv := DomainScaffoldRelationTypesString()
-	for _, rt := range DomainScaffoldRelationTypes() {
-		if !strings.Contains(csv, string(rt)) {
-			t.Fatalf("domain scaffold csv is missing %s", rt)
+// TestDomainScaffoldRelationsString_ContainsAllRelations is a smoke
+// test on the prompt-facing CSV.
+func TestDomainScaffoldRelationsString_ContainsAllRelations(t *testing.T) {
+	csv := DomainScaffoldRelationsString()
+	for _, rel := range DomainScaffoldRelations() {
+		if !strings.Contains(csv, string(rel)) {
+			t.Fatalf("domain scaffold csv missing %s", rel)
+		}
+	}
+}
+
+// TestDomainScaffoldRelations_AreKnownAH guards that the curated set
+// only references AH-known relations (no legacy strings leaking).
+func TestDomainScaffoldRelations_AreKnownAH(t *testing.T) {
+	for _, rel := range DomainScaffoldRelations() {
+		if !ah.IsKnownRelation(rel) {
+			t.Fatalf("domain scaffold relation %s is not an AH-known relation", rel)
 		}
 	}
 }

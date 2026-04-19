@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 const (
@@ -715,76 +716,145 @@ func IsGraphIntentNodeTypeAllowed(nodeType string) bool {
 	return ok
 }
 
-// NormalizeGraphIntentRelationType maps graph-intent-level relation aliases to runtime canonical types.
-func NormalizeGraphIntentRelationType(relationType string) (DependencyType, map[string]interface{}, string, bool) {
-	rt := strings.ToUpper(strings.TrimSpace(relationType))
-	if rt == "" {
-		return "", nil, "", false
-	}
-	switch rt {
-	case GraphIntentRelationTypeAlignsWith:
-		return DependencyTypeAssociatedWith, map[string]interface{}{"associationSubtype": "aligns_with"}, "mapped ALIGNS_WITH -> ASSOCIATED_WITH", true
-	case GraphIntentRelationTypeCooperates:
-		return DependencyTypeAssociatedWith, map[string]interface{}{"associationSubtype": "cooperates_with"}, "mapped COOPERATES_WITH -> ASSOCIATED_WITH", true
-	case GraphIntentRelationTypeOpposes:
-		return DependencyTypeInfluences, map[string]interface{}{"influencePolarity": "negative", "influenceMode": "opposition"}, "mapped OPPOSES -> INFLUENCES (negative)", true
-	case GraphIntentRelationTypeConflictsWith:
-		return DependencyTypeInfluences, map[string]interface{}{"influencePolarity": "negative", "influenceMode": "conflict"}, "mapped CONFLICTS_WITH -> INFLUENCES (negative)", true
-	}
-	if _, ok := graphIntentAllowedRuntimeRelationTypes[rt]; ok {
-		return DependencyType(rt), nil, "", true
-	}
-	return "", nil, "", false
+// graphIntentRelationDecode is the structured result of normalising a
+// wire-level relationType (UPPER_SNAKE) into the AH SoT.
+type graphIntentRelationDecode struct {
+	// Relation is the canonical AH relation. Empty when the legacy
+	// alias is intentionally dropped per migration_map (e.g. LOCATED_IN
+	// folds into canonical_path; the caller must handle that case).
+	Relation ah.RelationName
+	// ExtraAttributes are attribute_spec keys + values that the
+	// migration_map says must accompany the rewritten edge (e.g. an
+	// `influence_kind` on a derived `influences` edge).
+	ExtraAttributes map[string]interface{}
+	// Note is a human-readable trace of the rewrite chain — surfaced in
+	// graph-intent warnings so authors can see "OWNS -> beneficially_owns
+	// (per migration_map.yaml)".
+	Note string
+	// Dropped is true when the wire alias intentionally has no
+	// successor (drop_after_migration / fold_to_*). Callers should
+	// either skip the edge or queue it for review per the map.
+	Dropped bool
 }
 
-func MapGraphIntentNodeTypeToFragmentType(nodeType, canonicalPathHint string) FragmentType {
-	nt := strings.ToUpper(strings.TrimSpace(nodeType))
-	switch nt {
-	case "GOVERNMENT_AGENCY":
-		return FragmentTypeOrganization
-	case "COMMUNITY_DYNASTY", "COMMUNITY_TRIBE":
-		return FragmentTypeCommunity
-	case "ORGANIZATION", "FACILITY", "GEO_REGION", "DOMAIN", "SPHERE", "EVENT", "PRODUCT", "PROGRAM", "MARKET", "PERSON", "MEDIA_CHANNEL", "DECISION_POINT", "MECHANISM", "SUPPLY_LINK", "TRACK", "DEPOSIT", "COMMUNITY", "AFFECTED_ZONE":
-		return FragmentType(nt)
+// NormalizeGraphIntentRelationType maps a graph-intent wire relationType to the
+// AgentHorde RelationName SoT. Accepts three input shapes:
+//
+//  1. Modern AH name (lower or upper-case, "supplies" / "SUPPLIES");
+//  2. Graph-intent affective alias (ALIGNS_WITH/OPPOSES/COOPERATES_WITH/
+//     CONFLICTS_WITH) — folded onto `influences` with closed-enum
+//     attribute payload per the AgentHorde InfluenceKind enum;
+//  3. Legacy DependencyType UPPER_SNAKE name (per migration_map.yaml).
+//
+// Returns ok=true even when the result is intentionally dropped; the
+// Dropped flag distinguishes "not a known wire alias" (ok=false) from
+// "known wire alias whose canonical home is no longer an edge"
+// (ok=true, Dropped=true). Callers MUST honour Dropped before emitting
+// an edge.
+func NormalizeGraphIntentRelationType(relationType string) (graphIntentRelationDecode, bool) {
+	raw := strings.TrimSpace(relationType)
+	if raw == "" {
+		return graphIntentRelationDecode{}, false
 	}
+	upper := strings.ToUpper(raw)
+
+	if rel, ok := graphIntentAffectiveAliases[upper]; ok {
+		return rel, true
+	}
+	if rel, ok := ah.NormalizeRelation(strings.ToLower(raw)); ok {
+		return graphIntentRelationDecode{Relation: rel}, true
+	}
+	if dec, ok := legacyRelationAliases[upper]; ok {
+		return dec, true
+	}
+	return graphIntentRelationDecode{}, false
+}
+
+// MapGraphIntentNodeTypeToClass maps a graph-intent wire nodeType to the
+// AgentHorde (FragmentClass, subtype) tuple. Accepts:
+//
+//  1. Modern AH class name (lower or upper-case): "site", "ORG", …;
+//  2. Legacy UPPER_SNAKE FragmentType (ORGANIZATION/FACILITY/…) routed
+//     through models.LegacyFragmentTypeAliases (the migration_map);
+//  3. Path-shape inference from canonicalPathHint when nothing else
+//     matches (legacy /fac/* → site, /gov/* → org, …).
+//
+// The third return value is true when the mapping is confident; false
+// when the function fell back to ah.FragmentClassOrg as the historical
+// default (callers should warn).
+func MapGraphIntentNodeTypeToClass(nodeType, canonicalPathHint string) (ah.FragmentClass, string, bool) {
+	raw := strings.TrimSpace(nodeType)
+	if raw != "" {
+		if class, ok := ah.NormalizeFragmentClass(strings.ToLower(raw)); ok {
+			return class, "", true
+		}
+		upper := strings.ToUpper(raw)
+		switch upper {
+		case "GOVERNMENT_AGENCY":
+			return ah.FragmentClassOrg, "gov", true
+		case "COMMUNITY_DYNASTY":
+			return ah.FragmentClassCommunity, "ethnic", true
+		case "COMMUNITY_TRIBE":
+			return ah.FragmentClassCommunity, "ethnic", true
+		}
+		if class, subtype, ok := FragmentClassFromLegacyType(upper); ok {
+			return class, subtype, true
+		}
+	}
+
 	cp := strings.TrimSpace(strings.ToLower(canonicalPathHint))
 	switch {
-	case strings.HasPrefix(cp, "/org/"), strings.HasPrefix(cp, "/gov/"):
-		return FragmentTypeOrganization
-	case strings.HasPrefix(cp, "/fac/"):
-		return FragmentTypeFacility
-	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/geo/"), strings.HasPrefix(cp, "/region/"):
-		return FragmentTypeGeoRegion
-	case strings.HasPrefix(cp, "/product/"):
-		return FragmentTypeProduct
+	case strings.HasPrefix(cp, "/org/"):
+		return ah.FragmentClassOrg, "", true
+	case strings.HasPrefix(cp, "/gov/"):
+		return ah.FragmentClassOrg, "gov", true
 	case strings.HasPrefix(cp, "/program/"):
-		return FragmentTypeProgram
-	case strings.HasPrefix(cp, "/market/"):
-		return FragmentTypeMarket
-	case strings.HasPrefix(cp, "/person/"):
-		return FragmentTypePerson
+		return ah.FragmentClassOrg, "program", true
 	case strings.HasPrefix(cp, "/media/"):
-		return FragmentTypeMediaChannel
-	case strings.HasPrefix(cp, "/domain/"):
-		return FragmentTypeDomain
+		return ah.FragmentClassOrg, "media_channel", true
+	case strings.HasPrefix(cp, "/site/"), strings.HasPrefix(cp, "/fac/"):
+		return ah.FragmentClassSite, "", true
 	case strings.HasPrefix(cp, "/deposit/"):
-		return FragmentTypeDeposit
-	case strings.HasPrefix(cp, "/community/"):
-		return FragmentTypeCommunity
-	case strings.HasPrefix(cp, "/decision/"):
-		return FragmentTypeDecisionPoint
-	case strings.HasPrefix(cp, "/mechanism/"):
-		return FragmentTypeMechanism
-	case strings.HasPrefix(cp, "/sphere/"):
-		return FragmentTypeSphere
-	case strings.HasPrefix(cp, "/event/"):
-		return FragmentTypeEvent
+		return ah.FragmentClassSite, "deposit", true
+	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/geo/"), strings.HasPrefix(cp, "/region/"):
+		return ah.FragmentClassGeo, "", true
 	case strings.HasPrefix(cp, "/zone/"):
-		return FragmentTypeAffectedZone
+		return ah.FragmentClassGeo, "affected_zone", true
+	case strings.HasPrefix(cp, "/product/"):
+		return ah.FragmentClassProduct, "", true
+	case strings.HasPrefix(cp, "/market/"):
+		return ah.FragmentClassMarket, "", true
+	case strings.HasPrefix(cp, "/person/"):
+		return ah.FragmentClassPerson, "", true
+	case strings.HasPrefix(cp, "/community/"):
+		return ah.FragmentClassCommunity, "", true
+	case strings.HasPrefix(cp, "/decision/"):
+		return ah.FragmentClassDecision, "", true
+	case strings.HasPrefix(cp, "/mechanism/"):
+		return ah.FragmentClassMechanism, "", true
+	case strings.HasPrefix(cp, "/event/"):
+		return ah.FragmentClassEvidence, "event", true
+	case strings.HasPrefix(cp, "/evidence/"):
+		return ah.FragmentClassEvidence, "", true
+	case strings.HasPrefix(cp, "/mobile_asset/"), strings.HasPrefix(cp, "/track/"):
+		return ah.FragmentClassMobileAsset, "", true
+	case strings.HasPrefix(cp, "/regime/"):
+		return ah.FragmentClassRegime, "", true
+	case strings.HasPrefix(cp, "/route/"):
+		return ah.FragmentClassRoute, "", true
+	case strings.HasPrefix(cp, "/vessel_class/"):
+		return ah.FragmentClassVesselClass, "", true
+	case strings.HasPrefix(cp, "/project/"):
+		return ah.FragmentClassProject, "", true
 	}
-	return FragmentTypeOrganization
+	return ah.FragmentClassOrg, "", false
 }
 
+// GraphIntentAllowedRelationTypesSorted returns the wire-level relation
+// alphabet currently accepted on graph-intent endpoints. It is the union
+// of (a) the modern AH RelationName SoT, (b) the four affective aliases,
+// and (c) the legacy UPPER_SNAKE wire aliases that we still parse for
+// back-compat.
 func GraphIntentAllowedRelationTypesSorted() []string {
 	out := make([]string, 0, len(graphIntentAllowedRelationTypes))
 	for t := range graphIntentAllowedRelationTypes {
@@ -832,100 +902,169 @@ var graphIntentAllowedGroupingKinds = map[string]struct{}{
 	GraphIntentGroupingSocietalStructure:   {},
 }
 
-var graphIntentAllowedRuntimeRelationTypes = map[string]struct{}{
-	string(DependencyTypeSuppliesTo):          {},
-	string(DependencyTypeLocatedIn):           {},
-	string(DependencyTypeOwns):                {},
-	string(DependencyTypeSubsidiaryOf):        {},
-	string(DependencyTypeProduces):            {},
-	string(DependencyTypeOperatesIn):          {},
-	string(DependencyTypeRegulates):           {},
-	string(DependencyTypeCompetesWith):        {},
-	string(DependencyTypeDependsOn):           {},
-	string(DependencyTypeInfluences):          {},
-	string(DependencyTypeTransformsInto):      {},
-	string(DependencyTypeAssemblesInto):       {},
-	string(DependencyTypeExtractsFrom):        {},
-	string(DependencyTypeParticipatesIn):      {},
-	string(DependencyTypeTradedIn):            {},
-	string(DependencyTypeDominates):           {},
-	string(DependencyTypeHasMarketSegment):    {},
-	string(DependencyTypeAdministers):         {},
-	string(DependencyTypeManages):             {},
-	string(DependencyTypeControls):            {},
-	string(DependencyTypeControlsAccess):      {},
-	string(DependencyTypeEmployedBy):          {},
-	string(DependencyTypeBoardMemberOf):       {},
-	string(DependencyTypeFounded):             {},
-	string(DependencyTypeInvestsIn):           {},
-	string(DependencyTypePartnersWith):        {},
-	string(DependencyTypeImposesCondition):    {},
-	string(DependencyTypeGatekeepsDecision):   {},
-	string(DependencyTypeUsesMechanism):       {},
-	string(DependencyTypeAppliesTo):           {},
-	string(DependencyTypeAssociatedWith):      {},
-	string(DependencyTypeCorporateTransition): {},
-	string(DependencyTypeDomainRelation):      {},
-	string(DependencyTypeWorksFor):            {},
-	string(DependencyTypeKeyPerson):           {},
-	string(DependencyTypeHasKeyPerson):        {},
-	string(DependencyTypeAssures):             {},
-	string(DependencyTypeAuditedBy):           {},
-	string(DependencyTypeRelativeOf):          {},
-	string(DependencyTypeRelatedTo):           {},
-	string(DependencyTypeOperatesVia):         {},
-	string(DependencyTypeMemberOf):            {},
-	string(DependencyTypeAffiliatedWith):      {},
-	string(DependencyTypeFocusesOn):           {},
-	string(DependencyTypeInvolvesActor):       {},
-	string(DependencyTypeInGeoScope):          {},
-	string(DependencyTypeAbout):               {},
-	string(DependencyTypeSurfaces):            {},
-	string(DependencyTypeRelatedDomain):       {},
-	string(DependencyTypeBroadensTo):          {},
-	string(DependencyTypeNarrowsTo):           {},
-	string(DependencyTypeAffects):             {},
-	string(DependencyTypeHasSubgroup):         {},
-	string(DependencyTypeRenamedTo):           {},
-	string(DependencyTypeRebrandedTo):         {},
-	string(DependencyTypeLegalSuccessorOf):    {},
-	string(DependencyTypeMergedInto):          {},
-	string(DependencyTypeSpunOffFrom):         {},
-	string(DependencyTypeAcquiredBy):          {},
+// graphIntentAffectiveAliases maps the four graph-intent affective
+// labels onto the AH influences relation with the relevant
+// influence_kind / influence_polarity attribute payload. Listed
+// separately from legacyRelationAliases because these are GRAPH-INTENT-
+// SPECIFIC inventions (never existed in the legacy DependencyType enum).
+var graphIntentAffectiveAliases = map[string]graphIntentRelationDecode{
+	GraphIntentRelationTypeAlignsWith: {
+		Relation:        ah.RelationNameInfluences,
+		ExtraAttributes: map[string]interface{}{"influence_kind": "advisory", "influence_polarity": "positive"},
+		Note:            "ALIGNS_WITH -> influences (positive, advisory)",
+	},
+	GraphIntentRelationTypeCooperates: {
+		Relation:        ah.RelationNameJointVentureWith,
+		Note:            "COOPERATES_WITH -> joint_venture_with (structural cooperation)",
+	},
+	GraphIntentRelationTypeOpposes: {
+		Relation:        ah.RelationNameInfluences,
+		ExtraAttributes: map[string]interface{}{"influence_kind": "advisory", "influence_polarity": "negative"},
+		Note:            "OPPOSES -> influences (negative)",
+	},
+	GraphIntentRelationTypeConflictsWith: {
+		Relation:        ah.RelationNameContradicts,
+		Note:            "CONFLICTS_WITH -> contradicts (decision-layer)",
+	},
 }
 
+// legacyRelationAliases is the migration_map.yaml dependency_type_map
+// transcribed for the wire-level decoder. Every legacy UPPER_SNAKE
+// DependencyType value MUST appear here (CI guard: graph_intent_test.go
+// asserts coverage). Three shapes:
+//
+//   - Relation set: straight rename / renamed-with-attrs / reverse (the
+//     reverse case is handled at the SCOUT layer because it requires
+//     swapping src/dst, not at the wire decoder).
+//   - Dropped=true: drop_after_migration or fold_to_attributes/
+//     fold_to_canonical_path. Caller drops the edge (eventually queued
+//     as candidate when the disposition says so).
+//   - Relation="" with Note: needs_design or candidate_queue dispositions
+//     — flagged here so review tooling can spot legacy plans still
+//     emitting them.
+var legacyRelationAliases = map[string]graphIntentRelationDecode{
+	// Core supply-chain.
+	"SUPPLIES_TO":     {Relation: ah.RelationNameSupplies, Note: "SUPPLIES_TO -> supplies"},
+	"PRODUCES":        {Relation: ah.RelationNameProduces, Note: "PRODUCES -> produces"},
+	"CONSUMES":        {Relation: ah.RelationNameSupplies, Note: "CONSUMES -> supplies (src/dst swapped at scout layer)"},
+	"EXTRACTS_FROM":   {Relation: ah.RelationNameProduces, ExtraAttributes: map[string]interface{}{"production_kind": "extraction"}, Note: "EXTRACTS_FROM -> produces (production_kind=extraction)"},
+	"USED_IN":         {Dropped: true, Note: "USED_IN dropped: redundant inverse of produces"},
+	"TRANSFORMS_INTO": {Dropped: true, Note: "TRANSFORMS_INTO folded onto site siteTransforms[]"},
+	"ASSEMBLES_INTO":  {Dropped: true, Note: "ASSEMBLES_INTO folded onto site siteTransforms[]"},
+
+	// Geographic / locational.
+	"LOCATED_IN":   {Dropped: true, Note: "LOCATED_IN folded into canonical_path geo slot"},
+	"OPERATES_IN":  {Dropped: true, Note: "OPERATES_IN folded into attributes.operating_geos[]"},
+	"IN_GEO_SCOPE": {Dropped: true, Note: "IN_GEO_SCOPE folded into attributes.scope_geos[]"},
+
+	// Ownership / control.
+	"OWNS":            {Relation: ah.RelationNameBeneficiallyOwns, Note: "OWNS -> beneficially_owns"},
+	"SUBSIDIARY_OF":   {Relation: ah.RelationNameSubsidiaryOf, Note: "SUBSIDIARY_OF -> subsidiary_of"},
+	"CONTROLS":        {Relation: ah.RelationNameControlsVia, Note: "CONTROLS -> controls_via"},
+	"CONTROLS_ACCESS": {Relation: ah.RelationNameImposes, ExtraAttributes: map[string]interface{}{"mechanism_category": "access_control"}, Note: "CONTROLS_ACCESS rewritten to wields+imposes via synthesized /mechanism/access-control/* — wire decoder emits imposes; scout layer synthesizes mechanism node"},
+	"ADMINISTERS":     {Relation: ah.RelationNameOperates, Note: "ADMINISTERS -> operates"},
+	"MANAGES":         {Relation: ah.RelationNameManagedBy, Note: "MANAGES -> managed_by (src/dst swapped at scout layer)"},
+	"OPERATES_VIA":    {Relation: ah.RelationNameWields, Note: "OPERATES_VIA -> wields"},
+
+	// Corporate events.
+	"INVESTS_IN":           {Relation: ah.RelationNameInvestedIn, Note: "INVESTS_IN -> invested_in"},
+	"PARTNERS_WITH":        {Relation: ah.RelationNameJointVentureWith, Note: "PARTNERS_WITH -> joint_venture_with"},
+	"BOARD_MEMBER_OF":      {Relation: ah.RelationNameHoldsBoardSeat, Note: "BOARD_MEMBER_OF -> holds_board_seat"},
+	"FOUNDED":              {Dropped: true, Note: "FOUNDED folded into attributes.founders[]"},
+	"EMPLOYED_BY":          {Dropped: true, Note: "EMPLOYED_BY dropped (LLM noise)"},
+	"WORKS_FOR":            {Dropped: true, Note: "WORKS_FOR dropped (duplicate of EMPLOYED_BY)"},
+	"KEY_PERSON":           {Dropped: true, Note: "KEY_PERSON folded into attributes.key_persons[]"},
+	"HAS_KEY_PERSON":       {Dropped: true, Note: "HAS_KEY_PERSON folded into attributes.key_persons[]"},
+	"RENAMED_TO":           {Dropped: true, Note: "RENAMED_TO folded into nameHistory"},
+	"REBRANDED_TO":         {Dropped: true, Note: "REBRANDED_TO folded into nameHistory"},
+	"LEGAL_SUCCESSOR_OF":   {Relation: ah.RelationNameMergedInto, Note: "LEGAL_SUCCESSOR_OF -> merged_into (src/dst swapped at scout layer)"},
+	"MERGED_INTO":          {Relation: ah.RelationNameMergedInto, Note: "MERGED_INTO -> merged_into"},
+	"SPUN_OFF_FROM":        {Relation: ah.RelationNameSpunOut, Note: "SPUN_OFF_FROM -> spun_out (src/dst swapped at scout layer)"},
+	"ACQUIRED_BY":          {Relation: ah.RelationNameAcquiredStakeFrom, Note: "ACQUIRED_BY -> acquired_stake_from (src/dst swapped at scout layer)"},
+	"CORPORATE_TRANSITION": {Note: "CORPORATE_TRANSITION routes by attributes.transition_kind at scout layer"},
+
+	// Regulation / regime.
+	"REGULATES":          {Relation: ah.RelationNameRegulates, Note: "REGULATES -> regulates"},
+	"IMPOSES_CONDITION":  {Relation: ah.RelationNameImposes, Note: "IMPOSES_CONDITION -> imposes (mechanism synthesized at scout layer)"},
+	"APPLIES_TO":         {Relation: ah.RelationNameImposes, Note: "APPLIES_TO -> imposes (mechanism synthesized at scout layer)"},
+	"GATEKEEPS_DECISION": {Relation: ah.RelationNameGatekeeps, Note: "GATEKEEPS_DECISION -> gatekeeps"},
+	"USES_MECHANISM":     {Relation: ah.RelationNameWields, Note: "USES_MECHANISM -> wields"},
+
+	// Influence / soft power.
+	"INFLUENCES": {Relation: ah.RelationNameInfluences, Note: "INFLUENCES -> influences (requires attributes.influence_kind)"},
+	"DOMINATES":  {Relation: ah.RelationNameInfluences, ExtraAttributes: map[string]interface{}{"influence_kind": "structural_dominance"}, Note: "DOMINATES -> influences (influence_kind=structural_dominance)"},
+
+	// Markets.
+	"HAS_MARKET_SEGMENT": {Dropped: true, Note: "HAS_MARKET_SEGMENT folded into attributes.market_segment_norms[]"},
+	"HAS_SUBMARKET":      {Dropped: true, Note: "HAS_SUBMARKET folded into attributes.submarkets[]"},
+	"TRADED_IN":          {Relation: ah.RelationNameListedOn, Note: "TRADED_IN -> listed_on"},
+	"COMPETES_WITH":      {Dropped: true, Note: "COMPETES_WITH dropped (symmetric, noisy)"},
+	"PARTICIPATES_IN":    {Note: "PARTICIPATES_IN routes per (src_class, dst_class) at scout layer"},
+
+	// Assurance.
+	"ASSURES":     {Relation: ah.RelationNameAssures, Note: "ASSURES -> assures (requires attributes.assurance_type)"},
+	"AUDITED_BY":  {Relation: ah.RelationNameAssures, ExtraAttributes: map[string]interface{}{"assurance_type": "audit"}, Note: "AUDITED_BY -> assures (assurance_type=audit, src/dst swapped at scout layer)"},
+
+	// Membership / affiliation.
+	"MEMBER_OF":       {Relation: ah.RelationNameMemberOf, Note: "MEMBER_OF -> member_of"},
+	"AFFILIATED_WITH": {Dropped: true, Note: "AFFILIATED_WITH dropped (vague LLM noise)"},
+	"ASSOCIATED_WITH": {Dropped: true, Note: "ASSOCIATED_WITH dropped (vague LLM noise)"},
+	"RELATIVE_OF":     {Dropped: true, Note: "RELATIVE_OF folded into attributes.relations[]"},
+	"RELATED_TO":      {Dropped: true, Note: "RELATED_TO dropped (generic)"},
+
+	// Domain / sphere bookkeeping.
+	"DOMAIN_RELATION": {Dropped: true, Note: "DOMAIN_RELATION dropped with DOMAIN class"},
+	"RELATED_DOMAIN":  {Dropped: true, Note: "RELATED_DOMAIN dropped with DOMAIN class"},
+	"BROADENS_TO":     {Dropped: true, Note: "BROADENS_TO dropped (domain bookkeeping)"},
+	"NARROWS_TO":      {Dropped: true, Note: "NARROWS_TO dropped (domain bookkeeping)"},
+	"FOCUSES_ON":      {Dropped: true, Note: "FOCUSES_ON dropped (domain bookkeeping)"},
+	"HAS_SUBGROUP":    {Dropped: true, Note: "HAS_SUBGROUP folded into attributes.subgroups[]"},
+
+	// Event scaffolding.
+	"INVOLVES_ACTOR": {Dropped: true, Note: "INVOLVES_ACTOR folded into attributes.actors[] on evidence"},
+	"ABOUT":          {Dropped: true, Note: "ABOUT folded into attributes.about_refs[]"},
+	"SURFACES":       {Dropped: true, Note: "SURFACES dropped (superseded by Provenance.sourceFrameId)"},
+	"AFFECTS":        {Relation: ah.RelationNameDisrupts, Note: "AFFECTS -> disrupts (requires attributes.disruption_kind)"},
+	"TRIGGERED_BY":   {Dropped: true, Note: "TRIGGERED_BY folded into attributes.triggers[]"},
+
+	// Generic catch-all (per-pair routing happens at scout layer).
+	"DEPENDS_ON": {Note: "DEPENDS_ON routes per (src_class, dst_class) at scout layer"},
+}
+
+// graphIntentAllowedRelationTypes is the wire alphabet currently accepted
+// on graph-intent endpoints. Built dynamically from the AH SoT plus the
+// four affective aliases plus the legacy UPPER_SNAKE keys, so a taxonomy
+// codegen run automatically refreshes it without manual edits here.
 var graphIntentAllowedRelationTypes = func() map[string]struct{} {
-	out := make(map[string]struct{}, len(graphIntentAllowedRuntimeRelationTypes)+4)
-	for k := range graphIntentAllowedRuntimeRelationTypes {
+	out := make(map[string]struct{}, len(ah.RelationNames)+len(graphIntentAffectiveAliases)+len(legacyRelationAliases))
+	for _, r := range ah.RelationNames {
+		out[strings.ToUpper(string(r))] = struct{}{}
+		out[string(r)] = struct{}{}
+	}
+	for k := range graphIntentAffectiveAliases {
 		out[k] = struct{}{}
 	}
-	out[GraphIntentRelationTypeAlignsWith] = struct{}{}
-	out[GraphIntentRelationTypeOpposes] = struct{}{}
-	out[GraphIntentRelationTypeCooperates] = struct{}{}
-	out[GraphIntentRelationTypeConflictsWith] = struct{}{}
+	for k := range legacyRelationAliases {
+		out[k] = struct{}{}
+	}
 	return out
 }()
 
-var graphIntentAllowedNodeTypes = map[string]struct{}{
-	string(FragmentTypeOrganization):  {},
-	string(FragmentTypeFacility):      {},
-	string(FragmentTypeGeoRegion):     {},
-	string(FragmentTypeDomain):        {},
-	string(FragmentTypeSphere):        {},
-	string(FragmentTypeEvent):         {},
-	string(FragmentTypeProduct):       {},
-	string(FragmentTypeProgram):       {},
-	string(FragmentTypeMarket):        {},
-	string(FragmentTypePerson):        {},
-	string(FragmentTypeMediaChannel):  {},
-	string(FragmentTypeDecisionPoint): {},
-	string(FragmentTypeMechanism):     {},
-	string(FragmentTypeSupplyLink):    {},
-	string(FragmentTypeTrack):         {},
-	string(FragmentTypeDeposit):       {},
-	string(FragmentTypeCommunity):     {},
-	string(FragmentTypeAffectedZone):  {},
-	"GOVERNMENT_AGENCY":               {},
-	"COMMUNITY_DYNASTY":               {},
-	"COMMUNITY_TRIBE":                 {},
-}
+// graphIntentAllowedNodeTypes is the wire alphabet for fragment classes.
+// Mirrors graphIntentAllowedRelationTypes structure: AH SoT + legacy
+// FragmentType UPPER_SNAKE keys (via models.LegacyFragmentTypeAliases) +
+// graph-intent-specific synonyms.
+var graphIntentAllowedNodeTypes = func() map[string]struct{} {
+	out := make(map[string]struct{}, len(ah.FragmentClasses)+len(LegacyFragmentTypeAliases)+8)
+	for _, c := range ah.FragmentClasses {
+		out[strings.ToUpper(string(c))] = struct{}{}
+		out[string(c)] = struct{}{}
+	}
+	for legacy := range LegacyFragmentTypeAliases {
+		out[legacy] = struct{}{}
+	}
+	out["GOVERNMENT_AGENCY"] = struct{}{}
+	out["COMMUNITY_DYNASTY"] = struct{}{}
+	out["COMMUNITY_TRIBE"] = struct{}{}
+	return out
+}()

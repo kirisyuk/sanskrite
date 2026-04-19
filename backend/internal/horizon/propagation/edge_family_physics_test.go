@@ -13,9 +13,9 @@ func TestApplyEdgeFamilyPhysicsBoostsConflictThroughChokepointLogistics(t *testi
 		GeoFeatureType: "strait",
 	}
 	edge := &horizonmodels.DependencyEdge{
-		Type: horizonmodels.DependencyTypeDependsOn,
+		Relation: DependencyTypeDependsOn,
 		Qualifiers: map[string]interface{}{
-			"facet":               string(horizonmodels.FacetLogistics),
+			"facet":               string(FacetLogistics),
 			"throughput_share":    0.75,
 			"capacity_constraint": 0.80,
 			"reroute_penalty":     0.40,
@@ -35,7 +35,7 @@ func TestApplyEdgeFamilyPhysicsBoostsConflictThroughChokepointLogistics(t *testi
 func TestApplyEdgeFamilyPhysicsPenalizesHistoricalRegulatoryPath(t *testing.T) {
 	past := time.Now().UTC().Add(-24 * time.Hour)
 	edge := &horizonmodels.DependencyEdge{
-		Type:    horizonmodels.DependencyTypeRegulates,
+		Relation: DependencyTypeRegulates,
 		ValidTo: &past,
 	}
 

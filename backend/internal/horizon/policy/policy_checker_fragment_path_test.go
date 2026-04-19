@@ -11,7 +11,7 @@ func TestCheckFragmentPath_PathNamespaceWinsForPersonPath(t *testing.T) {
 	pc := NewPolicyChecker(nil, nil)
 	frag := &horizonmodels.HorizonFragment{
 		ID:            "frag-person",
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class: classOrganization,
 		CanonicalPath: "/person/khaled-bin-mohamed-bin-zayed-al-nahyan",
 	}
 
@@ -35,7 +35,7 @@ func TestCheckFragmentPath_OrgPathNoLegalFormRequired(t *testing.T) {
 	pc := NewPolicyChecker(nil, nil)
 	frag := &horizonmodels.HorizonFragment{
 		ID:            "frag-org",
-		Type:          horizonmodels.FragmentTypeOrganization,
+		Class: classOrganization,
 		CanonicalPath: "/org/us/acme",
 		Labels:        map[string]string{"en": "Acme"},
 	}

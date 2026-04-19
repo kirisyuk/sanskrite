@@ -9,6 +9,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // ValidationPolicy validates combinations of source×target×relationType.
@@ -104,7 +105,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	}
 
 	log.Printf("%s Validating fragment: id=%s, type=%s, canonicalPath=%s",
-		logPrefix, fragment.ID, fragment.Type, fragment.CanonicalPath)
+		logPrefix, fragment.ID, fragment.Class, fragment.CanonicalPath)
 
 	// Policy 1: Block /discovered/ paths
 	if strings.HasPrefix(fragment.CanonicalPath, "/discovered/") {
@@ -132,7 +133,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 		}, nil
 	}
 
-	if fragment.Type == "" {
+	if fragment.Class == "" {
 		reason := "fragment type is required"
 		log.Printf("%s REJECT: %s", logPrefix, reason)
 		fragment.SetPolicyStatus(horizonmodels.PolicyStatusQuarantined, reason, 0.2)
@@ -158,10 +159,12 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	}
 
 	// Policy 2.5: Deterministic type/path reconciliation.
-	if reconciledType, changed := edgesemantics.ReconcileTypeWithCanonicalPath(fragment.Type, fragment.CanonicalPath); changed {
-		originalType := fragment.Type
-		fragment.Type = reconciledType
-		reason := fmt.Sprintf("type_path_mismatch: canonicalPath=%q with type=%s reconciled to %s", fragment.CanonicalPath, originalType, reconciledType)
+	if reconciledClass, reconciledSubtype, changed := edgesemantics.ReconcileClassWithCanonicalPath(fragment.Class, fragment.CanonicalPath); changed {
+		originalType := fragment.Class
+		originalSubtype := fragment.Subtype
+		fragment.Class = reconciledClass
+		fragment.Subtype = reconciledSubtype
+		reason := fmt.Sprintf("type_path_mismatch: canonicalPath=%q with type=%s/%s reconciled to %s/%s", fragment.CanonicalPath, originalType, originalSubtype, reconciledClass, reconciledSubtype)
 		log.Printf("%s INFO: %s", logPrefix, reason)
 		fragment.SetPolicyStatus(horizonmodels.PolicyStatusPenalized, reason, 0.05)
 		return PolicyDecision{
@@ -176,10 +179,10 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	}
 
 	// Policy 3: Enforce canonical path prefixes by type
-	expectedPrefix := ExpectedCanonicalPathPrefix(fragment.Type)
-	if !IsCanonicalPathAllowedForType(fragment.Type, fragment.CanonicalPath) {
-		warning := fmt.Sprintf("canonical path %q does not start with expected prefix %q for type %s",
-			fragment.CanonicalPath, expectedPrefix, fragment.Type)
+	expectedPrefix := ExpectedCanonicalPathPrefix(fragment.Class, fragment.Subtype)
+	if !IsCanonicalPathAllowedForType(fragment.Class, fragment.Subtype, fragment.CanonicalPath) {
+		warning := fmt.Sprintf("canonical path %q does not start with expected prefix %q for type %s/%s",
+			fragment.CanonicalPath, expectedPrefix, fragment.Class, fragment.Subtype)
 		log.Printf("%s WARNING: %s", logPrefix, warning)
 		fragment.SetPolicyStatus(horizonmodels.PolicyStatusPenalized, warning, 0.1)
 		// Continue with penalty instead of reject
@@ -195,7 +198,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	}
 
 	// Policy 4: GEO_REGION strict validation
-	if fragment.Type == horizonmodels.FragmentTypeGeoRegion {
+	if fragment.Class == classGeoRegion {
 		// Legacy /region/ normalization check
 		if strings.HasPrefix(fragment.CanonicalPath, "/region/") {
 			log.Printf("%s WARNING: legacy /region/ path detected: %s", logPrefix, fragment.CanonicalPath)
@@ -246,7 +249,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	// Check DB rules for additional validation
 	if p.rulesRepo == nil {
 		log.Printf("%s ALLOW: fragment validation passed (canonicalPath=%s, type=%s)",
-			logPrefix, fragment.CanonicalPath, fragment.Type)
+			logPrefix, fragment.CanonicalPath, fragment.Class)
 		return PolicyDecision{
 			Action:       ActionAllow,
 			DecisionPath: "rule:hardcoded:passed",
@@ -261,7 +264,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	}
 
 	if err == nil && len(rules) > 0 {
-		rule := p.matchRule(rules, string(fragment.Type), "*", "*")
+		rule := p.matchRule(rules, string(fragment.Class), "*", "*")
 		if rule != nil {
 			log.Printf("%s DB rule matched: id=%s, action=%s, priority=%d",
 				logPrefix, rule.ID, rule.Action, rule.Priority)
@@ -297,7 +300,7 @@ func (p *ValidationPolicy) validateFragment(ctx context.Context, input PolicyInp
 	}
 
 	log.Printf("%s ALLOW: fragment validation passed (canonicalPath=%s, type=%s)",
-		logPrefix, fragment.CanonicalPath, fragment.Type)
+		logPrefix, fragment.CanonicalPath, fragment.Class)
 	return PolicyDecision{
 		Action:       ActionAllow,
 		DecisionPath: "rule:hardcoded:passed",
@@ -318,7 +321,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 	if input.Edge != nil {
 		sourceID = input.Edge.SourceFragmentID
 		targetID = input.Edge.TargetFragmentID
-		relationType = string(input.Edge.Type)
+		relationType = string(input.Edge.Relation)
 		relationQualifiers = input.Edge.Qualifiers
 		if input.Edge.Qualifiers != nil {
 			if v, ok := input.Edge.Qualifiers["sourceCanonicalPath"].(string); ok {
@@ -361,7 +364,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 
 	// Extract types if available
 	if input.Fragment != nil {
-		sourceType = string(input.Fragment.Type)
+		sourceType = string(input.Fragment.Class)
 		log.Printf("%s Source type from fragment: %s", logPrefix, sourceType)
 	}
 	if targetType == "" {
@@ -376,27 +379,41 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 
 	// Policy 1.5: deterministic edge endpoint type/path reconciliation.
 	if sourceType != "" && sourcePath != "" {
-		if reconciled, changed := edgesemantics.ReconcileTypeWithCanonicalPath(horizonmodels.FragmentType(sourceType), sourcePath); changed {
+		if reconciledClass, _, changed := edgesemantics.ReconcileClassWithCanonicalPath(ah.FragmentClass(sourceType), sourcePath); changed {
 			log.Printf("%s INFO: type_path_mismatch source reconciled: path=%s type=%s -> %s",
-				logPrefix, sourcePath, sourceType, reconciled)
-			sourceType = string(reconciled)
+				logPrefix, sourcePath, sourceType, reconciledClass)
+			sourceType = string(reconciledClass)
 		}
 	}
 	if targetType != "" && targetPath != "" {
-		if reconciled, changed := edgesemantics.ReconcileTypeWithCanonicalPath(horizonmodels.FragmentType(targetType), targetPath); changed {
+		if reconciledClass, _, changed := edgesemantics.ReconcileClassWithCanonicalPath(ah.FragmentClass(targetType), targetPath); changed {
 			log.Printf("%s INFO: type_path_mismatch target reconciled: path=%s type=%s -> %s",
-				logPrefix, targetPath, targetType, reconciled)
-			targetType = string(reconciled)
+				logPrefix, targetPath, targetType, reconciledClass)
+			targetType = string(reconciledClass)
 		}
 	}
 
 	// Policy 2: Edge direction validation (hardcoded from EdgeDirectionPolicies)
 	if sourceType != "" && targetType != "" && relationType != "" {
-		edgeType := horizonmodels.DependencyType(relationType)
+		edgeType := ah.RelationName(relationType)
 		isValid, shouldReverse, rule := p.validateEdgeDirection(edgeType,
-			horizonmodels.FragmentType(sourceType), horizonmodels.FragmentType(targetType))
+			ah.FragmentClass(sourceType), ah.FragmentClass(targetType))
 
 		if !isValid {
+			// Exceptional supply shortcut takes precedence over both reverse and quarantine
+			// dispositions: DEPOSIT→ORG/FAC SUPPLIES_TO is preserved with penalty even though
+			// AH catalog says it should reverse (deposits are structurally upstream).
+			baseReason := fmt.Sprintf("edge direction invalid: %s -> %s (%s). Rule: %s",
+				sourceType, targetType, relationType, rule.Description)
+			if decision, ok := allowExceptionalSupplyShortcut(
+				edgeType,
+				ah.FragmentClass(sourceType),
+				ah.FragmentClass(targetType),
+				baseReason,
+			); ok {
+				log.Printf("%s ALLOW_WITH_PENALTY: %s (penalty=%.2f)", logPrefix, decision.Params["reason"], decision.Params["penalty"])
+				return decision, nil
+			}
 			if shouldReverse {
 				reason := fmt.Sprintf("edge direction invalid but reversible: %s -> %s (%s). Rule: %s",
 					sourceType, targetType, relationType, rule.Description)
@@ -412,8 +429,8 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 					sourceType, targetType, relationType, rule.Description)
 				if decision, ok := allowExceptionalSupplyShortcut(
 					edgeType,
-					horizonmodels.FragmentType(sourceType),
-					horizonmodels.FragmentType(targetType),
+					ah.FragmentClass(sourceType),
+					ah.FragmentClass(targetType),
 					baseReason,
 				); ok {
 					log.Printf("%s ALLOW_WITH_PENALTY: %s (penalty=%.2f)", logPrefix, decision.Params["reason"], decision.Params["penalty"])
@@ -421,8 +438,8 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 				}
 				penalty, reason := quarantinePenaltyForTriple(
 					edgeType,
-					horizonmodels.FragmentType(sourceType),
-					horizonmodels.FragmentType(targetType),
+					ah.FragmentClass(sourceType),
+					ah.FragmentClass(targetType),
 				)
 				if reason == "" {
 					reason = baseReason
@@ -452,8 +469,8 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 	// (the parser resolves source/target based on fragment type analysis).
 	fromSupplyChain, _ := input.Context["fromSupplyChain"].(bool)
 	if relationType != "" && !fromSupplyChain {
-		edgeType := horizonmodels.DependencyType(relationType)
-		if requiresDirectionalRoleEvidence(edgeType, horizonmodels.FragmentType(sourceType), horizonmodels.FragmentType(targetType)) &&
+		edgeType := ah.RelationName(relationType)
+		if requiresDirectionalRoleEvidence(edgeType, ah.FragmentClass(sourceType), ah.FragmentClass(targetType)) &&
 			!hasDirectionalRoleEvidence(edgeType, relationReason, relationQualifiers) {
 			reason := fmt.Sprintf("%s requires explicit direction evidence: qualifiers.source_role/target_role (or direction_basis)", edgeType)
 			log.Printf("%s QUARANTINE: %s", logPrefix, reason)
@@ -471,10 +488,10 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 
 	// Policy 2.55: HAS_MARKET_SEGMENT path rule (best-effort). Ideal: child path = parent path + one segment.
 	// Policy 2.56: PRODUCT↔MARKET must use TRADED_IN.
-	isProductMarketPair := (sourceType == string(horizonmodels.FragmentTypeProduct) && targetType == string(horizonmodels.FragmentTypeMarket)) ||
-		(sourceType == string(horizonmodels.FragmentTypeMarket) && targetType == string(horizonmodels.FragmentTypeProduct))
+	isProductMarketPair := (sourceType == string(classProduct) && targetType == string(classMarket)) ||
+		(sourceType == string(classMarket) && targetType == string(classProduct))
 	if isProductMarketPair &&
-		relationType != string(horizonmodels.DependencyTypeTradedIn) {
+		relationType != string(relTradedIn) {
 		reason := "PRODUCT↔MARKET edges must use TRADED_IN (direction PRODUCT -> MARKET); PARTICIPATES_IN is for actors, not products"
 		log.Printf("%s QUARANTINE: %s", logPrefix, reason)
 		return PolicyDecision{
@@ -490,19 +507,19 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 
 	// Policy 2.57: ORG↔MARKET must be PARTICIPATES_IN — except GOV entities which may
 	// REGULATES/CONTROLS_ACCESS/INFLUENCES/ADMINISTERS markets.
-	isOrgMarketPair := (sourceType == string(horizonmodels.FragmentTypeOrganization) && targetType == string(horizonmodels.FragmentTypeMarket)) ||
-		(sourceType == string(horizonmodels.FragmentTypeMarket) && targetType == string(horizonmodels.FragmentTypeOrganization))
+	isOrgMarketPair := (sourceType == string(classOrganization) && targetType == string(classMarket)) ||
+		(sourceType == string(classMarket) && targetType == string(classOrganization))
 	if isOrgMarketPair &&
-		relationType != string(horizonmodels.DependencyTypeParticipatesIn) {
+		relationType != string(relParticipatesIn) {
 		govPath := sourcePath
-		if targetType == string(horizonmodels.FragmentTypeOrganization) {
+		if targetType == string(classOrganization) {
 			govPath = targetPath
 		}
 		isGovEntity := strings.HasPrefix(govPath, "/gov/")
-		isGovValidEdge := isGovEntity && (relationType == string(horizonmodels.DependencyTypeRegulates) ||
-			relationType == string(horizonmodels.DependencyTypeControlsAccess) ||
-			relationType == string(horizonmodels.DependencyTypeInfluences) ||
-			relationType == string(horizonmodels.DependencyTypeAdministers))
+		isGovValidEdge := isGovEntity && (relationType == string(relRegulates) ||
+			relationType == string(relControlsAccess) ||
+			relationType == string(relInfluences) ||
+			relationType == string(relAdministers))
 		if !isGovValidEdge {
 			reason := "ORG↔MARKET edges must use PARTICIPATES_IN (direction ORGANIZATION -> MARKET); GOV entities may also use REGULATES/CONTROLS_ACCESS/INFLUENCES/ADMINISTERS"
 			log.Printf("%s QUARANTINE: %s", logPrefix, reason)
@@ -519,12 +536,12 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 	}
 
 	// Policy 2.55: HAS_MARKET_SEGMENT path rule (best-effort). Ideal: child path = parent path + one segment.
-	if relationType == string(horizonmodels.DependencyTypeHasMarketSegment) &&
-		sourceType == string(horizonmodels.FragmentTypeMarket) &&
-		targetType == string(horizonmodels.FragmentTypeMarket) &&
+	if relationType == string(relHasMarketSegment) &&
+		sourceType == string(classMarket) &&
+		targetType == string(classMarket) &&
 		sourcePath != "" && targetPath != "" &&
 		strings.HasPrefix(sourcePath, "/market/") && strings.HasPrefix(targetPath, "/market/") {
-		if !horizonmodels.MarketSegmentPathsFollowRule(sourcePath, targetPath) {
+		if !MarketSegmentPathsFollowRule(sourcePath, targetPath) {
 			reason := "HAS_MARKET_SEGMENT: ideal rule is child path = parent path + one segment; paths deviate (best-effort)"
 			log.Printf("%s PENALTY: %s", logPrefix, reason)
 			return PolicyDecision{
@@ -540,9 +557,9 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 	}
 
 	// Policy 2.5: Soft-penalty for weak but semantically plausible links.
-	if relationType == string(horizonmodels.DependencyTypeInfluences) &&
-		sourceType == string(horizonmodels.FragmentTypeOrganization) &&
-		targetType == string(horizonmodels.FragmentTypeSphere) {
+	if relationType == string(relInfluences) &&
+		sourceType == string(classOrganization) &&
+		targetType == string(classSphere) {
 		reason := "INFLUENCES to SPHERE treated as weak-link; preserved with penalty"
 		return PolicyDecision{
 			Action: ActionAllowWithPenalty,
@@ -556,21 +573,31 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 		}, nil
 	}
 
-	// Policy 3: Validate influence qualifiers for INFLUENCES edges
-	if input.Edge != nil && input.Edge.Type == horizonmodels.DependencyTypeInfluences {
-		qualifiers, err := horizonmodels.ExtractInfluenceQualifiers(input.Edge)
-		if err == nil && qualifiers != nil {
-			if err := horizonmodels.ValidateInfluenceQualifiers(qualifiers); err != nil {
-				reason := fmt.Sprintf("invalid influence qualifiers: %v", err)
-				log.Printf("%s REJECT: %s", logPrefix, reason)
-				return PolicyDecision{
-					Action:       ActionQuarantineSoft,
-					Params:       map[string]interface{}{"reason": reason, "penalty": 0.2},
-					DecisionPath: "rule:hardcoded:invalid_influence_qualifiers",
-					Confidence:   1.0,
-				}, nil
+	// Policy 3: Validate influence qualifiers for INFLUENCES edges.
+	//
+	// The legacy strongly-typed InfluenceQualifiers struct + Extract/Validate
+	// helpers were removed during the AH migration. The new contract treats
+	// qualifiers as opaque map[string]interface{} that the canonicalizer
+	// validates against the AH closed-enum catalog. Until the catalog
+	// validator is wired in here, we only run a minimal shape check
+	// (closed-enum direction values).
+	if input.Edge != nil && input.Edge.Relation == relInfluences && input.Edge.Qualifiers != nil {
+		if dirRaw, ok := input.Edge.Qualifiers["direction"]; ok {
+			if dir, isStr := dirRaw.(string); isStr {
+				switch strings.ToLower(strings.TrimSpace(dir)) {
+				case "", "positive", "negative", "neutral":
+					// valid
+				default:
+					reason := fmt.Sprintf("invalid influence qualifier: direction=%q", dir)
+					log.Printf("%s REJECT: %s", logPrefix, reason)
+					return PolicyDecision{
+						Action:       ActionQuarantineSoft,
+						Params:       map[string]interface{}{"reason": reason, "penalty": 0.2},
+						DecisionPath: "rule:hardcoded:invalid_influence_qualifiers",
+						Confidence:   1.0,
+					}, nil
+				}
 			}
-			log.Printf("%s Influence qualifiers validation passed", logPrefix)
 		}
 	}
 
@@ -666,50 +693,70 @@ func (p *ValidationPolicy) matchRule(rules []*ValidationRule, sourceType, target
 	return bestMatch
 }
 
-// validateEdgeDirection checks edge direction validity (hardcoded from edge_normalizer.go).
-func (p *ValidationPolicy) validateEdgeDirection(edgeType horizonmodels.DependencyType, sourceType, targetType horizonmodels.FragmentType) (bool, bool, *EdgeDirectionRule) {
-	return edgesemantics.ValidateEdgeDirection(edgeType, sourceType, targetType)
+// validateEdgeDirection checks edge direction validity. It consults the
+// canonical AH endpoint catalog via edgesemantics and the local
+// legacyEdgeDirectionPairs table. The legacy table is treated as additive:
+// when AH rejects (or only suggests reverse), a legacy-accepted pair wins
+// to keep historical wire payloads working through the policy layer.
+func (p *ValidationPolicy) validateEdgeDirection(edgeType ah.RelationName, sourceType, targetType ah.FragmentClass) (bool, bool, *EdgeDirectionRule) {
+	ahValid, ahReverse, ahRule := edgesemantics.ValidateEdgeDirection(edgeType, sourceType, targetType)
+	if ahValid && ahRule != nil && len(ahRule.Pairs) > 0 {
+		return true, false, ahRule
+	}
+	if v, _, lrule, recognized := legacyValidateEdgeDirection(edgeType, sourceType, targetType); recognized && v {
+		return true, false, lrule
+	}
+	if ahValid {
+		return true, false, ahRule
+	}
+	if ahReverse {
+		return false, true, ahRule
+	}
+	if _, _, lrule, recognized := legacyValidateEdgeDirection(edgeType, sourceType, targetType); recognized {
+		return false, false, lrule
+	}
+	return ahValid, ahReverse, ahRule
 }
 
 // EdgeDirectionRule delegates to the unified edgesemantics contract.
 type EdgeDirectionRule = edgesemantics.EdgeDirectionRule
 
-func quarantinePenaltyForTriple(edgeType horizonmodels.DependencyType, sourceType, targetType horizonmodels.FragmentType) (float64, string) {
+func quarantinePenaltyForTriple(edgeType ah.RelationName, sourceType, targetType ah.FragmentClass) (float64, string) {
 	switch {
-	case edgeType == horizonmodels.DependencyTypeParticipatesIn &&
-		sourceType == horizonmodels.FragmentTypeMarket &&
-		targetType == horizonmodels.FragmentTypeMarket:
+	case edgeType == relParticipatesIn &&
+		sourceType == classMarket &&
+		targetType == classMarket:
 		return 0.25, "quarantine: MARKET -> MARKET PARTICIPATES_IN is semantically invalid"
-	case edgeType == horizonmodels.DependencyTypeCompetesWith &&
-		sourceType == horizonmodels.FragmentTypeMarket &&
-		targetType == horizonmodels.FragmentTypeMarket:
+	case edgeType == relCompetesWith &&
+		sourceType == classMarket &&
+		targetType == classMarket:
 		return 0.25, "quarantine: MARKET -> MARKET COMPETES_WITH is semantically invalid"
-	case edgeType == horizonmodels.DependencyTypeAssures &&
-		sourceType == horizonmodels.FragmentTypeGeoRegion:
+	case edgeType == relAssures &&
+		sourceType == classGeoRegion:
 		return 0.40, "quarantine: GEO_REGION cannot be ASSURES source (assurer)"
-	case edgeType == horizonmodels.DependencyTypeAuditedBy &&
-		sourceType == horizonmodels.FragmentTypeGeoRegion &&
-		targetType == horizonmodels.FragmentTypeOrganization:
+	case edgeType == relAuditedBy &&
+		sourceType == classGeoRegion &&
+		targetType == classOrganization:
 		return 0.40, "quarantine: GEO_REGION cannot be AUDITED_BY organization"
-	case edgeType == horizonmodels.DependencyTypeOperatesVia &&
-		sourceType == horizonmodels.FragmentTypeFacility &&
-		targetType == horizonmodels.FragmentTypeOrganization:
+	case edgeType == relOperatesVia &&
+		sourceType == classFacility &&
+		targetType == classOrganization:
 		return 0.30, "quarantine: FACILITY -> ORGANIZATION OPERATES_VIA requires MEDIA_CHANNEL target"
-	case edgeType == horizonmodels.DependencyTypeHasMarketSegment &&
-		sourceType == horizonmodels.FragmentTypeMarket &&
-		targetType == horizonmodels.FragmentTypeProduct:
+	case edgeType == relHasMarketSegment &&
+		sourceType == classMarket &&
+		targetType == classProduct:
 		return 0.25, "quarantine: MARKET -> PRODUCT HAS_MARKET_SEGMENT requires MARKET target"
-	case edgeType == horizonmodels.DependencyTypeCompetesWith &&
-		sourceType == horizonmodels.FragmentTypeProgram &&
-		targetType == horizonmodels.FragmentTypeProgram:
+	case edgeType == relCompetesWith &&
+		sourceType == classProgram &&
+		targetType == classProgram:
 		return 0.20, "quarantine: PROGRAM -> PROGRAM COMPETES_WITH is low-confidence in current ontology"
-	case edgeType == horizonmodels.DependencyTypeInvolvesActor &&
-		sourceType == horizonmodels.FragmentTypePerson &&
-		targetType == horizonmodels.FragmentTypeOrganization:
+	case edgeType == relInvolvesActor &&
+		sourceType == classPerson &&
+		targetType == classOrganization:
 		return 0.30, "quarantine: INVOLVES_ACTOR requires DOMAIN source"
-	case edgeType == horizonmodels.DependencyTypeFocusesOn &&
-		sourceType == horizonmodels.FragmentTypeMarket &&
-		targetType == horizonmodels.FragmentTypeOrganization:
+	case edgeType == relFocusesOn &&
+		sourceType == classMarket &&
+		targetType == classOrganization:
 		return 0.30, "quarantine: FOCUSES_ON requires DOMAIN source"
 	default:
 		return 0.20, ""
@@ -717,13 +764,13 @@ func quarantinePenaltyForTriple(edgeType horizonmodels.DependencyType, sourceTyp
 }
 
 func allowExceptionalSupplyShortcut(
-	edgeType horizonmodels.DependencyType,
-	sourceType, targetType horizonmodels.FragmentType,
+	edgeType ah.RelationName,
+	sourceType, targetType ah.FragmentClass,
 	baseReason string,
 ) (PolicyDecision, bool) {
-	if edgeType == horizonmodels.DependencyTypeSuppliesTo &&
-		sourceType == horizonmodels.FragmentTypeDeposit &&
-		(targetType == horizonmodels.FragmentTypeOrganization || targetType == horizonmodels.FragmentTypeFacility) {
+	if edgeType == relSuppliesTo &&
+		sourceType == classDeposit &&
+		(targetType == classOrganization || targetType == classFacility) {
 		reason := "exceptional supply shortcut preserved with penalty: deposit can stand in for an upstream resource source when the extracting/processing facility is not yet known"
 		if strings.TrimSpace(baseReason) != "" {
 			reason += "; " + baseReason
@@ -743,49 +790,49 @@ func allowExceptionalSupplyShortcut(
 }
 
 func requiresDirectionalRoleEvidence(
-	edgeType horizonmodels.DependencyType,
-	sourceType, targetType horizonmodels.FragmentType,
+	edgeType ah.RelationName,
+	sourceType, targetType ah.FragmentClass,
 ) bool {
-	isOrg := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeOrganization }
-	isFac := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeFacility }
-	isMechanism := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeMechanism }
-	isProgram := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeProgram }
-	isMarket := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeMarket }
-	isProduct := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeProduct }
-	isCommunity := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypeCommunity }
-	isPerson := func(t horizonmodels.FragmentType) bool { return t == horizonmodels.FragmentTypePerson }
-	isActorLike := func(t horizonmodels.FragmentType) bool {
+	isOrg := func(t ah.FragmentClass) bool { return t == classOrganization }
+	isFac := func(t ah.FragmentClass) bool { return t == classFacility }
+	isMechanism := func(t ah.FragmentClass) bool { return t == classMechanism }
+	isProgram := func(t ah.FragmentClass) bool { return t == classProgram }
+	isMarket := func(t ah.FragmentClass) bool { return t == classMarket }
+	isProduct := func(t ah.FragmentClass) bool { return t == classProduct }
+	isCommunity := func(t ah.FragmentClass) bool { return t == classCommunity }
+	isPerson := func(t ah.FragmentClass) bool { return t == classPerson }
+	isActorLike := func(t ah.FragmentClass) bool {
 		return isOrg(t) || isFac(t) || isProgram(t) || isCommunity(t) || isPerson(t)
 	}
-	isPolicyTarget := func(t horizonmodels.FragmentType) bool {
+	isPolicyTarget := func(t ah.FragmentClass) bool {
 		return isActorLike(t) || isMarket(t) || isProduct(t)
 	}
 
 	switch edgeType {
-	case horizonmodels.DependencyTypeOwns,
-		horizonmodels.DependencyTypeSubsidiaryOf,
-		horizonmodels.DependencyTypeInvestsIn,
-		horizonmodels.DependencyTypeAssures,
-		horizonmodels.DependencyTypeControls:
+	case relOwns,
+		relSubsidiaryOf,
+		relInvestsIn,
+		relAssures,
+		relControls:
 		return isOrg(sourceType) && isOrg(targetType)
-	case horizonmodels.DependencyTypeDependsOn:
+	case relDependsOn:
 		return isActorLike(sourceType) && isActorLike(targetType)
-	case horizonmodels.DependencyTypeSuppliesTo:
+	case relSuppliesTo:
 		// PRODUCT→ORG/FAC: direction clear, no role evidence needed. ORG/FAC→ORG/FAC: may need evidence.
-		if sourceType == horizonmodels.FragmentTypeProduct && (isOrg(targetType) || isFac(targetType)) {
+		if sourceType == classProduct && (isOrg(targetType) || isFac(targetType)) {
 			return false
 		}
 		return (isOrg(sourceType) || isFac(sourceType)) && (isOrg(targetType) || isFac(targetType))
-	case horizonmodels.DependencyTypeControlsAccess:
+	case relControlsAccess:
 		return (isOrg(sourceType) || isProgram(sourceType) || isCommunity(sourceType)) && isPolicyTarget(targetType)
-	case horizonmodels.DependencyTypeImposesCondition:
+	case relImposesCondition:
 		return (isMechanism(sourceType) || isOrg(sourceType) || isProgram(sourceType) || isCommunity(sourceType)) && isPolicyTarget(targetType)
 	default:
 		return false
 	}
 }
 
-func hasDirectionalRoleEvidence(edgeType horizonmodels.DependencyType, reason string, qualifiers map[string]interface{}) bool {
+func hasDirectionalRoleEvidence(edgeType ah.RelationName, reason string, qualifiers map[string]interface{}) bool {
 	_ = reason // role qualifiers are the deterministic contract for directional ambiguity handling.
 	sourceRole := normalizedRole(readStringAny(qualifiers, "source_role", "sourceRole", "subject_role", "subjectRole"))
 	targetRole := normalizedRole(readStringAny(qualifiers, "target_role", "targetRole", "object_role", "objectRole"))
@@ -797,51 +844,51 @@ func hasDirectionalRoleEvidence(edgeType horizonmodels.DependencyType, reason st
 	return directionQualifierMatchesEdgeType(edgeType, dir)
 }
 
-func rolePairMatchesEdgeType(edgeType horizonmodels.DependencyType, sourceRole, targetRole string) bool {
+func rolePairMatchesEdgeType(edgeType ah.RelationName, sourceRole, targetRole string) bool {
 	switch edgeType {
-	case horizonmodels.DependencyTypeOwns:
+	case relOwns:
 		return inRole(sourceRole, "owner", "parent_owner", "shareholder", "beneficial_owner") &&
 			inRole(targetRole, "owned_entity", "subsidiary", "asset")
-	case horizonmodels.DependencyTypeSubsidiaryOf:
+	case relSubsidiaryOf:
 		return inRole(sourceRole, "subsidiary", "owned_entity", "child_entity") &&
 			inRole(targetRole, "parent_owner", "owner", "parent")
-	case horizonmodels.DependencyTypeInvestsIn:
+	case relInvestsIn:
 		return inRole(sourceRole, "investor") &&
 			inRole(targetRole, "investee", "portfolio_company", "target")
-	case horizonmodels.DependencyTypeAssures:
+	case relAssures:
 		return inRole(sourceRole, "assurer", "auditor", "certifier", "inspector", "regulator") &&
 			inRole(targetRole, "assuree", "audited_entity", "certified_entity", "inspected_entity", "regulated_entity")
-	case horizonmodels.DependencyTypeControls:
+	case relControls:
 		return inRole(sourceRole, "controller") &&
 			inRole(targetRole, "controlled", "controlled_entity")
-	case horizonmodels.DependencyTypeDependsOn:
+	case relDependsOn:
 		return inRole(sourceRole, "dependent", "consumer", "requirer", "requester") &&
 			inRole(targetRole, "dependency", "supplier", "provider", "enabler", "input")
-	case horizonmodels.DependencyTypeSuppliesTo:
+	case relSuppliesTo:
 		return inRole(sourceRole, "supplier", "provider", "seller", "producer", "vendor") &&
 			inRole(targetRole, "customer", "buyer", "consumer", "recipient", "offtaker")
-	case horizonmodels.DependencyTypeGatekeepsDecision:
+	case relGatekeepsDecision:
 		return inRole(sourceRole, "gatekeeper", "approver", "decision_maker", "authority", "veto_holder") &&
 			inRole(targetRole, "decision_point", "decision", "approval", "ruling")
-	case horizonmodels.DependencyTypeUsesMechanism:
+	case relUsesMechanism:
 		return inRole(sourceRole, "mechanism_user", "policy_source", "decision", "regulator", "administrator") &&
 			inRole(targetRole, "mechanism", "instrument", "policy_mechanism")
-	case horizonmodels.DependencyTypeControlsAccess:
+	case relControlsAccess:
 		return inRole(sourceRole, "controller", "gatekeeper", "access_controller", "regulator") &&
 			inRole(targetRole, "access_subject", "controlled_access_target", "affected_entity", "regulated_entity", "subject")
-	case horizonmodels.DependencyTypeImposesCondition:
+	case relImposesCondition:
 		return inRole(sourceRole, "imposer", "condition_imposer", "regulator", "mechanism") &&
 			inRole(targetRole, "constrained_entity", "conditioned_entity", "affected_entity", "subject")
-	case horizonmodels.DependencyTypeAppliesTo:
+	case relAppliesTo:
 		return inRole(sourceRole, "mechanism", "instrument", "rule") &&
 			inRole(targetRole, "applicable_entity", "covered_entity", "subject", "affected_entity")
-	case horizonmodels.DependencyTypeAdministers:
+	case relAdministers:
 		return inRole(sourceRole, "administrator", "administering_body", "operator") &&
 			inRole(targetRole, "administered_entity", "administered_program", "subordinate")
-	case horizonmodels.DependencyTypeInGeoScope:
+	case relInGeoScope:
 		return inRole(sourceRole, "scope_owner", "scoped_instrument", "mechanism", "policy_source") &&
 			inRole(targetRole, "geo_scope", "jurisdiction", "geography", "location")
-	case horizonmodels.DependencyTypeAffects:
+	case relAffects:
 		return inRole(sourceRole, "impact_source", "mechanism", "source", "driver") &&
 			inRole(targetRole, "affected_entity", "impacted_entity", "exposure_target")
 	default:
@@ -849,37 +896,37 @@ func rolePairMatchesEdgeType(edgeType horizonmodels.DependencyType, sourceRole, 
 	}
 }
 
-func directionQualifierMatchesEdgeType(edgeType horizonmodels.DependencyType, direction string) bool {
+func directionQualifierMatchesEdgeType(edgeType ah.RelationName, direction string) bool {
 	switch edgeType {
-	case horizonmodels.DependencyTypeOwns:
+	case relOwns:
 		return inRole(direction, "owner_to_owned", "parent_to_subsidiary")
-	case horizonmodels.DependencyTypeSubsidiaryOf:
+	case relSubsidiaryOf:
 		return inRole(direction, "subsidiary_to_parent", "child_to_parent")
-	case horizonmodels.DependencyTypeInvestsIn:
+	case relInvestsIn:
 		return inRole(direction, "investor_to_investee")
-	case horizonmodels.DependencyTypeAssures:
+	case relAssures:
 		return inRole(direction, "assurer_to_assuree", "auditor_to_audited")
-	case horizonmodels.DependencyTypeControls:
+	case relControls:
 		return inRole(direction, "controller_to_controlled")
-	case horizonmodels.DependencyTypeDependsOn:
+	case relDependsOn:
 		return inRole(direction, "dependent_to_dependency", "consumer_to_supplier")
-	case horizonmodels.DependencyTypeSuppliesTo:
+	case relSuppliesTo:
 		return inRole(direction, "supplier_to_customer", "provider_to_recipient")
-	case horizonmodels.DependencyTypeGatekeepsDecision:
+	case relGatekeepsDecision:
 		return inRole(direction, "gatekeeper_to_decision", "authority_to_decision", "approver_to_decision")
-	case horizonmodels.DependencyTypeUsesMechanism:
+	case relUsesMechanism:
 		return inRole(direction, "user_to_mechanism", "decision_to_mechanism", "source_to_mechanism")
-	case horizonmodels.DependencyTypeControlsAccess:
+	case relControlsAccess:
 		return inRole(direction, "controller_to_access_subject", "gatekeeper_to_subject", "controller_to_target")
-	case horizonmodels.DependencyTypeImposesCondition:
+	case relImposesCondition:
 		return inRole(direction, "imposer_to_constrained_entity", "mechanism_to_constrained_entity", "regulator_to_constrained_entity")
-	case horizonmodels.DependencyTypeAppliesTo:
+	case relAppliesTo:
 		return inRole(direction, "mechanism_to_applicable_entity", "instrument_to_subject")
-	case horizonmodels.DependencyTypeAdministers:
+	case relAdministers:
 		return inRole(direction, "administrator_to_administered_entity", "operator_to_administered_entity")
-	case horizonmodels.DependencyTypeInGeoScope:
+	case relInGeoScope:
 		return inRole(direction, "scope_owner_to_geo_scope", "mechanism_to_geo_scope", "instrument_to_jurisdiction")
-	case horizonmodels.DependencyTypeAffects:
+	case relAffects:
 		return inRole(direction, "impact_source_to_affected_entity", "source_to_affected_entity", "driver_to_affected_entity")
 	default:
 		return false

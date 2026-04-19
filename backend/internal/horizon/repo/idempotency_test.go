@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestFragmentPathClaimDocIDMatchesCanonicalPathDocID(t *testing.T) {
@@ -31,12 +32,12 @@ func TestEdgeIdentityVariantStable(t *testing.T) {
 }
 
 func TestNormalizedEdgeIdentitySymmetric(t *testing.T) {
-	s1, t1, ty1, v1, id1 := normalizedEdgeIdentity("global", "b", "a", models.DependencyTypeAssociatedWith, "")
-	s2, t2, ty2, v2, id2 := normalizedEdgeIdentity("global", "a", "b", models.DependencyTypeAssociatedWith, "")
-	if s1 != "a" || t1 != "b" || ty1 != models.DependencyTypeAssociatedWith || v1 != "" {
+	s1, t1, ty1, v1, id1 := normalizedEdgeIdentity("global", "b", "a", ah.RelationName("associated_with"), "")
+	s2, t2, ty2, v2, id2 := normalizedEdgeIdentity("global", "a", "b", ah.RelationName("associated_with"), "")
+	if s1 != "a" || t1 != "b" || ty1 != ah.RelationName("associated_with") || v1 != "" {
 		t.Fatalf("unexpected normalized identity 1: %s %s %s %s", s1, t1, ty1, v1)
 	}
-	if s2 != "a" || t2 != "b" || ty2 != models.DependencyTypeAssociatedWith || v2 != "" {
+	if s2 != "a" || t2 != "b" || ty2 != ah.RelationName("associated_with") || v2 != "" {
 		t.Fatalf("unexpected normalized identity 2: %s %s %s %s", s2, t2, ty2, v2)
 	}
 	if id1 != id2 {

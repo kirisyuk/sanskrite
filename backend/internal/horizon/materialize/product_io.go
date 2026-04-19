@@ -10,6 +10,7 @@ import (
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	scoutagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // NOTE (v1): Materializes only PRODUCT fragments (FragmentTypeProduct).
@@ -75,7 +76,7 @@ func (m *ProductIOMaterializer) Apply(ctx context.Context, req *ProductIOApplyRe
 
 		// Reuse existing canonicalization rules from scout canonicalizer (PRODUCT namespace).
 		rel := scoutagents.DiscoveredRelation{
-			TargetType:      string(horizonmodels.FragmentTypeProduct),
+			TargetType:      string(ah.FragmentClassProduct),
 			TargetShortName: name,
 			TargetName:      name,
 		}
@@ -94,7 +95,7 @@ func (m *ProductIOMaterializer) Apply(ctx context.Context, req *ProductIOApplyRe
 			}
 			// Canonicalize/upgrade flat product paths to hierarchical taxonomy when possible.
 			if m.canonicalPathResolver != nil {
-				if resolved, rerr := m.canonicalPathResolver.Resolve(ctx, cp, horizonmodels.FragmentTypeProduct); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+				if resolved, rerr := m.canonicalPathResolver.Resolve(ctx, cp, ah.FragmentClassProduct); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 					cp = strings.TrimSpace(resolved.CanonicalPath)
 					if resolved.ExistingFragment != nil && strings.TrimSpace(resolved.ExistingFragment.ID) != "" {
 						return resolved.ExistingFragment, nil
@@ -121,7 +122,7 @@ func (m *ProductIOMaterializer) Apply(ctx context.Context, req *ProductIOApplyRe
 			Labels:        map[string]string{"en": name},
 			Status:        "active",
 			CanonicalPath: cp,
-			Type:          horizonmodels.FragmentTypeProduct,
+			Class:         ah.FragmentClassProduct,
 			EntityPath:    "/Product",
 			State:         map[string]horizonmodels.MetricValue{},
 			Provenance: horizonmodels.Provenance{
@@ -141,7 +142,7 @@ func (m *ProductIOMaterializer) Apply(ctx context.Context, req *ProductIOApplyRe
 		return frag, nil
 	}
 
-	ensureEdge := func(sourceID, targetID string, typ horizonmodels.DependencyType, confidence float64, reason string, qualifier map[string]interface{}) (*horizonmodels.DependencyEdge, error) {
+	ensureEdge := func(sourceID, targetID string, typ ah.RelationName, confidence float64, reason string, qualifier map[string]interface{}) (*horizonmodels.DependencyEdge, error) {
 		sourceID = strings.TrimSpace(sourceID)
 		targetID = strings.TrimSpace(targetID)
 		if sourceID == "" || targetID == "" || sourceID == targetID {
@@ -169,7 +170,7 @@ func (m *ProductIOMaterializer) Apply(ctx context.Context, req *ProductIOApplyRe
 			TenantID:         "global",
 			SourceFragmentID: sourceID,
 			TargetFragmentID: targetID,
-			Type:             typ,
+			Relation:         typ,
 			Properties: horizonmodels.EdgeProperties{
 				Criticality:   confidence,
 				Amplification: 1.0,
@@ -200,7 +201,7 @@ func (m *ProductIOMaterializer) Apply(ctx context.Context, req *ProductIOApplyRe
 		if err != nil || p == nil {
 			continue
 		}
-		_, _ = ensureEdge(req.ObjectiveFragment.ID, p.ID, horizonmodels.DependencyTypeProduces, c.Confidence, c.Reason, nil)
+		_, _ = ensureEdge(req.ObjectiveFragment.ID, p.ID, ah.RelationNameProduces, c.Confidence, c.Reason, nil)
 	}
 
 	// Apply consumes: product -> objective (SUPPLIES_TO). CONSUMES removed from taxonomy.
@@ -209,7 +210,7 @@ func (m *ProductIOMaterializer) Apply(ctx context.Context, req *ProductIOApplyRe
 		if err != nil || p == nil {
 			continue
 		}
-		_, _ = ensureEdge(p.ID, req.ObjectiveFragment.ID, horizonmodels.DependencyTypeSuppliesTo, c.Confidence, c.Reason, nil)
+		_, _ = ensureEdge(p.ID, req.ObjectiveFragment.ID, ah.RelationNameSupplies, c.Confidence, c.Reason, nil)
 	}
 
 	return out, nil

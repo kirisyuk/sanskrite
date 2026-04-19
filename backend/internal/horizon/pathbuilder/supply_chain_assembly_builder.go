@@ -593,13 +593,13 @@ func buildAssemblyPayloadFromInputs(
 				}
 			}
 		}
-		srcRank, srcOK := models.ProductStageRankFromCanonicalPath(fromProduct)
-		dstRank, dstOK := models.ProductStageRankFromCanonicalPath(toProduct)
+		srcRank, srcOK := ProductStageRankFromCanonicalPath(fromProduct)
+		dstRank, dstOK := ProductStageRankFromCanonicalPath(toProduct)
 		if srcOK && dstOK && srcRank > dstRank {
 			fromProduct, toProduct = toProduct, fromProduct
 		}
 		if relation != "TRANSFORMS_INTO" && relation != "ASSEMBLES_INTO" && relation != "USED_IN" {
-			relation = string(models.ProductToProductEdgeTypeFromPaths(fromProduct, toProduct))
+			relation = string(ProductToProductEdgeTypeFromPaths(fromProduct, toProduct))
 		}
 		return fromProduct, toProduct, relation
 	}
@@ -689,7 +689,7 @@ func buildAssemblyPayloadFromInputs(
 			targetIsProduct := strings.HasPrefix(target, "/product/")
 			switch {
 			case sourceIsProduct && targetIsProduct:
-				addTransform(source, target, string(models.ProductToProductEdgeTypeFromPaths(source, target)), "heuristic")
+				addTransform(source, target, string(ProductToProductEdgeTypeFromPaths(source, target)), "heuristic")
 			case sourceIsProduct:
 				if addProductNode(source) && addActorNode(target, "customer") {
 					connect(source, target)
@@ -802,7 +802,7 @@ func buildAssemblyPayloadFromInputs(
 			}
 		}
 		for _, edge := range contribution.parsed.Edges {
-			if strings.TrimSpace(edge.Type) == "ONTOLOGY" &&
+			if strings.TrimSpace(edge.Relation) == "ONTOLOGY" &&
 				(strings.EqualFold(strings.TrimSpace(edge.Relation), "TRANSFORMS_INTO") ||
 					strings.EqualFold(strings.TrimSpace(edge.Relation), "ASSEMBLES_INTO") ||
 					strings.EqualFold(strings.TrimSpace(edge.Relation), "USED_IN")) {
@@ -823,7 +823,7 @@ func buildAssemblyPayloadFromInputs(
 			if canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(left.ProductRef)) == canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(right.ProductRef)) {
 				continue
 			}
-			addTransform(left.ProductRef, right.ProductRef, string(models.ProductToProductEdgeTypeFromPaths(left.ProductRef, right.ProductRef)), status)
+			addTransform(left.ProductRef, right.ProductRef, string(ProductToProductEdgeTypeFromPaths(left.ProductRef, right.ProductRef)), status)
 		}
 	}
 

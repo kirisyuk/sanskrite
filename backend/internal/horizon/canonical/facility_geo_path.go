@@ -5,6 +5,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // InferFacilityISO2 returns the best-effort facility jurisdiction from homeLocation
@@ -31,7 +32,11 @@ func InferFacilityISO2(fragment *models.HorizonFragment) string {
 // InferFacilityCanonicalPathFromGeo upgrades /fac/na/... to /fac/{iso2}/...
 // when the facility already has deterministic country evidence.
 func InferFacilityCanonicalPathFromGeo(fragment *models.HorizonFragment) (string, bool) {
-	if fragment == nil || fragment.Type != models.FragmentTypeFacility {
+	if fragment == nil {
+		return "", false
+	}
+	// AH facility = Class=site (legacy /fac/ prefix retained transitionally).
+	if fragment.Class != ah.FragmentClassSite {
 		return "", false
 	}
 	oldPath := strings.TrimSpace(fragment.CanonicalPath)

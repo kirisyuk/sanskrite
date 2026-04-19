@@ -235,9 +235,9 @@ func (e *ScoutEngine) materializeIntraGraphRelations(ctx context.Context, job *m
 		// Canonicalize direction before materialization (aligned with unified policy).
 		// Fixes ADMINISTERS/REGULATES /org/->/gov/, FACILITY->ORG, DEPOSIT->ORG, etc.
 		canon := policy.ApplyEdgeCanonicalizationPolicy(policy.EdgeCanonicalizationInput{
-			EdgeType:        models.DependencyType(normalizedRelationType),
-			SourceType:      srcFrag.Type,
-			TargetType:      tgtFrag.Type,
+			EdgeType:        DependencyType(normalizedRelationType),
+			SourceType:      srcFrag.Class,
+			TargetType:      tgtFrag.Class,
 			SourcePath:      srcPath,
 			TargetPath:      tgtPath,
 			RawRelationType: rawRelationType,
@@ -250,7 +250,7 @@ func (e *ScoutEngine) materializeIntraGraphRelations(ctx context.Context, job *m
 			rel.SourceCanonicalPath, rel.TargetCanonicalPath = rel.TargetCanonicalPath, rel.SourceCanonicalPath
 			rel.SourceType, rel.TargetType = rel.TargetType, rel.SourceType
 			rel.SourceName, rel.TargetName = rel.TargetName, rel.SourceName
-			targetType = tgtFrag.Type
+			targetType = tgtFrag.Class
 		}
 		if canon.Changed && string(canon.EdgeType) != "" {
 			rel.RelationType = string(canon.EdgeType)

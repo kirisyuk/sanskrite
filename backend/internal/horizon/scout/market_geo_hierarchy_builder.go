@@ -49,7 +49,7 @@ func (b *MarketGeoHierarchyBuilder) EnsureMarketGeoHierarchy(
 	if b == nil || b.fragmentsRepo == nil || b.edgesRepo == nil {
 		return nil
 	}
-	if fragment == nil || fragment.Type != models.FragmentTypeMarket {
+	if fragment == nil || fragment.Class != FragmentTypeMarket {
 		return nil
 	}
 	fragmentID = strings.TrimSpace(fragmentID)
@@ -140,7 +140,7 @@ func (b *MarketGeoHierarchyBuilder) ensureMarket(ctx context.Context, path, labe
 	f := &models.HorizonFragment{
 		TenantID:      "global",
 		CanonicalPath: path,
-		Type:          models.FragmentTypeMarket,
+		Class:          FragmentTypeMarket,
 		Labels: map[string]string{
 			"en": strings.TrimSpace(label),
 		},
@@ -186,14 +186,14 @@ func (b *MarketGeoHierarchyBuilder) ensureGeoHasSubmarketEdge(ctx context.Contex
 	}
 
 	// Check if edge already exists (HAS_MARKET_SEGMENT or legacy HAS_SUBMARKET)
-	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", globalID, regionalID, models.DependencyTypeHasMarketSegment)
+	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", globalID, regionalID, DependencyTypeHasMarketSegment)
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, repo.ErrEdgeNotFound) {
 		return err
 	}
-	_, err = b.edgesRepo.GetBySourceTargetAndType(ctx, "global", globalID, regionalID, models.DependencyTypeHasSubmarket)
+	_, err = b.edgesRepo.GetBySourceTargetAndType(ctx, "global", globalID, regionalID, DependencyTypeHasSubmarket)
 	if err == nil {
 		return nil
 	}
@@ -206,7 +206,7 @@ func (b *MarketGeoHierarchyBuilder) ensureGeoHasSubmarketEdge(ctx context.Contex
 		TenantID:         "global",
 		SourceFragmentID: globalID,
 		TargetFragmentID: regionalID,
-		Type:             models.DependencyTypeHasMarketSegment,
+		Relation:             DependencyTypeHasMarketSegment,
 		Properties: models.EdgeProperties{
 			Criticality:   0.35,
 			Amplification: 1.0,

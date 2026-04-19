@@ -19,7 +19,7 @@ var deprecatedRelationTypes = []string{
 
 func TestComposableValidationPrompts_DoNotContainDeprecatedTypes(t *testing.T) {
 	frag := &models.HorizonFragment{
-		Type:          "ORGANIZATION",
+		Class:          "ORGANIZATION",
 		CanonicalPath: "/org/us/example-inc",
 	}
 	input := CriticValidatorInput{
@@ -55,7 +55,7 @@ func TestComposableValidationPrompts_DoNotContainDeprecatedTypes(t *testing.T) {
 
 func TestComposableValidationPrompts_ContainStrictOutputSchema(t *testing.T) {
 	frag := &models.HorizonFragment{
-		Type:          "ORGANIZATION",
+		Class:          "ORGANIZATION",
 		CanonicalPath: "/org/us/example-inc",
 	}
 	input := CriticValidatorInput{
@@ -112,7 +112,7 @@ func TestCriticPipeline_Validate_supplyChainMode(t *testing.T) {
 func TestSupplyChainValidationPrompt_IncludesWorkingProductScopeRules(t *testing.T) {
 	agent := NewCriticAgent(nil)
 	prompt := agent.buildSupplyChainValidationPrompt(CriticValidatorInput{
-		Fragment:            &models.HorizonFragment{CanonicalPath: "/org/us/example", Type: models.FragmentTypeOrganization},
+		Fragment:            &models.HorizonFragment{CanonicalPath: "/org/us/example", Class: FragmentTypeOrganization},
 		WorkingProductScope: []string{"/product/material/lithium-chloride"},
 		SupplyChains: []SupplyChain{
 			{
@@ -131,7 +131,7 @@ func TestSupplyChainValidationPrompt_IncludesWorkingProductScopeRules(t *testing
 func TestServiceChainValidationPrompt_UsesServiceCapabilityScopeLanguage(t *testing.T) {
 	agent := NewCriticAgent(nil)
 	prompt := agent.buildServiceChainValidationPrompt(CriticValidatorInput{
-		Fragment:            &models.HorizonFragment{CanonicalPath: "/org/us/google-cloud", Type: models.FragmentTypeOrganization},
+		Fragment:            &models.HorizonFragment{CanonicalPath: "/org/us/google-cloud", Class: FragmentTypeOrganization},
 		WorkingProductScope: []string{"/product/service/cloud/compute/virtual-machines"},
 	})
 	for _, want := range []string{
@@ -153,7 +153,7 @@ func TestPolicyImpactValidationPrompt_RequiresDirectedFiveLayerCoverage(t *testi
 	prompt := agent.buildPolicyImpactValidationPrompt(CriticValidatorInput{
 		Fragment: &models.HorizonFragment{
 			CanonicalPath: "/gov/ae/ministry-of-finance",
-			Type:          models.FragmentTypeOrganization,
+			Class:          FragmentTypeOrganization,
 		},
 	})
 	for _, want := range []string{
@@ -174,7 +174,7 @@ func TestGovernanceValidationPrompt_RequiresBeneficialOwnershipChecks(t *testing
 	prompt := agent.buildGovernanceValidationPrompt(CriticValidatorInput{
 		Fragment: &models.HorizonFragment{
 			CanonicalPath: "/org/ae/difc-opco",
-			Type:          models.FragmentTypeOrganization,
+			Class:          FragmentTypeOrganization,
 		},
 	})
 	for _, want := range []string{
@@ -359,7 +359,7 @@ func TestCriticPipeline_Validate_governanceModeAddsDeterministicInvariantGaps(t 
 	runner := (&CriticAgent{}).CriticPipeline()
 	ctx := context.Background()
 	input := CriticValidatorInput{
-		Fragment: &models.HorizonFragment{CanonicalPath: "/org/ae/opco", Type: models.FragmentTypeOrganization},
+		Fragment: &models.HorizonFragment{CanonicalPath: "/org/ae/opco", Class: FragmentTypeOrganization},
 		Relations: []DiscoveredRelation{
 			{SourceCanonicalPath: "/org/ae/holdco-a", TargetCanonicalPath: "/org/ae/opco", RelationType: "OWNS"},
 			{SourceCanonicalPath: "/org/ae/holdco-b", TargetCanonicalPath: "/org/ae/opco", RelationType: "OWNS"},
@@ -382,7 +382,7 @@ func TestCriticPipeline_Validate_policyImpactModeAddsDeterministicInvariantGaps(
 	runner := (&CriticAgent{}).CriticPipeline()
 	ctx := context.Background()
 	input := CriticValidatorInput{
-		Fragment: &models.HorizonFragment{CanonicalPath: "/gov/ae/ministry-of-finance", Type: models.FragmentTypeOrganization},
+		Fragment: &models.HorizonFragment{CanonicalPath: "/gov/ae/ministry-of-finance", Class: FragmentTypeOrganization},
 		Relations: []DiscoveredRelation{
 			{SourceCanonicalPath: "/gov/ae/ministry-of-finance", TargetCanonicalPath: "/decision/taxation/raise-corporate-tax", RelationType: "GATEKEEPS_DECISION"},
 			{SourceCanonicalPath: "/decision/taxation/raise-corporate-tax", TargetCanonicalPath: "/mechanism/regulatory/corporate-tax-increase", RelationType: "USES_MECHANISM"},
@@ -468,7 +468,7 @@ func TestStrategicValidator_nilFragmentReturnsNil(t *testing.T) {
 
 func TestRuleBasedQuickValidation_MarketWithEmptyRelations(t *testing.T) {
 	frag := &models.HorizonFragment{
-		Type:          models.FragmentTypeMarket,
+		Class:          FragmentTypeMarket,
 		CanonicalPath: "/market/global/public-safety",
 	}
 	relations := []DiscoveredRelation{}
@@ -498,7 +498,7 @@ func TestRuleBasedQuickValidation_MarketWithEmptyRelations(t *testing.T) {
 
 func TestRuleBasedQuickValidation_SupplyChainModeRequestsProduceConsume(t *testing.T) {
 	frag := &models.HorizonFragment{
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		CanonicalPath: "/org/us/acme",
 	}
 	relations := []DiscoveredRelation{}

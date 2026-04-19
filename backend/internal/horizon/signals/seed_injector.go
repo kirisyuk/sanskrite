@@ -110,7 +110,7 @@ func (s *SeedInjector) resolveCountryLocationPath(ctx context.Context, path stri
 		if frag == nil || strings.TrimSpace(frag.ID) == "" {
 			continue
 		}
-		if frag.Type == horizonmodels.FragmentTypeGeoRegion {
+		if frag.Class == FragmentTypeGeoRegion {
 			return strings.TrimSpace(frag.ID)
 		}
 	}
@@ -478,8 +478,8 @@ func (s *SeedInjector) resolveLocationFallback(ctx context.Context, signal *hori
 	if err == nil && locationFrag != nil {
 		appendFragment(locationFrag)
 		if s.edgesRepo != nil {
-			operatesInType := horizonmodels.DependencyTypeOperatesIn
-			locatedInType := horizonmodels.DependencyTypeLocatedIn
+			operatesInType := DependencyTypeOperatesIn
+			locatedInType := DependencyTypeLocatedIn
 			operatesInEdges, _ := s.edgesRepo.ListByTarget(ctx, "global", locationFrag.ID, &operatesInType, 100)
 			locatedInEdges, _ := s.edgesRepo.ListByTarget(ctx, "global", locationFrag.ID, &locatedInType, 100)
 			appendEdgeSources := func(edges []*horizonmodels.DependencyEdge) {
@@ -559,7 +559,7 @@ func (s *SeedInjector) ensureLocationSeedFragment(ctx context.Context, path stri
 	frag := &horizonmodels.HorizonFragment{
 		TenantID:      "global",
 		CanonicalPath: path,
-		Type:          horizonmodels.FragmentTypeGeoRegion,
+		Class:         FragmentTypeGeoRegion,
 		Labels:        map[string]string{"en": label},
 		Identifiers: map[string]string{
 			"geoKind": "country_anchor",
@@ -771,8 +771,8 @@ func seedPriorityForAxis(signal *horizonmodels.SignalDescriptor, frag *horizonmo
 			score += 0.40
 		}
 	default:
-		switch frag.Type {
-		case horizonmodels.FragmentTypeFacility, horizonmodels.FragmentTypeOrganization, horizonmodels.FragmentTypeMarket, horizonmodels.FragmentTypeGeoRegion:
+		switch frag.Class {
+		case FragmentTypeFacility, FragmentTypeOrganization, FragmentTypeMarket, FragmentTypeGeoRegion:
 			score += 0.40
 		}
 	}
@@ -1198,28 +1198,39 @@ func seedFragmentTypeAllowed(signal *horizonmodels.SignalDescriptor, frag *horiz
 	hints := inferSignalThemeHints(signal)
 	switch strings.TrimSpace(signal.Axis) {
 	case horizonmodels.AxisGeoConflict:
-		switch frag.Type {
-		case horizonmodels.FragmentTypeGeoRegion, horizonmodels.FragmentTypeOrganization, horizonmodels.FragmentTypeFacility, horizonmodels.FragmentTypeCommunity:
+		subtype := strings.TrimSpace(frag.Subtype)
+		switch frag.Class {
+		case FragmentTypeGeoRegion, FragmentTypeOrganization, FragmentTypeCommunity:
 			return true
-		case horizonmodels.FragmentTypeMarket, horizonmodels.FragmentTypeDeposit:
+		case FragmentTypeFacility:
+			if subtype == "deposit" {
+				return hints.energy || hints.logistics || hints.maritime
+			}
+			return true
+		case FragmentTypeMarket:
 			return hints.energy || hints.logistics || hints.maritime
 		default:
 			return false
 		}
 	case horizonmodels.AxisLogisticsCapacity, horizonmodels.AxisLogisticsLatency, horizonmodels.AxisPhysicalFlowSupply, horizonmodels.AxisPhysicalFlowDemand:
-		switch frag.Type {
-		case horizonmodels.FragmentTypeFacility, horizonmodels.FragmentTypeMarket, horizonmodels.FragmentTypeOrganization, horizonmodels.FragmentTypeGeoRegion, horizonmodels.FragmentTypeDeposit, horizonmodels.FragmentTypeProgram:
+		switch frag.Class {
+		case FragmentTypeFacility, FragmentTypeMarket, FragmentTypeOrganization, FragmentTypeGeoRegion:
 			return true
 		default:
 			return false
 		}
 	default:
-		switch frag.Type {
-		case horizonmodels.FragmentTypePerson, horizonmodels.FragmentTypeEvent, horizonmodels.FragmentTypeMediaChannel, horizonmodels.FragmentTypeSupplyLink:
+		switch frag.Class {
+		case FragmentTypePerson, FragmentTypeEvent:
 			return false
-		default:
-			return true
 		}
+		if frag.IsLegacySupplyLink() {
+			return false
+		}
+		if strings.TrimSpace(frag.Subtype) == "media_channel" {
+			return false
+		}
+		return true
 	}
 }
 
@@ -1234,7 +1245,7 @@ func semanticSeedFragmentAllowed(signal *horizonmodels.SignalDescriptor, frag *h
 	if path == "" {
 		return false
 	}
-	if frag.Type == horizonmodels.FragmentTypeSupplyLink || strings.HasPrefix(path, "/supply-link/") {
+	if frag.IsLegacySupplyLink() || strings.HasPrefix(path, "/supply-link/") {
 		return false
 	}
 	if semanticSeedGenericLocPath(path) {

@@ -119,7 +119,7 @@ func (h *HorizonHandlers) findProductPrefetchSuggestions(ctx context.Context, te
 	}
 
 	for _, variant := range productPrefetchQueryVariants(query) {
-		exact, err := h.service.Fragments().FindByLabelForTenant(ctx, tenantID, "en", variant, horizonmodels.FragmentTypeProduct)
+		exact, err := h.service.Fragments().FindByLabelForTenant(ctx, tenantID, "en", variant, FragmentTypeProduct)
 		if err != nil {
 			return nil, err
 		}
@@ -262,7 +262,7 @@ func rankProductPrefetchSuggestions(ctx context.Context, tenantID string, query 
 	canonicalPaths := make([]string, 0, len(candidates))
 	canonicalSeen := map[string]struct{}{}
 	for _, frag := range candidates {
-		if frag == nil || frag.Type != horizonmodels.FragmentTypeProduct {
+		if frag == nil || frag.Class != FragmentTypeProduct {
 			continue
 		}
 		canonicalPath, _, err := h.productDictionary.CanonicalizeProductPathForTenant(ctx, tenantID, frag.CanonicalPath)
@@ -287,7 +287,7 @@ func rankProductPrefetchSuggestions(ctx context.Context, tenantID string, query 
 
 	bestByCanonical := map[string]scoredProductPrefetchSuggestion{}
 	for _, frag := range candidates {
-		if frag == nil || frag.Type != horizonmodels.FragmentTypeProduct {
+		if frag == nil || frag.Class != FragmentTypeProduct {
 			continue
 		}
 		canonicalPath, _, err := h.productDictionary.CanonicalizeProductPathForTenant(ctx, tenantID, frag.CanonicalPath)

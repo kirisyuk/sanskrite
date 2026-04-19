@@ -57,8 +57,8 @@ type MapLensFragmentsPort interface {
 
 // MapLensEdgesPort is the edge subset used for map 1-hop neighbors (same tenant as listGeoObjectsForLens).
 type MapLensEdgesPort interface {
-	ListBySource(ctx context.Context, tenantID, sourceFragmentID string, edgeType *horizonmodels.DependencyType, limit int) ([]*horizonmodels.DependencyEdge, error)
-	ListByTarget(ctx context.Context, tenantID, targetFragmentID string, edgeType *horizonmodels.DependencyType, limit int) ([]*horizonmodels.DependencyEdge, error)
+	ListBySource(ctx context.Context, tenantID, sourceFragmentID string, edgeType *DependencyType, limit int) ([]*horizonmodels.DependencyEdge, error)
+	ListByTarget(ctx context.Context, tenantID, targetFragmentID string, edgeType *DependencyType, limit int) ([]*horizonmodels.DependencyEdge, error)
 }
 
 const defaultMapEdgeListLimit = 200

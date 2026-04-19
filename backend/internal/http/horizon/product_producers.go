@@ -106,7 +106,7 @@ func (h *HorizonHandlers) GetProductProducers(w http.ResponseWriter, r *http.Req
 func (h *HorizonHandlers) lookupProductProducers(r *http.Request, tenantID string, canonicalPath string, limit int) ([]productProducerResponse, error) {
 	ctx := r.Context()
 	targets := h.collectProducerTargets(ctx, tenantID, canonicalPath)
-	edgeType := horizonmodels.DependencyTypeProduces
+	edgeType := DependencyTypeProduces
 	candidates := map[string]*productProducerCandidate{}
 
 	for _, target := range targets {
@@ -122,7 +122,7 @@ func (h *HorizonHandlers) lookupProductProducers(r *http.Request, tenantID strin
 				continue
 			}
 			sourceFrag, err := h.service.Fragments().Get(ctx, edge.SourceFragmentID)
-			if err != nil || sourceFrag == nil || !isProducerFragmentType(sourceFrag.Type) {
+			if err != nil || sourceFrag == nil || !isProducerFragmentType(sourceFrag.Class) {
 				continue
 			}
 			mergeProductProducerCandidate(candidates, sourceFrag, target.scope)
@@ -138,7 +138,7 @@ func (h *HorizonHandlers) lookupProductProducers(r *http.Request, tenantID strin
 			FragmentID:    strings.TrimSpace(candidate.fragment.ID),
 			CanonicalPath: strings.TrimSpace(candidate.fragment.CanonicalPath),
 			Label:         fragmentDisplayName(candidate.fragment),
-			FragmentType:  string(candidate.fragment.Type),
+			FragmentType:  horizonmodels.FormatClassSubtype(candidate.fragment.Class, candidate.fragment.Subtype),
 			GeoSlug:       strings.TrimSpace(candidate.fragment.GeoSlug),
 			SourceScope:   strings.TrimSpace(candidate.sourceScope),
 			EdgeCount:     candidate.edgeCount,
@@ -187,9 +187,13 @@ func (h *HorizonHandlers) collectProducerTargets(ctx context.Context, tenantID s
 	return targets
 }
 
-func isProducerFragmentType(fragmentType horizonmodels.FragmentType) bool {
+func isProducerFragmentType(fragmentType FragmentType) bool {
+	// Org covers legacy ORGANIZATION and PROGRAM (which folds to org/program);
+	// Site covers legacy FACILITY and DEPOSIT (which folds to site/deposit).
+	// Subtype-level filtering is intentionally not applied here — historical
+	// callers accept any org/site as a candidate producer.
 	switch fragmentType {
-	case horizonmodels.FragmentTypeOrganization, horizonmodels.FragmentTypeFacility, horizonmodels.FragmentTypeDeposit, horizonmodels.FragmentTypeProgram:
+	case FragmentTypeOrganization, FragmentTypeFacility:
 		return true
 	default:
 		return false
@@ -233,14 +237,19 @@ func producerScopeRank(scope string) int {
 }
 
 func producerTypeRank(fragmentType string) int {
-	switch strings.TrimSpace(fragmentType) {
-	case string(horizonmodels.FragmentTypeFacility):
+	// Accept both bare class strings ("site"/"org") and "class/subtype"
+	// (FormatClassSubtype) wire shapes. Legacy ranks: facility=0, org=1,
+	// deposit=2, program=3 — preserved by promoting site/deposit and
+	// org/program subtypes ahead of their bare-class peers.
+	trim := strings.TrimSpace(fragmentType)
+	switch trim {
+	case string(FragmentTypeFacility):
 		return 0
-	case string(horizonmodels.FragmentTypeOrganization):
+	case string(FragmentTypeOrganization):
 		return 1
-	case string(horizonmodels.FragmentTypeDeposit):
+	case string(FragmentTypeFacility) + "/deposit":
 		return 2
-	case string(horizonmodels.FragmentTypeProgram):
+	case string(FragmentTypeOrganization) + "/program":
 		return 3
 	default:
 		return 4

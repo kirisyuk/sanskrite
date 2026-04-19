@@ -51,9 +51,9 @@ func TestValidateNormalizedStepAcceptsPassThrough(t *testing.T) {
 
 func TestShouldMaterializeStepRequiresFacilityToFacility(t *testing.T) {
 	step := oneHopStep{StepKind: "transformation"}
-	facA := &horizonmodels.HorizonFragment{Type: horizonmodels.FragmentTypeFacility}
-	facB := &horizonmodels.HorizonFragment{Type: horizonmodels.FragmentTypeFacility}
-	orgB := &horizonmodels.HorizonFragment{Type: horizonmodels.FragmentTypeOrganization}
+	facA := &horizonmodels.HorizonFragment{Class: FragmentTypeFacility}
+	facB := &horizonmodels.HorizonFragment{Class: FragmentTypeFacility}
+	orgB := &horizonmodels.HorizonFragment{Class: FragmentTypeOrganization}
 	if !shouldMaterializeStep(step, facA, facB) {
 		t.Fatalf("facility-to-facility step should materialize")
 	}
@@ -65,19 +65,19 @@ func TestShouldMaterializeStepRequiresFacilityToFacility(t *testing.T) {
 func TestBuildPromptContainsStrictContract(t *testing.T) {
 	service := &OneHopDownstreamService{}
 	anchor := &horizonmodels.HorizonFragment{
-		Type:          horizonmodels.FragmentTypeFacility,
+		Class:         FragmentTypeFacility,
 		CanonicalPath: "/fac/nl/veldhoven/euv-system-plant",
 		Labels:        map[string]string{"en": "EUV System Plant"},
 	}
 	ctx := &oneHopContext{
 		Anchor: anchor,
 		OutputProducts: []*horizonmodels.HorizonFragment{
-			{Type: horizonmodels.FragmentTypeProduct, CanonicalPath: "/product/finished/electronic/assembly/euv-lithography-system", Labels: map[string]string{"en": "EUV Lithography System"}},
+			{Class: FragmentTypeProduct, CanonicalPath: "/product/finished/electronic/assembly/euv-lithography-system", Labels: map[string]string{"en": "EUV Lithography System"}},
 		},
 	}
 	prompt := service.buildPrompt(anchor, ctx, NormalizeOptions(OneHopDownstreamOptions{
 		AnchorRef:             anchor.CanonicalPath,
-		AnchorType:            string(anchor.Type),
+		AnchorType:            string(anchor.Class),
 		MaxBranchesPerProduct: 5,
 		IncludeInputsContext:  true,
 		AllowOrgFallback:      true,

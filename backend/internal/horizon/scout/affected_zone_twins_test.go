@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestNormalizeAffectedZoneIdentitySlug_StripsGenericSuffixes(t *testing.T) {
@@ -23,13 +24,15 @@ func TestNormalizeAffectedZoneIdentitySlug_StripsGenericSuffixes(t *testing.T) {
 func TestSelectAffectedZoneTwinReplacement_PrefersRicherSibling(t *testing.T) {
 	incoming := &models.HorizonFragment{
 		ID:            "dup",
-		Type:          models.FragmentTypeAffectedZone,
+		Class:         ah.FragmentClassGeo,
+		Subtype:       "affected_zone",
 		CanonicalPath: "/zone/sea/military_conflict/strait-of-hormuz-transit-corridor",
 		Metadata:      models.FragmentMetadata{EpistemicStatus: models.EpistemicStatusLowConfidence},
 	}
 	rich := &models.HorizonFragment{
 		ID:            "rich",
-		Type:          models.FragmentTypeAffectedZone,
+		Class:         ah.FragmentClassGeo,
+		Subtype:       "affected_zone",
 		CanonicalPath: "/zone/sea/military_conflict/strait-of-hormuz",
 		State: map[string]models.MetricValue{
 			models.MetricPathImportanceStrategic:           {Value: 0.53},
@@ -50,13 +53,15 @@ func TestSelectAffectedZoneTwinReplacement_PrefersRicherSibling(t *testing.T) {
 func TestSelectAffectedZoneTwinReplacement_DoesNotMergeCrossFamily(t *testing.T) {
 	incoming := &models.HorizonFragment{
 		ID:            "dup",
-		Type:          models.FragmentTypeAffectedZone,
+		Class:         ah.FragmentClassGeo,
+		Subtype:       "affected_zone",
 		CanonicalPath: "/zone/central-asia/earthquake_affected/fergana-valley",
 		Metadata:      models.FragmentMetadata{EpistemicStatus: models.EpistemicStatusLowConfidence},
 	}
 	rich := &models.HorizonFragment{
 		ID:            "rich",
-		Type:          models.FragmentTypeAffectedZone,
+		Class:         ah.FragmentClassGeo,
+		Subtype:       "affected_zone",
 		CanonicalPath: "/zone/central-asia/political_tension/fergana-valley",
 		State: map[string]models.MetricValue{
 			models.MetricPathImportanceStrategic:           {Value: 0.53},
@@ -73,7 +78,8 @@ func TestSelectAffectedZoneTwinReplacement_DoesNotMergeCrossFamily(t *testing.T)
 func TestShouldAutoMergeAffectedZoneTwin_RequiresSkeletalDuplicate(t *testing.T) {
 	primary := &models.HorizonFragment{
 		ID:            "primary",
-		Type:          models.FragmentTypeAffectedZone,
+		Class:         ah.FragmentClassGeo,
+		Subtype:       "affected_zone",
 		CanonicalPath: "/zone/sea/political_tension/southern-red-sea",
 		State: map[string]models.MetricValue{
 			models.MetricPathImportanceStrategic:           {Value: 0.71},
@@ -84,7 +90,8 @@ func TestShouldAutoMergeAffectedZoneTwin_RequiresSkeletalDuplicate(t *testing.T)
 	}
 	duplicate := &models.HorizonFragment{
 		ID:            "dup",
-		Type:          models.FragmentTypeAffectedZone,
+		Class:         ah.FragmentClassGeo,
+		Subtype:       "affected_zone",
 		CanonicalPath: "/zone/sea/military_conflict/southern-red-sea",
 		State: map[string]models.MetricValue{
 			models.MetricPathImportanceStrategic: {Value: 0.17},

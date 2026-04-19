@@ -45,7 +45,7 @@ type supplyLinkOverlayRecord struct {
 
 type supplyLinkVirtualTraversal struct {
 	targetPath         string
-	edgeType           horizonmodels.DependencyType
+	edgeType           DependencyType
 	traversalDirection string
 	qualifiers         map[string]interface{}
 	criticality        float64
@@ -133,7 +133,7 @@ func buildSupplyLinkOverlayRecords(ctx context.Context, links []*horizonmodels.H
 }
 
 func buildSupplyLinkOverlayRecord(link *horizonmodels.HorizonFragment) (supplyLinkOverlayRecord, bool) {
-	if link == nil || link.Type != horizonmodels.FragmentTypeSupplyLink {
+	if link == nil || !link.IsLegacySupplyLink() {
 		return supplyLinkOverlayRecord{}, false
 	}
 	supplier := firstNonEmptyPath(link.SupplierFacilityRef, link.SupplierRef)
@@ -184,7 +184,7 @@ func supplyLinkOverlayKeys(rec supplyLinkOverlayRecord) []string {
 func (e *PropagationEngine) getSupplyLinkVirtualNeighbors(
 	ctx context.Context,
 	frag *horizonmodels.HorizonFragment,
-	strongSpecs map[horizonmodels.DependencyType]*horizonmodels.StrongEdgeSpec,
+	strongSpecs map[DependencyType]*horizonmodels.StrongEdgeSpec,
 	allowSourceToTarget bool,
 	allowTargetToSource bool,
 ) ([]neighborInfo, error) {
@@ -320,7 +320,7 @@ func buildSupplyLinkVirtualTraversals(currentPath string, rec supplyLinkOverlayR
 	if currentPath == rec.SupplierPath {
 		out = append(out, supplyLinkVirtualTraversal{
 			targetPath:         rec.CustomerPath,
-			edgeType:           horizonmodels.DependencyTypeSuppliesTo,
+			edgeType:           DependencyTypeSuppliesTo,
 			traversalDirection: "source_to_target",
 			qualifiers:         supplyQualifiers,
 			criticality:        supplyLinkCriticality(rec, false),
@@ -329,7 +329,7 @@ func buildSupplyLinkVirtualTraversals(currentPath string, rec supplyLinkOverlayR
 	if currentPath == rec.CustomerPath {
 		out = append(out, supplyLinkVirtualTraversal{
 			targetPath:         rec.SupplierPath,
-			edgeType:           horizonmodels.DependencyTypeSuppliesTo,
+			edgeType:           DependencyTypeSuppliesTo,
 			traversalDirection: "target_to_source",
 			qualifiers:         supplyQualifiers,
 			criticality:        supplyLinkCriticality(rec, false),
@@ -341,7 +341,7 @@ func buildSupplyLinkVirtualTraversals(currentPath string, rec supplyLinkOverlayR
 			}
 			out = append(out, supplyLinkVirtualTraversal{
 				targetPath:         via,
-				edgeType:           horizonmodels.DependencyTypeDependsOn,
+				edgeType:           DependencyTypeDependsOn,
 				traversalDirection: "source_to_target",
 				qualifiers:         logisticsQualifiers,
 				criticality:        supplyLinkCriticality(rec, true),
@@ -355,7 +355,7 @@ func buildSupplyLinkVirtualTraversals(currentPath string, rec supplyLinkOverlayR
 		}
 		out = append(out, supplyLinkVirtualTraversal{
 			targetPath:         rec.CustomerPath,
-			edgeType:           horizonmodels.DependencyTypeDependsOn,
+			edgeType:           DependencyTypeDependsOn,
 			traversalDirection: "target_to_source",
 			qualifiers:         logisticsQualifiers,
 			criticality:        supplyLinkCriticality(rec, true),
@@ -364,7 +364,7 @@ func buildSupplyLinkVirtualTraversals(currentPath string, rec supplyLinkOverlayR
 	if currentPath == rec.SupplierGeoRef {
 		out = append(out, supplyLinkVirtualTraversal{
 			targetPath:         rec.SupplierPath,
-			edgeType:           horizonmodels.DependencyTypeAffects,
+			edgeType:           DependencyTypeAffects,
 			traversalDirection: "source_to_target",
 			qualifiers:         pressureQualifiers,
 			criticality:        supplyLinkCriticality(rec, true),
@@ -374,7 +374,7 @@ func buildSupplyLinkVirtualTraversals(currentPath string, rec supplyLinkOverlayR
 			if firstVia != "" {
 				out = append(out, supplyLinkVirtualTraversal{
 					targetPath:         firstVia,
-					edgeType:           horizonmodels.DependencyTypeAffects,
+					edgeType:           DependencyTypeAffects,
 					traversalDirection: "source_to_target",
 					qualifiers:         pressureQualifiers,
 					criticality:        supplyLinkCriticality(rec, true),
@@ -385,7 +385,7 @@ func buildSupplyLinkVirtualTraversals(currentPath string, rec supplyLinkOverlayR
 	if currentPath == rec.CustomerGeoRef {
 		out = append(out, supplyLinkVirtualTraversal{
 			targetPath:         rec.CustomerPath,
-			edgeType:           horizonmodels.DependencyTypeAffects,
+			edgeType:           DependencyTypeAffects,
 			traversalDirection: "source_to_target",
 			qualifiers:         pressureQualifiers,
 			criticality:        supplyLinkCriticality(rec, true),
@@ -399,7 +399,7 @@ func buildSupplyLinkVirtualTraversals(currentPath string, rec supplyLinkOverlayR
 			}
 			out = append(out, supplyLinkVirtualTraversal{
 				targetPath:         via,
-				edgeType:           horizonmodels.DependencyTypeAffects,
+				edgeType:           DependencyTypeAffects,
 				traversalDirection: "source_to_target",
 				qualifiers:         pressureQualifiers,
 				criticality:        supplyLinkCriticality(rec, true),
@@ -407,7 +407,7 @@ func buildSupplyLinkVirtualTraversals(currentPath string, rec supplyLinkOverlayR
 		}
 		out = append(out, supplyLinkVirtualTraversal{
 			targetPath:         rec.CustomerPath,
-			edgeType:           horizonmodels.DependencyTypeAffects,
+			edgeType:           DependencyTypeAffects,
 			traversalDirection: "source_to_target",
 			qualifiers:         pressureQualifiers,
 			criticality:        supplyLinkCriticality(rec, true),
@@ -463,7 +463,7 @@ func buildSupplyLinkVirtualEdge(
 		TenantID:         "global",
 		SourceFragmentID: strings.TrimSpace(sourceID),
 		TargetFragmentID: strings.TrimSpace(targetID),
-		Type:             traversal.edgeType,
+		Relation:         traversal.edgeType,
 		Properties: horizonmodels.EdgeProperties{
 			Criticality:   clamp01(traversal.criticality),
 			Amplification: 1.0,
@@ -480,7 +480,7 @@ func buildSupplyLinkVirtualEdge(
 	edge.Qualifiers["sourceCanonicalPath"] = rec.SupplierPath
 	edge.Qualifiers["targetCanonicalPath"] = rec.CustomerPath
 	if len(rec.TransportVia) > 0 {
-		edge.Qualifiers[horizonmodels.QualifierTransportVia] = append([]string(nil), rec.TransportVia...)
+		edge.Qualifiers[QualifierTransportVia] = append([]string(nil), rec.TransportVia...)
 	}
 	return edge
 }
@@ -493,87 +493,87 @@ func buildSupplyLinkQualifiers(rec supplyLinkOverlayRecord, mode string) map[str
 	}
 	switch strings.TrimSpace(mode) {
 	case "logistics":
-		out["facet"] = string(horizonmodels.FacetLogistics)
+		out["facet"] = string(FacetLogistics)
 		if len(rec.TransportVia) > 0 {
-			out[horizonmodels.QualifierTransportVia] = append([]string(nil), rec.TransportVia...)
+			out[QualifierTransportVia] = append([]string(nil), rec.TransportVia...)
 		}
 		if likelyConstrainedRoute(rec.TransportVia) {
 			out[horizonmodels.QualifierReroutePenalty] = 0.42
 			out[horizonmodels.QualifierCapacityConstraint] = 0.24
 		}
 	case "supply":
-		out["facet"] = string(horizonmodels.FacetSupply)
+		out["facet"] = string(FacetSupply)
 	case "pressure":
-		out["facet"] = string(horizonmodels.FacetLogistics)
+		out["facet"] = string(FacetLogistics)
 		out["pressure_transfer"] = true
 		if len(rec.TransportVia) > 0 {
-			out[horizonmodels.QualifierTransportVia] = append([]string(nil), rec.TransportVia...)
+			out[QualifierTransportVia] = append([]string(nil), rec.TransportVia...)
 		}
 	default:
-		out["facet"] = string(horizonmodels.FacetSupply)
+		out["facet"] = string(FacetSupply)
 	}
 	if rec.Share > 0 {
 		out[horizonmodels.QualifierThroughputShare] = rec.Share
 	}
 	if rec.Contract != "" {
-		out[horizonmodels.QualifierTransmissionContractVersion] = horizonmodels.TransmissionContractVersionV1
+		out[QualifierTransmissionContractVersion] = TransmissionContractVersionV1
 		switch rec.Contract {
 		case "full":
-			out[horizonmodels.QualifierTransmissionContractStatus] = horizonmodels.TransmissionContractStatusComplete
-			out[horizonmodels.QualifierTransmissionContractMode] = horizonmodels.TransmissionContractModeExplicit
+			out[QualifierTransmissionContractStatus] = TransmissionContractStatusComplete
+			out[QualifierTransmissionContractMode] = TransmissionContractModeExplicit
 		case "partial":
-			out[horizonmodels.QualifierTransmissionContractStatus] = horizonmodels.TransmissionContractStatusPartial
-			out[horizonmodels.QualifierTransmissionContractMode] = horizonmodels.TransmissionContractModeExplicit
+			out[QualifierTransmissionContractStatus] = TransmissionContractStatusPartial
+			out[QualifierTransmissionContractMode] = TransmissionContractModeExplicit
 		default:
-			out[horizonmodels.QualifierTransmissionContractStatus] = horizonmodels.TransmissionContractStatusMissing
-			out[horizonmodels.QualifierTransmissionContractMode] = horizonmodels.TransmissionContractModeInferred
+			out[QualifierTransmissionContractStatus] = TransmissionContractStatusMissing
+			out[QualifierTransmissionContractMode] = TransmissionContractModeInferred
 		}
 	} else {
-		out[horizonmodels.QualifierTransmissionContractVersion] = horizonmodels.TransmissionContractVersionV1
-		out[horizonmodels.QualifierTransmissionContractStatus] = horizonmodels.TransmissionContractStatusMissing
-		out[horizonmodels.QualifierTransmissionContractMode] = horizonmodels.TransmissionContractModeInferred
+		out[QualifierTransmissionContractVersion] = TransmissionContractVersionV1
+		out[QualifierTransmissionContractStatus] = TransmissionContractStatusMissing
+		out[QualifierTransmissionContractMode] = TransmissionContractModeInferred
 	}
 	if strings.TrimSpace(rec.Mode) != "" {
-		out[horizonmodels.QualifierRouteMode] = strings.TrimSpace(rec.Mode)
+		out[QualifierRouteMode] = strings.TrimSpace(rec.Mode)
 	}
 	if len(rec.GeoRefs) > 0 {
-		out[horizonmodels.QualifierGeoRefs] = append([]string(nil), rec.GeoRefs...)
+		out[QualifierGeoRefs] = append([]string(nil), rec.GeoRefs...)
 	}
 	if len(rec.FlowRefs) > 0 {
-		out[horizonmodels.QualifierFlowRefs] = append([]string(nil), rec.FlowRefs...)
+		out[QualifierFlowRefs] = append([]string(nil), rec.FlowRefs...)
 	}
 	if len(rec.AlternateFlowRefs) > 0 {
-		out[horizonmodels.QualifierAlternateFlowRefs] = append([]string(nil), rec.AlternateFlowRefs...)
+		out[QualifierAlternateFlowRefs] = append([]string(nil), rec.AlternateFlowRefs...)
 	}
 	if len(rec.ZoneRefs) > 0 {
-		out[horizonmodels.QualifierZoneRefs] = append([]string(nil), rec.ZoneRefs...)
+		out[QualifierZoneRefs] = append([]string(nil), rec.ZoneRefs...)
 	}
 	if len(rec.AffectedZoneRefs) > 0 {
-		out[horizonmodels.QualifierAffectedZoneRefs] = append([]string(nil), rec.AffectedZoneRefs...)
+		out[QualifierAffectedZoneRefs] = append([]string(nil), rec.AffectedZoneRefs...)
 	}
 	if len(rec.SpatialSemantics) > 0 {
-		out[horizonmodels.QualifierSpatialSemantics] = append([]string(nil), rec.SpatialSemantics...)
+		out[QualifierSpatialSemantics] = append([]string(nil), rec.SpatialSemantics...)
 	}
 	if rec.BindingConfidence > 0 {
-		out[horizonmodels.QualifierBindingConfidence] = rec.BindingConfidence
+		out[QualifierBindingConfidence] = rec.BindingConfidence
 	}
 	if rec.StressScore > 0 {
-		out[horizonmodels.QualifierPathStressScore] = rec.StressScore
+		out[QualifierPathStressScore] = rec.StressScore
 	}
 	if rec.Fragility > 0 {
-		out[horizonmodels.QualifierPathFragility] = rec.Fragility
+		out[QualifierPathFragility] = rec.Fragility
 	}
 	if rec.Rerouteability > 0 {
-		out[horizonmodels.QualifierPathRerouteability] = rec.Rerouteability
+		out[QualifierPathRerouteability] = rec.Rerouteability
 	}
 	if rec.ZonePressure > 0 {
-		out[horizonmodels.QualifierPathZonePressure] = rec.ZonePressure
+		out[QualifierPathZonePressure] = rec.ZonePressure
 	}
 	if rec.AffectedPressure > 0 {
-		out[horizonmodels.QualifierPathAffectedPressure] = rec.AffectedPressure
+		out[QualifierPathAffectedPressure] = rec.AffectedPressure
 	}
 	if rec.RecoveryLatencyHrs > 0 {
-		out[horizonmodels.QualifierRecoveryLatencyHours] = rec.RecoveryLatencyHrs
+		out[QualifierRecoveryLatencyHours] = rec.RecoveryLatencyHrs
 	}
 	return out
 }
@@ -592,8 +592,8 @@ func supplyLinkCriticality(rec supplyLinkOverlayRecord, logistics bool) float64 
 	return clamp01(score)
 }
 
-func supplyLinkLatencyHours(rec supplyLinkOverlayRecord, edgeType horizonmodels.DependencyType) int {
-	if edgeType == horizonmodels.DependencyTypeDependsOn {
+func supplyLinkLatencyHours(rec supplyLinkOverlayRecord, edgeType DependencyType) int {
+	if edgeType == DependencyTypeDependsOn {
 		if len(rec.TransportVia) > 0 {
 			return 18
 		}

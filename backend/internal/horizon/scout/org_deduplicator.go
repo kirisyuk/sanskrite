@@ -164,7 +164,7 @@ func (d *OrgDeduplicator) DeduplicateOrg(ctx context.Context, fragment *models.H
 	if d == nil || d.fragmentsRepo == nil {
 		return fragment, nil
 	}
-	if fragment == nil || fragment.Type != models.FragmentTypeOrganization {
+	if fragment == nil || fragment.Class != FragmentTypeOrganization {
 		return fragment, nil
 	}
 	atomic.AddInt64(&d.calls, 1)
@@ -201,7 +201,7 @@ func (d *OrgDeduplicator) deduplicateOrgInner(ctx context.Context, fragment *mod
 	if cp := strings.TrimSpace(fragment.CanonicalPath); cp != "" {
 		// 0a) Reverse lookup: find an existing org that explicitly lists this canonicalPath as an alias.
 		for _, key := range []string{"merged_paths", "legacy_org_canonical_path", "legacy-org-canonical-path"} {
-			cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, key, cp, models.FragmentTypeOrganization)
+			cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, key, cp, FragmentTypeOrganization)
 			if err == nil && len(cands) > 0 {
 				// If there are multiple candidates (rare), pick the best-quality one.
 				best := chooseBestOrgCandidate(cands)
@@ -225,7 +225,7 @@ func (d *OrgDeduplicator) deduplicateOrgInner(ctx context.Context, fragment *mod
 				continue
 			}
 			existing, err := d.fragmentsRepo.GetByCanonicalPath(ctx, alt)
-			if err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID && existing.Type == models.FragmentTypeOrganization {
+			if err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID && existing.Class == FragmentTypeOrganization {
 				atomic.AddInt64(&d.hitPathVariant, 1)
 				return existing, nil
 			}
@@ -239,7 +239,7 @@ func (d *OrgDeduplicator) deduplicateOrgInner(ctx context.Context, fragment *mod
 	// Example: /org/usa with legalName="United States of America" → /loc/us
 	if d.typeNormalizer != nil {
 		normResult := d.typeNormalizer.NormalizeFragmentType(fragment)
-		if normResult.ShouldNormalize && normResult.NormalizedType == models.FragmentTypeGeoRegion && normResult.MergeWithPath != "" {
+		if normResult.ShouldNormalize && normResult.NormalizedType == FragmentTypeGeoRegion && normResult.MergeWithPath != "" {
 			// This is actually a country! Find the existing GEO_REGION fragment
 			existing, err := d.fragmentsRepo.GetByCanonicalPath(ctx, normResult.MergeWithPath)
 			if err == nil && existing != nil && existing.ID != fragment.ID {
@@ -414,7 +414,7 @@ func (d *OrgDeduplicator) recordDedupAliases(ctx context.Context, loser, winner 
 // - requires exact legalName, and also requires (shortName OR label[en]) to match when provided
 // - forbids conflicting Wikidata IDs
 func (d *OrgDeduplicator) findGovOrgBridgeCandidate(ctx context.Context, fragment *models.HorizonFragment) (*models.HorizonFragment, error) {
-	if d == nil || d.fragmentsRepo == nil || fragment == nil || fragment.Type != models.FragmentTypeOrganization {
+	if d == nil || d.fragmentsRepo == nil || fragment == nil || fragment.Class != FragmentTypeOrganization {
 		return nil, nil
 	}
 	fs := parseOrgPathScope(fragment.CanonicalPath)
@@ -426,7 +426,7 @@ func (d *OrgDeduplicator) findGovOrgBridgeCandidate(ctx context.Context, fragmen
 		return nil, nil
 	}
 
-	cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "legalName", legalName, models.FragmentTypeOrganization)
+	cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "legalName", legalName, FragmentTypeOrganization)
 	if err != nil || len(cands) == 0 {
 		return nil, err
 	}
@@ -437,7 +437,7 @@ func (d *OrgDeduplicator) findGovOrgBridgeCandidate(ctx context.Context, fragmen
 
 	filtered := make([]*models.HorizonFragment, 0, len(cands))
 	for _, c := range cands {
-		if c == nil || c.Type != models.FragmentTypeOrganization || c.ID == "" || c.ID == fragment.ID {
+		if c == nil || c.Class != FragmentTypeOrganization || c.ID == "" || c.ID == fragment.ID {
 			continue
 		}
 		cs := parseOrgPathScope(c.CanonicalPath)
@@ -486,7 +486,7 @@ func (d *OrgDeduplicator) findByWikidataID(ctx context.Context, wikidataID strin
 	}
 
 	// Search by identifier field (returns slice)
-	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "wikidataId", wikidataID, models.FragmentTypeOrganization)
+	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "wikidataId", wikidataID, FragmentTypeOrganization)
 	if err == nil && len(existing) > 0 {
 		return chooseBestOrgCandidate(existing), nil
 	}
@@ -495,7 +495,7 @@ func (d *OrgDeduplicator) findByWikidataID(ctx context.Context, wikidataID strin
 }
 
 func (d *OrgDeduplicator) findByIdentityAnchor(ctx context.Context, fragment *models.HorizonFragment) (*models.HorizonFragment, string, error) {
-	if d == nil || d.fragmentsRepo == nil || fragment == nil || fragment.Type != models.FragmentTypeOrganization {
+	if d == nil || d.fragmentsRepo == nil || fragment == nil || fragment.Class != FragmentTypeOrganization {
 		return nil, "", nil
 	}
 	for _, key := range orgIdentityAnchorPriority {
@@ -504,7 +504,7 @@ func (d *OrgDeduplicator) findByIdentityAnchor(ctx context.Context, fragment *mo
 			continue
 		}
 		for _, probe := range normalizeIdentifierLookupValues(raw) {
-			cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, key, probe, models.FragmentTypeOrganization)
+			cands, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, key, probe, FragmentTypeOrganization)
 			if err != nil || len(cands) == 0 {
 				continue
 			}
@@ -574,7 +574,7 @@ func (d *OrgDeduplicator) findByShortName(ctx context.Context, fragment *models.
 		return nil, nil
 	}
 
-	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", shortName, models.FragmentTypeOrganization)
+	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "shortName", shortName, FragmentTypeOrganization)
 	if err == nil && len(existing) > 0 {
 		existing = filterOrgDedupCandidates(fragment, existing, "short")
 		existing = filterSelfConsistentOrgCandidates(existing)
@@ -602,7 +602,7 @@ func (d *OrgDeduplicator) findByLegalName(ctx context.Context, fragment *models.
 		return nil, nil
 	}
 
-	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "legalName", legalName, models.FragmentTypeOrganization)
+	existing, err := d.fragmentsRepo.FindByIdentifierAndType(ctx, "legalName", legalName, FragmentTypeOrganization)
 	if err == nil && len(existing) > 0 {
 		existing = filterOrgDedupCandidates(fragment, existing, "legal")
 		existing = filterSelfConsistentOrgCandidates(existing)
@@ -618,7 +618,7 @@ func (d *OrgDeduplicator) findByLabelEN(ctx context.Context, fragment *models.Ho
 		return nil, nil
 	}
 
-	existing, err := d.fragmentsRepo.FindByLabel(ctx, "en", labelEN, models.FragmentTypeOrganization)
+	existing, err := d.fragmentsRepo.FindByLabel(ctx, "en", labelEN, FragmentTypeOrganization)
 	if err == nil && len(existing) > 0 {
 		existing = filterOrgDedupCandidates(fragment, existing, "label")
 		existing = filterSelfConsistentOrgCandidates(existing)
@@ -687,7 +687,7 @@ func (d *OrgDeduplicator) findByNormalizedLegalName(ctx context.Context, fragmen
 }
 
 func (d *OrgDeduplicator) findByNameHistory(ctx context.Context, fragment *models.HorizonFragment) (*models.HorizonFragment, error) {
-	if d == nil || d.fragmentsRepo == nil || fragment == nil || fragment.Type != models.FragmentTypeOrganization {
+	if d == nil || d.fragmentsRepo == nil || fragment == nil || fragment.Class != FragmentTypeOrganization {
 		return nil, nil
 	}
 	fragCurrent := collectNormalizedCurrentOrgNames(fragment)
@@ -696,7 +696,7 @@ func (d *OrgDeduplicator) findByNameHistory(ctx context.Context, fragment *model
 		return nil, nil
 	}
 
-	cands, err := d.fragmentsRepo.ListByTypeAndTenant(ctx, "global", models.FragmentTypeOrganization, 800)
+	cands, err := d.fragmentsRepo.ListByTypeAndTenant(ctx, "global", FragmentTypeOrganization, 800)
 	if err != nil || len(cands) == 0 {
 		return nil, err
 	}
@@ -704,7 +704,7 @@ func (d *OrgDeduplicator) findByNameHistory(ctx context.Context, fragment *model
 	fragQID := strings.TrimSpace(extractWikidataIDFromFragment(fragment))
 	matches := make([]*models.HorizonFragment, 0, 8)
 	for _, c := range cands {
-		if c == nil || c.ID == "" || c.ID == fragment.ID || c.Type != models.FragmentTypeOrganization {
+		if c == nil || c.ID == "" || c.ID == fragment.ID || c.Class != FragmentTypeOrganization {
 			continue
 		}
 		// Apply the same jurisdiction safety rails as other non-anchor strategies.
@@ -868,7 +868,7 @@ func filterOrgDedupCandidates(fragment *models.HorizonFragment, cands []*models.
 	}
 	out := make([]*models.HorizonFragment, 0, len(cands))
 	for _, c := range cands {
-		if c == nil || c.Type != models.FragmentTypeOrganization {
+		if c == nil || c.Class != FragmentTypeOrganization {
 			continue
 		}
 		cs := parseOrgPathScope(c.CanonicalPath)
@@ -969,7 +969,7 @@ func chooseBestOrgCandidate(cands []*models.HorizonFragment) *models.HorizonFrag
 	var best *models.HorizonFragment
 	bestScore := -1
 	for _, f := range cands {
-		if f == nil || f.Type != models.FragmentTypeOrganization {
+		if f == nil || f.Class != FragmentTypeOrganization {
 			continue
 		}
 		score := 0
@@ -1028,7 +1028,7 @@ func (d *OrgDeduplicator) findByAlnumFingerprint(ctx context.Context, fragment *
 		return nil, nil
 	}
 
-	cands, err := d.fragmentsRepo.ListByTypeAndTenant(ctx, "global", models.FragmentTypeOrganization, 800)
+	cands, err := d.fragmentsRepo.ListByTypeAndTenant(ctx, "global", FragmentTypeOrganization, 800)
 	if err != nil || len(cands) == 0 {
 		return nil, err
 	}
@@ -1036,7 +1036,7 @@ func (d *OrgDeduplicator) findByAlnumFingerprint(ctx context.Context, fragment *
 	fragQID := strings.TrimSpace(extractWikidataIDFromFragment(fragment))
 	matches := make([]*models.HorizonFragment, 0, 8)
 	for _, c := range cands {
-		if c == nil || c.ID == "" || c.ID == fragment.ID || c.Type != models.FragmentTypeOrganization {
+		if c == nil || c.ID == "" || c.ID == fragment.ID || c.Class != FragmentTypeOrganization {
 			continue
 		}
 		cs := parseOrgPathScope(c.CanonicalPath)
@@ -1187,7 +1187,7 @@ func orgNameAlnumFingerprint(f *models.HorizonFragment) string {
 }
 
 func isLowSignalOrgStub(f *models.HorizonFragment) bool {
-	if f == nil || f.Type != models.FragmentTypeOrganization {
+	if f == nil || f.Class != FragmentTypeOrganization {
 		return false
 	}
 	// Strong identifiers → not a stub.
@@ -1199,7 +1199,7 @@ func isLowSignalOrgStub(f *models.HorizonFragment) bool {
 		return false
 	}
 	// Extra weak signal: generic/incorrect type placement.
-	if f.Type == models.FragmentTypeGeoRegion || strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.CanonicalPath)), "/loc/") {
+	if f.Class == FragmentTypeGeoRegion || strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.CanonicalPath)), "/loc/") {
 		return true
 	}
 	// Default: label-only + weak lifecycle is sufficient for stub classification.

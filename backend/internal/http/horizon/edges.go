@@ -129,9 +129,13 @@ func (h *HorizonHandlers) normalizeEdgeForCreate(ctx context.Context, edge *mode
 	}
 
 	// Normalize relation type via code-defined taxonomy contracts.
-	rawType := strings.TrimSpace(string(edge.Type))
+	rawType := strings.TrimSpace(string(edge.Relation))
 	normType := strings.TrimSpace(taxonomy.NormalizeRelationType(rawType))
-	edge.Type = models.DependencyType(normType)
+	if rel, ok := models.NormalizeWireRelationStrict(normType); ok {
+		edge.Relation = rel
+	} else {
+		edge.Relation = DependencyType(normType)
+	}
 
 	if edge.Qualifiers == nil {
 		edge.Qualifiers = map[string]interface{}{}
@@ -142,15 +146,15 @@ func (h *HorizonHandlers) normalizeEdgeForCreate(ctx context.Context, edge *mode
 	}
 
 	// Canonical representation: SUBSIDIARY_OF is normalized into OWNS (parent -> subsidiary).
-	if edge.Type == models.DependencyTypeSubsidiaryOf {
-		edge.Type = models.DependencyTypeOwns
+	if edge.Relation == DependencyTypeSubsidiaryOf {
+		edge.Relation = DependencyTypeOwns
 		edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
 		edge.Qualifiers["normalizedDirection"] = true
-		edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
+		edge.Qualifiers["normalizedEdgeType"] = string(edge.Relation)
 	}
 
 	// Symmetric edge normalization (avoid A->B and B->A duplicates).
-	edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+	edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 
 	// Resolve endpoint types for direction validation.
 	frRepo := h.service.Fragments()
@@ -167,13 +171,13 @@ func (h *HorizonHandlers) normalizeEdgeForCreate(ctx context.Context, edge *mode
 	// Canonicalize certain mis-modeled edges where reversing is not sufficient.
 	// Example: PRODUCT OWNS ORGANIZATION should become ORGANIZATION PRODUCES PRODUCT (not ORG OWNS PRODUCT).
 	// Use path-aware canonicalization to handle community subtypes (dynasty/tribe).
-	if newType, shouldSwap, changed, reason := scout.CanonicalizeEdgeWithPaths(edge.Type, srcFrag.Type, dstFrag.Type, srcFrag.CanonicalPath, dstFrag.CanonicalPath); changed {
-		oldType := edge.Type
-		edge.Type = newType
+	if newType, shouldSwap, changed, reason := scout.CanonicalizeEdgeWithPaths(edge.Relation, srcFrag.Class, dstFrag.Class, srcFrag.CanonicalPath, dstFrag.CanonicalPath); changed {
+		oldType := edge.Relation
+		edge.Relation = newType
 		edge.Qualifiers["canonicalized"] = true
 		edge.Qualifiers["canonicalizedFromEdgeType"] = string(oldType)
 		edge.Qualifiers["canonicalizationReason"] = reason
-		edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
+		edge.Qualifiers["normalizedEdgeType"] = string(edge.Relation)
 		if shouldSwap {
 			edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
 			edge.Qualifiers["normalizedDirection"] = true
@@ -181,18 +185,18 @@ func (h *HorizonHandlers) normalizeEdgeForCreate(ctx context.Context, edge *mode
 			srcFrag, dstFrag = dstFrag, srcFrag
 		}
 		// Re-apply symmetric normalization after any swap/type-change (noop for non-symmetric).
-		edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+		edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 	}
 
 	// Enforce direction policies (FOUNDED, EMPLOYED_BY, MANAGES, KEY_PERSON, etc.).
-	if valid, shouldReverse, rule := scout.ValidateEdgeDirection(edge.Type, srcFrag.Type, dstFrag.Type); !valid {
+	if valid, shouldReverse, rule := scout.ValidateEdgeDirection(edge.Relation, srcFrag.Class, dstFrag.Class); !valid {
 		if shouldReverse {
 			edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
 			edge.Qualifiers["normalizedDirection"] = true
 			// Re-apply symmetric normalization after swap (noop for non-symmetric).
-			edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+			edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 		} else if rule != nil {
-			return fmt.Errorf("invalid edge direction for %s: %s", edge.Type, rule.Description)
+			return fmt.Errorf("invalid edge direction for %s: %s", edge.Relation, rule.Description)
 		}
 	}
 
@@ -222,7 +226,7 @@ func (h *HorizonHandlers) publishEdgeUpserted(ctx context.Context, authTenant st
 		"targetCanonicalPath": "",
 		"sourceLabel":         "",
 		"targetLabel":         "",
-		"type":                string(edge.Type),
+		"type":                string(edge.Relation),
 		"properties":          edge.Properties,
 		"qualifiers":          edge.Qualifiers,
 		"ts":                  time.Now().UTC().Format(time.RFC3339Nano),
@@ -538,9 +542,9 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 	includeUnindexed := includeUnindexedStr == "1" || strings.EqualFold(includeUnindexedStr, "true")
 	edgeTypeStr := r.URL.Query().Get("type")
 
-	var edgeType *models.DependencyType
+	var edgeType *DependencyType
 	if edgeTypeStr != "" {
-		dt := models.DependencyType(edgeTypeStr)
+		dt := DependencyType(edgeTypeStr)
 		edgeType = &dt
 	}
 
@@ -746,7 +750,7 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 			if e == nil {
 				continue
 			}
-			et := strings.ToUpper(strings.TrimSpace(string(e.Type)))
+			et := strings.ToUpper(strings.TrimSpace(string(e.Relation)))
 			if _, ok := allow[et]; ok {
 				filtered = append(filtered, e)
 			}
@@ -793,7 +797,7 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 			if e == nil {
 				continue
 			}
-			et := strings.ToUpper(strings.TrimSpace(string(e.Type)))
+			et := strings.ToUpper(strings.TrimSpace(string(e.Relation)))
 
 			rawDir := "" // incoming|outgoing
 			if strings.TrimSpace(e.SourceFragmentID) == fragmentID {
@@ -929,7 +933,7 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 			if e == nil {
 				continue
 			}
-			et := strings.ToUpper(strings.TrimSpace(string(e.Type)))
+			et := strings.ToUpper(strings.TrimSpace(string(e.Relation)))
 			if et == "" {
 				et = "OTHER"
 			}
@@ -1046,7 +1050,7 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 				if e == nil {
 					continue
 				}
-				et := strings.ToUpper(strings.TrimSpace(string(e.Type)))
+				et := strings.ToUpper(strings.TrimSpace(string(e.Relation)))
 				if et == "" {
 					et = "OTHER"
 				}
@@ -1110,7 +1114,7 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 			if e == nil {
 				continue
 			}
-			et := strings.ToUpper(strings.TrimSpace(string(e.Type)))
+			et := strings.ToUpper(strings.TrimSpace(string(e.Relation)))
 			if et == "" {
 				et = "OTHER"
 			}

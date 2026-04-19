@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 )
 
@@ -48,10 +47,10 @@ func (r *SupplyChainOrgResolver) Resolve(ctx context.Context, tenantID string, p
 		}
 	}
 
-	edgeTypes := []models.DependencyType{
-		models.DependencyTypeOwns,
-		models.DependencyTypeControls,
-		models.DependencyTypeOperatesIn,
+	edgeTypes := []DependencyType{
+		DependencyTypeOwns,
+		DependencyTypeControls,
+		DependencyTypeOperatesIn,
 	}
 
 	for _, facPath := range facPaths {
@@ -74,7 +73,7 @@ func (r *SupplyChainOrgResolver) traverseToOrg(
 	tenantID string,
 	startFacID string,
 	pathToID map[string]string,
-	edgeTypes []models.DependencyType,
+	edgeTypes []DependencyType,
 ) string {
 	visited := map[string]struct{}{startFacID: {}}
 	type levelNode struct {
@@ -121,7 +120,7 @@ func (r *SupplyChainOrgResolver) traverseToOrg(
 					srcPath = idToPath[sourceID]
 				}
 				// ORG found: /org/ or /gov/
-				if srcFrag.Type == models.FragmentTypeOrganization ||
+				if srcFrag.Class == FragmentTypeOrganization ||
 					strings.HasPrefix(srcPath, "/org/") ||
 					strings.HasPrefix(srcPath, "/gov/") {
 					return srcPath

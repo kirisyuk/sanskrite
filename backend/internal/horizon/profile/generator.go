@@ -101,7 +101,7 @@ func (g *Generator) Generate(ctx context.Context, fragmentID string, opts Genera
 	var genModel string
 	var genNotes string
 
-	isGov := fragment.Type == models.FragmentTypeOrganization &&
+	isGov := fragment.Class == FragmentTypeOrganization &&
 		strings.HasPrefix(strings.ToLower(strings.TrimSpace(fragment.CanonicalPath)), "/gov/")
 
 	// Detect COMMUNITY subtypes: dynasty and tribe
@@ -110,7 +110,7 @@ func (g *Generator) Generate(ctx context.Context, fragmentID string, opts Genera
 	canonicalPathLower := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
 	isDynasty := false
 	isTribe := false
-	if fragment.Type == models.FragmentTypeCommunity {
+	if fragment.Class == FragmentTypeCommunity {
 		// Check canonical path for /community/{geo}/dynasty/... or /community/{geo}/tribe/...
 		pathParts := strings.Split(strings.TrimPrefix(canonicalPathLower, "/"), "/")
 		if len(pathParts) >= 3 && pathParts[0] == "community" {
@@ -154,7 +154,7 @@ func (g *Generator) Generate(ctx context.Context, fragmentID string, opts Genera
 		profile = p
 		genModel = usedModel
 		genNotes = notes
-	} else if fragment.Type == models.FragmentTypeMarket {
+	} else if fragment.Class == FragmentTypeMarket {
 		// For markets, use multi-step generation (one request per section + dashboard synthesis)
 		p, usedModel, notes, err := g.generateMarketProfileMultiStep(ctx, fragment, graphContext)
 		if err != nil {
@@ -163,7 +163,7 @@ func (g *Generator) Generate(ctx context.Context, fragmentID string, opts Genera
 		profile = p
 		genModel = usedModel
 		genNotes = notes
-	} else if fragment.Type == models.FragmentTypeOrganization && !isGov {
+	} else if fragment.Class == FragmentTypeOrganization && !isGov {
 		p, usedModel, notes, err := g.generateOrgProfileMultiStep(ctx, fragment, graphContext)
 		if err != nil {
 			return nil, err
@@ -171,7 +171,7 @@ func (g *Generator) Generate(ctx context.Context, fragmentID string, opts Genera
 		profile = p
 		genModel = usedModel
 		genNotes = notes
-	} else if fragment.Type == models.FragmentTypeProgram {
+	} else if fragment.IsLegacyProgram() {
 		// PROGRAM uses multi-step generation with program-specific structure.
 		p, usedModel, notes, err := g.generateProgramProfileMultiStep(ctx, fragment, graphContext)
 		if err != nil {
@@ -243,7 +243,7 @@ func (g *Generator) Generate(ctx context.Context, fragmentID string, opts Genera
 	result.DurationMs = int(time.Since(startTime).Milliseconds())
 
 	log.Printf("[ProfileGenerator] Generated profile for %s (%s) in %dms",
-		fragment.CanonicalPath, fragment.Type, result.DurationMs)
+		fragment.CanonicalPath, fragment.Class, result.DurationMs)
 
 	return result, nil
 }
@@ -403,7 +403,7 @@ func (g *Generator) generateMarketProfileMultiStep(
 	now := time.Now().UTC()
 	profile := &models.FragmentProfile{
 		FragmentID:    fragment.ID,
-		FragmentType:  fragment.Type,
+		FragmentClass: fragment.Class,
 		CanonicalPath: fragment.CanonicalPath,
 		Version:       2,
 		CapturedAt:    now,
@@ -413,7 +413,7 @@ func (g *Generator) generateMarketProfileMultiStep(
 		UpdatedAt:     now,
 	}
 
-	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
+	sections := entity_semantics.ProfileSectionsForType(fragment.Class, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range sections {
 		sectionOrder[s.Key] = s.Order
@@ -543,7 +543,7 @@ func (g *Generator) generateOrgProfileMultiStep(
 	now := time.Now().UTC()
 	profile := &models.FragmentProfile{
 		FragmentID:    fragment.ID,
-		FragmentType:  fragment.Type,
+		FragmentClass: fragment.Class,
 		CanonicalPath: fragment.CanonicalPath,
 		Version:       2,
 		CapturedAt:    now,
@@ -553,7 +553,7 @@ func (g *Generator) generateOrgProfileMultiStep(
 		UpdatedAt:     now,
 	}
 
-	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
+	sections := entity_semantics.ProfileSectionsForType(fragment.Class, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range sections {
 		sectionOrder[s.Key] = s.Order
@@ -678,7 +678,7 @@ func (g *Generator) generateGovProfileMultiStep(
 	now := time.Now().UTC()
 	profile := &models.FragmentProfile{
 		FragmentID:    fragment.ID,
-		FragmentType:  fragment.Type,
+		FragmentClass: fragment.Class,
 		CanonicalPath: fragment.CanonicalPath,
 		Version:       2,
 		CapturedAt:    now,
@@ -688,7 +688,7 @@ func (g *Generator) generateGovProfileMultiStep(
 		UpdatedAt:     now,
 	}
 
-	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
+	sections := entity_semantics.ProfileSectionsForType(fragment.Class, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range sections {
 		sectionOrder[s.Key] = s.Order
@@ -815,7 +815,7 @@ func (g *Generator) generateDynastyProfileMultiStep(
 	now := time.Now().UTC()
 	profile := &models.FragmentProfile{
 		FragmentID:    fragment.ID,
-		FragmentType:  fragment.Type,
+		FragmentClass: fragment.Class,
 		CanonicalPath: fragment.CanonicalPath,
 		Version:       2,
 		CapturedAt:    now,
@@ -825,7 +825,7 @@ func (g *Generator) generateDynastyProfileMultiStep(
 		UpdatedAt:     now,
 	}
 
-	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
+	sections := entity_semantics.ProfileSectionsForType(fragment.Class, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range sections {
 		sectionOrder[s.Key] = s.Order
@@ -952,7 +952,7 @@ func (g *Generator) generateTribeProfileMultiStep(
 	now := time.Now().UTC()
 	profile := &models.FragmentProfile{
 		FragmentID:    fragment.ID,
-		FragmentType:  fragment.Type,
+		FragmentClass: fragment.Class,
 		CanonicalPath: fragment.CanonicalPath,
 		Version:       2,
 		CapturedAt:    now,
@@ -962,7 +962,7 @@ func (g *Generator) generateTribeProfileMultiStep(
 		UpdatedAt:     now,
 	}
 
-	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
+	sections := entity_semantics.ProfileSectionsForType(fragment.Class, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range sections {
 		sectionOrder[s.Key] = s.Order
@@ -1089,7 +1089,7 @@ func (g *Generator) generateProgramProfileMultiStep(
 	now := time.Now().UTC()
 	profile := &models.FragmentProfile{
 		FragmentID:    fragment.ID,
-		FragmentType:  fragment.Type,
+		FragmentClass: fragment.Class,
 		CanonicalPath: fragment.CanonicalPath,
 		Version:       2,
 		CapturedAt:    now,
@@ -1099,7 +1099,7 @@ func (g *Generator) generateProgramProfileMultiStep(
 		UpdatedAt:     now,
 	}
 
-	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
+	sections := entity_semantics.ProfileSectionsForType(fragment.Class, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range sections {
 		sectionOrder[s.Key] = s.Order
@@ -1224,7 +1224,7 @@ func (g *Generator) buildMarketSectionPrompt(
 	// Build entity context
 	entityContext := map[string]any{
 		"canonicalPath": fragment.CanonicalPath,
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"labels":        fragment.Labels,
 		"description":   fragment.Description,
 	}
@@ -1347,7 +1347,7 @@ func (g *Generator) buildMarketDashboardPrompt(
 	asOf := time.Now().UTC().Format("2006-01-02")
 	entityContext := map[string]any{
 		"canonicalPath": fragment.CanonicalPath,
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"labels":        fragment.Labels,
 		"description":   fragment.Description,
 	}
@@ -1499,7 +1499,7 @@ func (g *Generator) buildOrgSectionPrompt(
 	asOf := time.Now().UTC().Format("2006-01-02")
 	entityContext := map[string]any{
 		"canonicalPath": fragment.CanonicalPath,
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"labels":        fragment.Labels,
 		"description":   fragment.Description,
 	}
@@ -1622,7 +1622,7 @@ func (g *Generator) buildGovSectionPrompt(
 	asOf := time.Now().UTC().Format("2006-01-02")
 	entityContext := map[string]any{
 		"canonicalPath": fragment.CanonicalPath,
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"labels":        fragment.Labels,
 		"description":   fragment.Description,
 	}
@@ -1745,7 +1745,7 @@ func (g *Generator) buildOrgDashboardPrompt(
 	asOf := time.Now().UTC().Format("2006-01-02")
 	entityContext := map[string]any{
 		"canonicalPath": fragment.CanonicalPath,
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"labels":        fragment.Labels,
 		"description":   fragment.Description,
 	}
@@ -1866,7 +1866,7 @@ func (g *Generator) buildGovDashboardPrompt(
 	asOf := time.Now().UTC().Format("2006-01-02")
 	entityContext := map[string]any{
 		"canonicalPath": fragment.CanonicalPath,
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"labels":        fragment.Labels,
 		"description":   fragment.Description,
 	}
@@ -1975,7 +1975,7 @@ func (g *Generator) buildDynastySectionPrompt(
 	asOf := time.Now().UTC().Format("2006-01-02")
 	entityContext := map[string]any{
 		"canonicalPath": fragment.CanonicalPath,
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"labels":        fragment.Labels,
 		"description":   fragment.Description,
 	}
@@ -2104,7 +2104,7 @@ func (g *Generator) buildDynastyDashboardPrompt(
 	asOf := time.Now().UTC().Format("2006-01-02")
 	entityContext := map[string]any{
 		"canonicalPath": fragment.CanonicalPath,
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"labels":        fragment.Labels,
 		"description":   fragment.Description,
 	}
@@ -2220,7 +2220,7 @@ func (g *Generator) buildTribeSectionPrompt(
 	asOf := time.Now().UTC().Format("2006-01-02")
 	entityContext := map[string]any{
 		"canonicalPath": fragment.CanonicalPath,
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"labels":        fragment.Labels,
 		"description":   fragment.Description,
 	}
@@ -2350,7 +2350,7 @@ func (g *Generator) buildTribeDashboardPrompt(
 	asOf := time.Now().UTC().Format("2006-01-02")
 	entityContext := map[string]any{
 		"canonicalPath": fragment.CanonicalPath,
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"labels":        fragment.Labels,
 		"description":   fragment.Description,
 	}
@@ -2455,7 +2455,7 @@ func (g *Generator) buildProgramSectionPrompt(
 	asOf := time.Now().UTC().Format("2006-01-02")
 	entityContext := map[string]any{
 		"canonicalPath": fragment.CanonicalPath,
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"labels":        fragment.Labels,
 		"description":   fragment.Description,
 	}
@@ -2584,7 +2584,7 @@ func (g *Generator) buildProgramDashboardPrompt(
 	asOf := time.Now().UTC().Format("2006-01-02")
 	entityContext := map[string]any{
 		"canonicalPath": fragment.CanonicalPath,
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"labels":        fragment.Labels,
 		"description":   fragment.Description,
 	}
@@ -2880,11 +2880,11 @@ func (g *Generator) gatherGraphContext(ctx context.Context, fragment *models.Hor
 
 	for _, edge := range outEdges {
 		neighborIDs[edge.TargetFragmentID] = struct{}{}
-		edgeTypes[string(edge.Type)] = struct{}{}
+		edgeTypes[string(edge.Relation)] = struct{}{}
 	}
 	for _, edge := range inEdges {
 		neighborIDs[edge.SourceFragmentID] = struct{}{}
-		edgeTypes[string(edge.Type)] = struct{}{}
+		edgeTypes[string(edge.Relation)] = struct{}{}
 	}
 
 	summary.EdgeCount = len(outEdges) + len(inEdges)
@@ -2923,7 +2923,7 @@ func (g *Generator) gatherGraphContext(ctx context.Context, fragment *models.Hor
 // buildPrompt builds the LLM prompt for profile generation.
 func (g *Generator) buildPrompt(fragment *models.HorizonFragment, graphContext *models.GraphContextSummary) string {
 	asOf := time.Now().UTC().Format("2006-01-02")
-	sections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
+	sections := entity_semantics.ProfileSectionsForType(fragment.Class, fragment.CanonicalPath, fragment.CommunityType)
 	sectionSpecs := make([]map[string]any, 0, len(sections))
 	for _, s := range sections {
 		sectionSpecs = append(sectionSpecs, map[string]any{
@@ -2938,7 +2938,7 @@ func (g *Generator) buildPrompt(fragment *models.HorizonFragment, graphContext *
 	// Build entity context
 	entityContext := map[string]any{
 		"canonicalPath": fragment.CanonicalPath,
-		"type":          string(fragment.Type),
+		"type":          string(fragment.Class),
 		"labels":        fragment.Labels,
 		"description":   fragment.Description,
 	}
@@ -3033,7 +3033,7 @@ func (g *Generator) parseResult(
 	now := time.Now().UTC()
 	profile := &models.FragmentProfile{
 		FragmentID:    fragment.ID,
-		FragmentType:  fragment.Type,
+		FragmentClass: fragment.Class,
 		CanonicalPath: fragment.CanonicalPath,
 		Version:       1,
 		CapturedAt:    now,
@@ -3044,7 +3044,7 @@ func (g *Generator) parseResult(
 	}
 
 	// Convert sections
-	defaultSections := entity_semantics.ProfileSectionsForType(fragment.Type, fragment.CanonicalPath, fragment.CommunityType)
+	defaultSections := entity_semantics.ProfileSectionsForType(fragment.Class, fragment.CanonicalPath, fragment.CommunityType)
 	sectionOrder := make(map[string]int)
 	for _, s := range defaultSections {
 		sectionOrder[s.Key] = s.Order

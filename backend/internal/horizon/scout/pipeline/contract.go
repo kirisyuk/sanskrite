@@ -34,8 +34,8 @@ type FragmentsReader interface {
 
 // EdgesReader is a minimal edges repository interface for contract handlers.
 type EdgesReader interface {
-	ListBySource(ctx context.Context, tenantID, sourceFragmentID string, edgeType *models.DependencyType, limit int) ([]*models.DependencyEdge, error)
-	ListByTarget(ctx context.Context, tenantID, targetFragmentID string, edgeType *models.DependencyType, limit int) ([]*models.DependencyEdge, error)
+	ListBySource(ctx context.Context, tenantID, sourceFragmentID string, edgeType *DependencyType, limit int) ([]*models.DependencyEdge, error)
+	ListByTarget(ctx context.Context, tenantID, targetFragmentID string, edgeType *DependencyType, limit int) ([]*models.DependencyEdge, error)
 }
 
 type ContractInput struct {

@@ -707,7 +707,7 @@ func (b *SupplyChainPathBuilder) checkProductTransformation(
 
 	found := false
 	for _, edge := range edges {
-		if models.IsProductTransitionEdgeType(edge.Type) && edge.TargetFragmentID == downstreamFrag.ID {
+		if IsProductTransitionEdgeType(edge.Relation) && edge.TargetFragmentID == downstreamFrag.ID {
 			found = true
 			break
 		}
@@ -1864,7 +1864,7 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 
 			// Check if products are connected via canonical product transition (optional)
 			// For now, we'll add it as "optional" mode
-			relation := string(models.ProductToProductEdgeTypeFromPaths(segment.ProductRef, nextSegment.ProductRef))
+			relation := string(ProductToProductEdgeTypeFromPaths(segment.ProductRef, nextSegment.ProductRef))
 			mode := "optional"
 			edges = append(edges, models.SupplyChainPathEdge{
 				Type:             "ONTOLOGY",
@@ -1908,7 +1908,7 @@ func buildPathEdgeQualifiers(segment PathSegment, leg models.SupplyChainPathLeg,
 		"legOrder":          legOrder,
 	}
 	if strings.TrimSpace(leg.Mode) != "" {
-		qualifiers[models.QualifierRouteMode] = strings.TrimSpace(leg.Mode)
+		qualifiers[QualifierRouteMode] = strings.TrimSpace(leg.Mode)
 	}
 	if strings.TrimSpace(leg.RouteVariantKey) != "" {
 		qualifiers["route_variant_key"] = strings.TrimSpace(leg.RouteVariantKey)
@@ -1917,44 +1917,44 @@ func buildPathEdgeQualifiers(segment PathSegment, leg models.SupplyChainPathLeg,
 		qualifiers["route_geometry_source"] = strings.TrimSpace(leg.RouteGeometrySource)
 	}
 	if len(leg.GeoRefs) > 0 {
-		qualifiers[models.QualifierGeoRefs] = append([]string(nil), leg.GeoRefs...)
+		qualifiers[QualifierGeoRefs] = append([]string(nil), leg.GeoRefs...)
 	}
 	if len(leg.FlowRefs) > 0 {
-		qualifiers[models.QualifierFlowRefs] = append([]string(nil), leg.FlowRefs...)
+		qualifiers[QualifierFlowRefs] = append([]string(nil), leg.FlowRefs...)
 	}
 	if len(leg.AlternateFlowRefs) > 0 {
-		qualifiers[models.QualifierAlternateFlowRefs] = append([]string(nil), leg.AlternateFlowRefs...)
+		qualifiers[QualifierAlternateFlowRefs] = append([]string(nil), leg.AlternateFlowRefs...)
 	}
 	if len(leg.ZoneRefs) > 0 {
-		qualifiers[models.QualifierZoneRefs] = append([]string(nil), leg.ZoneRefs...)
+		qualifiers[QualifierZoneRefs] = append([]string(nil), leg.ZoneRefs...)
 	}
 	if len(leg.AffectedZoneRefs) > 0 {
-		qualifiers[models.QualifierAffectedZoneRefs] = append([]string(nil), leg.AffectedZoneRefs...)
+		qualifiers[QualifierAffectedZoneRefs] = append([]string(nil), leg.AffectedZoneRefs...)
 	}
 	if len(leg.SpatialSemantics) > 0 {
-		qualifiers[models.QualifierSpatialSemantics] = append([]string(nil), leg.SpatialSemantics...)
+		qualifiers[QualifierSpatialSemantics] = append([]string(nil), leg.SpatialSemantics...)
 	}
 	if leg.BindingConfidence > 0 {
-		qualifiers[models.QualifierBindingConfidence] = leg.BindingConfidence
+		qualifiers[QualifierBindingConfidence] = leg.BindingConfidence
 	}
 	if leg.Stress != nil {
 		if leg.Stress.StressScore > 0 {
-			qualifiers[models.QualifierPathStressScore] = leg.Stress.StressScore
+			qualifiers[QualifierPathStressScore] = leg.Stress.StressScore
 		}
 		if leg.Stress.Fragility > 0 {
-			qualifiers[models.QualifierPathFragility] = leg.Stress.Fragility
+			qualifiers[QualifierPathFragility] = leg.Stress.Fragility
 		}
 		if leg.Stress.Rerouteability > 0 {
-			qualifiers[models.QualifierPathRerouteability] = leg.Stress.Rerouteability
+			qualifiers[QualifierPathRerouteability] = leg.Stress.Rerouteability
 		}
 		if leg.Stress.ZonePressure > 0 {
-			qualifiers[models.QualifierPathZonePressure] = leg.Stress.ZonePressure
+			qualifiers[QualifierPathZonePressure] = leg.Stress.ZonePressure
 		}
 		if leg.Stress.AffectedZonePressure > 0 {
-			qualifiers[models.QualifierPathAffectedPressure] = leg.Stress.AffectedZonePressure
+			qualifiers[QualifierPathAffectedPressure] = leg.Stress.AffectedZonePressure
 		}
 		if leg.Stress.RecoveryLatencyHrs > 0 {
-			qualifiers[models.QualifierRecoveryLatencyHours] = leg.Stress.RecoveryLatencyHrs
+			qualifiers[QualifierRecoveryLatencyHours] = leg.Stress.RecoveryLatencyHrs
 		}
 		if len(leg.Stress.DominantFactors) > 0 {
 			qualifiers["dominantFactors"] = append([]string(nil), leg.Stress.DominantFactors...)
@@ -1962,7 +1962,7 @@ func buildPathEdgeQualifiers(segment PathSegment, leg models.SupplyChainPathLeg,
 	}
 	if len(segment.TransportViaRefs) > 0 {
 		qualifiers["transportViaCount"] = len(segment.TransportViaRefs)
-		qualifiers[models.QualifierTransportVia] = append([]string(nil), segment.TransportViaRefs...)
+		qualifiers[QualifierTransportVia] = append([]string(nil), segment.TransportViaRefs...)
 	}
 	if strings.TrimSpace(leg.VesselType) != "" {
 		qualifiers["vesselType"] = strings.TrimSpace(leg.VesselType)

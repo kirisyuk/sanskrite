@@ -11,7 +11,8 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
@@ -331,8 +332,8 @@ func (pc *PolicyChecker) checkFragmentPath(ctx context.Context, frag *horizonmod
 
 	// Type/path mismatches happen in the wild (e.g., stale type with corrected canonicalPath).
 	// Keep validating by path namespace to avoid emitting namespace-specific fixes for the wrong entity family.
-	if !IsCanonicalPathAllowedForType(frag.Type, path) {
-		expectedPrefix := ExpectedCanonicalPathPrefix(frag.Type)
+	if !IsCanonicalPathAllowedForType(frag.Class, frag.Subtype, path) {
+		expectedPrefix := ExpectedCanonicalPathPrefix(frag.Class, frag.Subtype)
 		violations = append(violations, PolicyViolation{
 			ID:          uuid.New().String(),
 			Type:        ViolationTypeMismatch,
@@ -340,7 +341,7 @@ func (pc *PolicyChecker) checkFragmentPath(ctx context.Context, frag *horizonmod
 			FragmentID:  frag.ID,
 			ActualValue: path,
 			Rule:        "fragment_type_path_namespace",
-			Description: fmt.Sprintf("Fragment type %s is incompatible with canonical path %q (expected prefix %q)", frag.Type, path, expectedPrefix),
+			Description: fmt.Sprintf("Fragment type %s/%s is incompatible with canonical path %q (expected prefix %q)", frag.Class, frag.Subtype, path, expectedPrefix),
 			Confidence:  1.0,
 			AutoFixable: false,
 			DetectedAt:  time.Now(),
@@ -955,7 +956,7 @@ func (pc *PolicyChecker) checkMechanismPath(_ context.Context, frag *horizonmode
 	slug := parts[2]
 
 	// Validate category is one of the allowed values
-	if !horizonmodels.IsValidMechanismCategory(category) {
+	if !IsValidMechanismCategory(category) {
 		violations = append(violations, PolicyViolation{
 			ID:          uuid.New().String(),
 			Type:        ViolationPathFormat,
@@ -1013,7 +1014,7 @@ func (pc *PolicyChecker) checkEdge(ctx context.Context, _ string, edge *horizonm
 	var violations []PolicyViolation
 
 	// Check for self-loop
-	if horizonmodels.IsSelfLoop(edge.SourceFragmentID, edge.TargetFragmentID) {
+	if IsSelfLoopIDs(edge.SourceFragmentID, edge.TargetFragmentID) {
 		violations = append(violations, PolicyViolation{
 			ID:          uuid.New().String(),
 			Type:        ViolationSelfLoop,
@@ -1046,7 +1047,7 @@ func (pc *PolicyChecker) checkEdge(ctx context.Context, _ string, edge *horizonm
 			Type:        ViolationOrphanedEdge,
 			Severity:    SeverityCritical,
 			EdgeID:      edge.ID,
-			ActualValue: fmt.Sprintf("%s -> %s [%s]", edge.SourceFragmentID, edge.TargetFragmentID, edge.Type),
+			ActualValue: fmt.Sprintf("%s -> %s [%s]", edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation),
 			Rule:        "no_orphaned_edges",
 			Description: fmt.Sprintf("Edge has missing endpoint: %v", err),
 			Confidence:  1.0,
@@ -1063,8 +1064,8 @@ func (pc *PolicyChecker) checkEdge(ctx context.Context, _ string, edge *horizonm
 		})
 		return violations
 	}
-	sourceType := sourceFrag.Type
-	targetType := targetFrag.Type
+	sourceType := sourceFrag.Class
+	targetType := targetFrag.Class
 	sourcePath := sourceFrag.CanonicalPath
 	targetPath := targetFrag.CanonicalPath
 
@@ -1103,12 +1104,12 @@ func (pc *PolicyChecker) checkEdge(ctx context.Context, _ string, edge *horizonm
 	if !alreadyCanonicalized {
 		reason, _ := edge.Qualifiers["reason"].(string)
 		canon := ApplyEdgeCanonicalizationPolicy(EdgeCanonicalizationInput{
-			EdgeType:        edge.Type,
+			EdgeType:        edge.Relation,
 			SourceType:      sourceType,
 			TargetType:      targetType,
 			SourcePath:      sourcePath,
 			TargetPath:      targetPath,
-			RawRelationType: string(edge.Type),
+			RawRelationType: string(edge.Relation),
 			Reason:          strings.TrimSpace(reason),
 			Qualifiers:      edge.Qualifiers,
 		})
@@ -1118,7 +1119,7 @@ func (pc *PolicyChecker) checkEdge(ctx context.Context, _ string, edge *horizonm
 				Type:        ViolationTypeMismatch,
 				Severity:    SeverityWarning,
 				EdgeID:      edge.ID,
-				ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
+				ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Relation),
 				Rule:        "edge_canonicalization",
 				Description: canon.Reason,
 				Confidence:  0.9,
@@ -1142,9 +1143,9 @@ func (pc *PolicyChecker) checkEdge(ctx context.Context, _ string, edge *horizonm
 	}
 
 	// Check symmetric edge normalization
-	if pc.taxonomyRules.IsSymmetricEdge(edge.Type) {
-		normalizedSource, normalizedTarget, _, swapped := horizonmodels.NormalizeSymmetricEdge(
-			edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+	if pc.taxonomyRules.IsSymmetricEdge(edge.Relation) {
+		normalizedSource, normalizedTarget, _, swapped := NormalizeSymmetricEdge(
+			edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 		if swapped {
 			violations = append(violations, PolicyViolation{
 				ID:            uuid.New().String(),
@@ -1154,7 +1155,7 @@ func (pc *PolicyChecker) checkEdge(ctx context.Context, _ string, edge *horizonm
 				ActualValue:   fmt.Sprintf("%s -> %s", edge.SourceFragmentID, edge.TargetFragmentID),
 				ExpectedValue: fmt.Sprintf("%s -> %s", normalizedSource, normalizedTarget),
 				Rule:          "symmetric_edge_normalization",
-				Description:   fmt.Sprintf("Symmetric edge %s should have lexicographically ordered endpoints", edge.Type),
+				Description:   fmt.Sprintf("Symmetric edge %s should have lexicographically ordered endpoints", edge.Relation),
 				Confidence:    1.0,
 				AutoFixable:   true,
 				SuggestedFix: &EnforcementTask{
@@ -1178,7 +1179,7 @@ func (pc *PolicyChecker) checkEdge(ctx context.Context, _ string, edge *horizonm
 func (pc *PolicyChecker) checkEdgeDirectionWithValidationPolicy(
 	ctx context.Context,
 	edge *horizonmodels.DependencyEdge,
-	sourceType, targetType horizonmodels.FragmentType,
+	sourceType, targetType ah.FragmentClass,
 	sourcePath, targetPath string,
 ) ([]PolicyViolation, PolicyDecision, error) {
 	input := PolicyInput{
@@ -1191,7 +1192,7 @@ func (pc *PolicyChecker) checkEdgeDirectionWithValidationPolicy(
 			"targetType":          string(targetType),
 			"sourceCanonicalPath": sourcePath,
 			"targetCanonicalPath": targetPath,
-			"relationType":        string(edge.Type),
+			"relationType":        string(edge.Relation),
 		},
 		Edge: edge,
 	}
@@ -1201,7 +1202,7 @@ func (pc *PolicyChecker) checkEdgeDirectionWithValidationPolicy(
 	}
 	decision = NormalizeValidationDecision(decision)
 
-	actual := fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type)
+	actual := fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Relation)
 	switch decision.Action {
 	case ActionReverse:
 		return []PolicyViolation{
@@ -1212,7 +1213,7 @@ func (pc *PolicyChecker) checkEdgeDirectionWithValidationPolicy(
 				EdgeID:      edge.ID,
 				ActualValue: actual,
 				ExpectedValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]",
-					edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, edge.Type),
+					edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, edge.Relation),
 				Rule:        "edge_direction",
 				Description: decisionReason(decision, "edge direction invalid, reversible"),
 				Confidence:  decision.Confidence,
@@ -1295,7 +1296,7 @@ func (pc *PolicyChecker) checkEdgeDirectionWithValidationPolicy(
 					EdgeID:      edge.ID,
 					ActualValue: actual,
 					ExpectedValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]",
-						edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, edge.Type),
+						edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, edge.Relation),
 					Rule:        "edge_direction",
 					Description: decisionReason(decision, "auto_fix direction"),
 					Confidence:  decision.Confidence,
@@ -1329,7 +1330,7 @@ func (pc *PolicyChecker) checkEdgeDirectionWithValidationPolicy(
 			DetectedBy:  "deterministic",
 		}
 		if shouldReverse {
-			v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, edge.Type)
+			v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, edge.Relation)
 			v.SuggestedFix = &EnforcementTask{
 				Type:     TaskReverseEdge,
 				TargetID: edge.ID,
@@ -1343,17 +1344,17 @@ func (pc *PolicyChecker) checkEdgeDirectionWithValidationPolicy(
 
 func (pc *PolicyChecker) checkEdgeDirectionLegacy(
 	edge *horizonmodels.DependencyEdge,
-	sourceType, targetType horizonmodels.FragmentType,
+	sourceType, targetType ah.FragmentClass,
 ) []PolicyViolation {
 	var violations []PolicyViolation
 
-	isValid, shouldReverse, reason := pc.taxonomyRules.ValidateEdgeDirection(edge.Type, sourceType, targetType)
+	isValid, shouldReverse, reason := pc.taxonomyRules.ValidateEdgeDirection(edge.Relation, sourceType, targetType)
 	if isValid {
 		return violations
 	}
 
 	if !shouldReverse {
-		if fix, ok := ResolveEdgeDirectionAutoFix(edge.Type, sourceType, targetType); ok {
+		if fix, ok := ResolveEdgeDirectionAutoFix(edge.Relation, sourceType, targetType); ok {
 			expectedSourceID := edge.SourceFragmentID
 			expectedTargetID := edge.TargetFragmentID
 			expectedSourceType := sourceType
@@ -1368,7 +1369,7 @@ func (pc *PolicyChecker) checkEdgeDirectionLegacy(
 				Type:        ViolationEdgeDirection,
 				Severity:    SeverityWarning,
 				EdgeID:      edge.ID,
-				ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
+				ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Relation),
 				Rule:        "edge_direction",
 				Description: fix.Reason,
 				Confidence:  fix.Confidence,
@@ -1401,7 +1402,7 @@ func (pc *PolicyChecker) checkEdgeDirectionLegacy(
 		Type:        ViolationEdgeDirection,
 		Severity:    severity,
 		EdgeID:      edge.ID,
-		ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Type),
+		ActualValue: fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.SourceFragmentID, sourceType, edge.TargetFragmentID, targetType, edge.Relation),
 		Rule:        "edge_direction",
 		Description: reason,
 		Confidence:  1.0,
@@ -1410,7 +1411,7 @@ func (pc *PolicyChecker) checkEdgeDirectionLegacy(
 		DetectedBy:  "deterministic",
 	}
 	if shouldReverse {
-		v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, edge.Type)
+		v.ExpectedValue = fmt.Sprintf("%s (%s) -> %s (%s) [%s]", edge.TargetFragmentID, targetType, edge.SourceFragmentID, sourceType, edge.Relation)
 		v.SuggestedFix = &EnforcementTask{
 			Type:     TaskReverseEdge,
 			TargetID: edge.ID,
@@ -1442,7 +1443,7 @@ func (pc *PolicyChecker) logEdgeDirectionShadowDiff(
 		"edge_id":               edge.ID,
 		"source_id":             edge.SourceFragmentID,
 		"target_id":             edge.TargetFragmentID,
-		"relation_type":         edge.Type,
+		"relation_type":         edge.Relation,
 		"action":                decision.Action,
 		"decision_path":         decision.DecisionPath,
 		"unified_violation_cnt": len(unified),
@@ -1472,7 +1473,7 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 			Type:          ViolationMissingField,
 			Severity:      sev,
 			EdgeID:        edge.ID,
-			ActualValue:   fmt.Sprintf("%s", edge.Type),
+			ActualValue:   fmt.Sprintf("%s", edge.Relation),
 			ExpectedValue: expected,
 			Rule:          rule,
 			Description:   desc,
@@ -1507,7 +1508,7 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 	}
 	hasContractQualifier := func(keys ...string) bool {
 		for _, k := range keys {
-			if !taxonomy.IsValidEdgeQualifier(string(edge.Type), k) {
+			if !taxonomy.IsValidEdgeQualifier(string(edge.Relation), k) {
 				continue
 			}
 			if hasQualifier(k) {
@@ -1517,8 +1518,8 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 		return false
 	}
 
-	switch edge.Type {
-	case horizonmodels.DependencyTypeOwns:
+	switch edge.Relation {
+	case relOwns:
 		if !hasMetric("ownership_percent") && !hasQualifier("ownership_percent", "stake_pct") {
 			add(
 				SeverityWarning,
@@ -1536,7 +1537,7 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 			)
 		}
 
-	case horizonmodels.DependencyTypeSubsidiaryOf:
+	case relSubsidiaryOf:
 		if !hasContractQualifier("share_type") {
 			add(
 				SeverityInfo,
@@ -1546,7 +1547,7 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 			)
 		}
 
-	case horizonmodels.DependencyTypeControls:
+	case relControls:
 		if !hasContractQualifier("control_type", "mechanism") {
 			add(
 				SeverityWarning,
@@ -1556,7 +1557,7 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 			)
 		}
 
-	case horizonmodels.DependencyTypeInvestsIn:
+	case relInvestsIn:
 		if !hasMetric("investment_amount", "round_size_total") {
 			add(
 				SeverityWarning,
@@ -1574,7 +1575,7 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 			)
 		}
 
-	case horizonmodels.DependencyTypeEmployedBy, horizonmodels.DependencyTypeBoardMemberOf, horizonmodels.DependencyTypeManages:
+	case relEmployedBy, relBoardMemberOf, relManages:
 		modality := ""
 		if edge.Qualifiers != nil {
 			if raw, ok := edge.Qualifiers["edgeModality"]; ok {
@@ -1601,7 +1602,7 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 			)
 		}
 
-	case horizonmodels.DependencyTypeInGeoScope:
+	case relInGeoScope:
 		if !hasContractQualifier("scope_basis") {
 			add(
 				SeverityInfo,
@@ -1611,11 +1612,11 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 			)
 		}
 
-	case horizonmodels.DependencyTypeAffects,
-		horizonmodels.DependencyTypeInfluences,
-		horizonmodels.DependencyTypeAppliesTo,
-		horizonmodels.DependencyTypeImposesCondition,
-		horizonmodels.DependencyTypeOperatesVia:
+	case relAffects,
+		relInfluences,
+		relAppliesTo,
+		relImposesCondition,
+		relOperatesVia:
 		if !hasContractQualifier(
 			"pass_through_estimate",
 			"channel_type",
@@ -1632,7 +1633,7 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 			add(
 				SeverityInfo,
 				"edge_completeness_transmission_qualifiers",
-				fmt.Sprintf("%s edge is missing transmission qualifiers. Enrichment recommended: capture scope, channel, lag, or pass-through semantics.", edge.Type),
+				fmt.Sprintf("%s edge is missing transmission qualifiers. Enrichment recommended: capture scope, channel, lag, or pass-through semantics.", edge.Relation),
 				"qualifiers.pass_through_estimate or qualifiers.channel_type or qualifiers.measurement_lag_months",
 			)
 		}
@@ -1646,11 +1647,11 @@ func (pc *PolicyChecker) checkStrategicEdgeQualifiers(edge *horizonmodels.Depend
 	var violations []PolicyViolation
 
 	// Early return for non-strategic edges
-	switch edge.Type {
-	case horizonmodels.DependencyTypeControlsAccess,
-		horizonmodels.DependencyTypeImposesCondition,
-		horizonmodels.DependencyTypeUsesMechanism,
-		horizonmodels.DependencyTypeAppliesTo:
+	switch edge.Relation {
+	case relControlsAccess,
+		relImposesCondition,
+		relUsesMechanism,
+		relAppliesTo:
 		// Continue to validation
 	default:
 		return violations // Not a strategic edge, no qualifiers needed
@@ -1662,8 +1663,8 @@ func (pc *PolicyChecker) checkStrategicEdgeQualifiers(edge *horizonmodels.Depend
 		qualifiers = make(map[string]interface{})
 	}
 
-	switch edge.Type {
-	case horizonmodels.DependencyTypeControlsAccess:
+	switch edge.Relation {
+	case relControlsAccess:
 		// CONTROLS_ACCESS requires 'type' qualifier (block|enable|delay|monitor)
 		typeVal, hasType := qualifiers["type"]
 		if !hasType {
@@ -1681,7 +1682,7 @@ func (pc *PolicyChecker) checkStrategicEdgeQualifiers(edge *horizonmodels.Depend
 				DetectedBy:  "deterministic",
 			})
 		} else if typeStr, ok := typeVal.(string); ok {
-			if !horizonmodels.IsValidControlAccessType(typeStr) {
+			if !IsValidControlAccessType(typeStr) {
 				violations = append(violations, PolicyViolation{
 					ID:          uuid.New().String(),
 					Type:        ViolationTypeMismatch,
@@ -1698,7 +1699,7 @@ func (pc *PolicyChecker) checkStrategicEdgeQualifiers(edge *horizonmodels.Depend
 			}
 		}
 
-	case horizonmodels.DependencyTypeImposesCondition:
+	case relImposesCondition:
 		// IMPOSES_CONDITION requires 'type' qualifier (cost|compliance|technical)
 		typeVal, hasType := qualifiers["type"]
 		if !hasType {
@@ -1716,7 +1717,7 @@ func (pc *PolicyChecker) checkStrategicEdgeQualifiers(edge *horizonmodels.Depend
 				DetectedBy:  "deterministic",
 			})
 		} else if typeStr, ok := typeVal.(string); ok {
-			if !horizonmodels.IsValidConditionType(typeStr) {
+			if !IsValidConditionType(typeStr) {
 				violations = append(violations, PolicyViolation{
 					ID:          uuid.New().String(),
 					Type:        ViolationTypeMismatch,
@@ -1749,12 +1750,12 @@ func (pc *PolicyChecker) checkStrategicEdgeQualifiers(edge *horizonmodels.Depend
 			})
 		}
 
-	case horizonmodels.DependencyTypeUsesMechanism:
+	case relUsesMechanism:
 		// USES_MECHANISM: target should be a /mechanism/... path
 		// This is validated by edge direction rules, no extra qualifiers needed
 		break
 
-	case horizonmodels.DependencyTypeAppliesTo:
+	case relAppliesTo:
 		// APPLIES_TO: source should be a /mechanism/... path
 		// This is validated by edge direction rules, no extra qualifiers needed
 		break
@@ -1993,7 +1994,7 @@ func normalizeOrgPathForNearDup(path string) (geo string, slug string, ok bool) 
 // prefetchDuplicateCandidates searches for potential duplicate fragments using Vertex AI Search.
 func (pc *PolicyChecker) prefetchDuplicateCandidates(ctx context.Context, frag *horizonmodels.HorizonFragment, query string) ([]*horizonmodels.HorizonFragment, error) {
 	// Build filter for same type
-	filter := fmt.Sprintf(`structData.type: "%s"`, frag.Type)
+	filter := fmt.Sprintf(`structData.type: "%s"`, frag.Class)
 
 	req := &ai.SearchRequest{
 		Query:    query,
@@ -2101,7 +2102,7 @@ func (pc *PolicyChecker) buildDuplicateCheckPromptWithContext(frag1, frag2 *hori
 
 	sb.WriteString("## Fragment 1 (newly created)\n")
 	sb.WriteString(fmt.Sprintf("- Canonical Path: %s\n", frag1.CanonicalPath))
-	sb.WriteString(fmt.Sprintf("- Type: %s\n", frag1.Type))
+	sb.WriteString(fmt.Sprintf("- Type: %s\n", frag1.Class))
 	if label := frag1.Labels["en"]; label != "" {
 		sb.WriteString(fmt.Sprintf("- Label: %s\n", label))
 	}
@@ -2117,7 +2118,7 @@ func (pc *PolicyChecker) buildDuplicateCheckPromptWithContext(frag1, frag2 *hori
 
 	sb.WriteString("\n## Fragment 2 (existing)\n")
 	sb.WriteString(fmt.Sprintf("- Canonical Path: %s\n", frag2.CanonicalPath))
-	sb.WriteString(fmt.Sprintf("- Type: %s\n", frag2.Type))
+	sb.WriteString(fmt.Sprintf("- Type: %s\n", frag2.Class))
 	if label := frag2.Labels["en"]; label != "" {
 		sb.WriteString(fmt.Sprintf("- Label: %s\n", label))
 	}
@@ -2179,10 +2180,10 @@ func (pc *PolicyChecker) selectCanonical(frag1, frag2 *horizonmodels.HorizonFrag
 	}
 
 	// Prefer canonical path format
-	if isCanonicalPathFormat(frag1.CanonicalPath, frag1.Type) {
+	if isCanonicalPathFormat(frag1.CanonicalPath, frag1.Class) {
 		score1 += 5
 	}
-	if isCanonicalPathFormat(frag2.CanonicalPath, frag2.Type) {
+	if isCanonicalPathFormat(frag2.CanonicalPath, frag2.Class) {
 		score2 += 5
 	}
 
@@ -2307,7 +2308,7 @@ func (pc *PolicyChecker) jobContextCandidates(frag *horizonmodels.HorizonFragmen
 		if jf == nil || jf.ID == frag.ID {
 			continue
 		}
-		if jf.Type != frag.Type {
+		if jf.Class != frag.Class {
 			continue
 		}
 		score := overlapScore(frag, jf)
@@ -2435,12 +2436,12 @@ func summarizeFragment(frag *horizonmodels.HorizonFragment) string {
 	}
 	wikidata := strings.TrimSpace(frag.Identifiers["wikidataId"])
 	if wikidata != "" {
-		return fmt.Sprintf("%s (%s, %s)", frag.CanonicalPath, frag.Type, wikidata)
+		return fmt.Sprintf("%s (%s, %s)", frag.CanonicalPath, frag.Class, wikidata)
 	}
 	if label != "" {
-		return fmt.Sprintf("%s (%s, %s)", frag.CanonicalPath, frag.Type, label)
+		return fmt.Sprintf("%s (%s, %s)", frag.CanonicalPath, frag.Class, label)
 	}
-	return fmt.Sprintf("%s (%s)", frag.CanonicalPath, frag.Type)
+	return fmt.Sprintf("%s (%s)", frag.CanonicalPath, frag.Class)
 }
 
 func minInt(a, b int) int {
@@ -2485,19 +2486,19 @@ func getString(m map[string]interface{}, key string) string {
 	return ""
 }
 
-func isCanonicalPathFormat(path string, fragType horizonmodels.FragmentType) bool {
+func isCanonicalPathFormat(path string, fragType ah.FragmentClass) bool {
 	path = strings.TrimSpace(path)
 
 	switch fragType {
-	case horizonmodels.FragmentTypeGeoRegion:
+	case classGeoRegion:
 		_, _, _, ok := taxonomy.ParseLocCanonicalPath(path)
 		return ok
 
-	case horizonmodels.FragmentTypeOrganization:
+	case classOrganization:
 		parts := strings.Split(strings.Trim(path, "/"), "/")
 		return len(parts) >= 3 && (parts[0] == "org" || parts[0] == "gov")
 
-	case horizonmodels.FragmentTypePerson:
+	case classPerson:
 		parts := strings.Split(strings.Trim(path, "/"), "/")
 		return len(parts) == 2 && parts[0] == "person"
 	}

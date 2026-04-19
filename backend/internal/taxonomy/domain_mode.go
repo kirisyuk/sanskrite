@@ -129,6 +129,13 @@ var SupplyChainEdgeTypes = []string{
 	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "EXTRACTS_FROM",
 	"LOCATED_IN", "OPERATES_IN", "PARTICIPATES_IN",
 	"HAS_MARKET_SEGMENT", "COMPETES_WITH", "PARTNERS_WITH", "OPERATES_VIA", "MEMBER_OF", "INVESTS_IN",
+	// AH RelationName aliases (lowercase) — admitted alongside the legacy
+	// uppercase entries so that scenario seeders and runtime callers that
+	// have already migrated to ah.RelationName remain inside the allow-list.
+	// Source-of-truth mapping: docs/taxonomy/migration_map.yaml.
+	"produces", "supplies", "transforms_into", "assembles_into", "used_in", "extracts_from",
+	"located_in", "operates_in", "participates_in",
+	"has_market_segment", "competes_with", "partners_with", "operates_via", "member_of", "invests_in",
 }
 
 // ServiceChainEdgeTypes is the allowlist for service_chain mode.
@@ -265,6 +272,13 @@ var PolicyImpactEdgeTypes = []string{
 	"REGULATES", "CONTROLS_ACCESS", "IMPOSES_CONDITION", "GATEKEEPS_DECISION", "USES_MECHANISM", "APPLIES_TO", "IN_GEO_SCOPE", "AFFECTS", "ADMINISTERS",
 	"INFLUENCES", "DEPENDS_ON", "PARTICIPATES_IN", "TRADED_IN", "LOCATED_IN", "OPERATES_IN",
 	"HAS_SUBGROUP", "MEMBER_OF", "AFFILIATED_WITH", "OPERATES_VIA",
+	// AH RelationName aliases (lowercase) — admitted alongside the legacy
+	// uppercase entries so that scenario seeders and runtime callers that
+	// have already migrated to ah.RelationName remain inside the allow-list.
+	// Source-of-truth mapping: docs/taxonomy/migration_map.yaml.
+	"regulates", "controls_access", "imposes", "gatekeeps", "wields", "applies_to", "in_geo_scope", "disrupts", "operates",
+	"influences", "depends_on", "participates_in", "listed_on", "located_in", "operates_in",
+	"has_subgroup", "member_of", "affiliated_with", "operates_via",
 }
 
 // PolicyImpactEdgeTypesString returns comma-separated list for prompts (regulatory impact).

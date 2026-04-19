@@ -167,7 +167,7 @@ type analyzerIndex struct {
 type graphLink struct {
 	From          string
 	To            string
-	Type          horizonmodels.DependencyType
+	Type          DependencyType
 	Weight        float64
 	Amplification float64
 	Criticality   float64
@@ -213,7 +213,7 @@ func buildIndex(
 		idx.adjacency[source] = append(idx.adjacency[source], graphLink{
 			From:          source,
 			To:            target,
-			Type:          edge.Type,
+			Type:          edge.Relation,
 			Weight:        weight,
 			Amplification: amp,
 			Criticality:   crit,
@@ -221,8 +221,8 @@ func buildIndex(
 		idx.adjacency[target] = append(idx.adjacency[target], graphLink{
 			From:          target,
 			To:            source,
-			Type:          edge.Type,
-			Weight:        reversePropagationWeight(edge.Type, weight),
+			Type:          edge.Relation,
+			Weight:        reversePropagationWeight(edge.Relation, weight),
 			Amplification: amp,
 			Criticality:   crit,
 			Reverse:       true,
@@ -313,7 +313,7 @@ type localPropagationProfile struct {
 	AxisKey         string
 	DefaultDamping  float64
 	MaxHops         int
-	StrongEdges     map[horizonmodels.DependencyType]horizonmodels.StrongEdgeSpec
+	StrongEdges     map[DependencyType]horizonmodels.StrongEdgeSpec
 	Transformations []horizonmodels.TransformationRule
 	Fallback        bool
 }
@@ -325,22 +325,26 @@ func resolveLocalPropagationProfile(axis string, requestedMaxHops int) localProp
 			AxisKey:        axisKey,
 			DefaultDamping: 0.74,
 			MaxHops:        firstPositive(requestedMaxHops, 3),
-			StrongEdges: map[horizonmodels.DependencyType]horizonmodels.StrongEdgeSpec{
-				horizonmodels.DependencyTypeOwns:       {Type: string(horizonmodels.DependencyTypeOwns), Direction: "source_to_target", Weight: 1.0},
-				horizonmodels.DependencyTypeControls:   {Type: string(horizonmodels.DependencyTypeControls), Direction: "source_to_target", Weight: 0.85},
-				horizonmodels.DependencyTypeManages:    {Type: string(horizonmodels.DependencyTypeManages), Direction: "source_to_target", Weight: 0.80},
-				horizonmodels.DependencyTypeSuppliesTo: {Type: string(horizonmodels.DependencyTypeSuppliesTo), Direction: "both", Weight: 0.72},
+			StrongEdges: map[DependencyType]horizonmodels.StrongEdgeSpec{
+				DependencyTypeOwns:       {Type: string(DependencyTypeOwns), Direction: "source_to_target", Weight: 1.0},
+				DependencyTypeControls:   {Type: string(DependencyTypeControls), Direction: "source_to_target", Weight: 0.85},
+				DependencyTypeManages:    {Type: string(DependencyTypeManages), Direction: "source_to_target", Weight: 0.80},
+				DependencyTypeSuppliesTo: {Type: string(DependencyTypeSuppliesTo), Direction: "both", Weight: 0.72},
 			},
 			Transformations: []horizonmodels.TransformationRule{
-				{OnEdgeType: string(horizonmodels.DependencyTypeSuppliesTo), ToAxis: horizonmodels.AxisPhysicalFlowSupply, Factor: 0.72},
+				{OnEdgeType: string(DependencyTypeSuppliesTo), ToAxis: horizonmodels.AxisPhysicalFlowSupply, Factor: 0.72},
 			},
 		}
 	}
 	if horizonmodels.IsValidAxis(axisKey) {
 		profile := horizonmodels.DefaultPropagationProfiles()[axisKey]
-		strong := make(map[horizonmodels.DependencyType]horizonmodels.StrongEdgeSpec, len(profile.StrongEdges))
+		strong := make(map[DependencyType]horizonmodels.StrongEdgeSpec, len(profile.StrongEdges))
 		for _, spec := range profile.StrongEdges {
-			strong[horizonmodels.DependencyType(strings.TrimSpace(spec.Type))] = spec
+			raw := strings.TrimSpace(spec.Type)
+			if raw == "" {
+				continue
+			}
+			strong[DependencyType(raw)] = spec
 		}
 		return localPropagationProfile{
 			AxisKey:         axisKey,
@@ -460,7 +464,7 @@ func consequenceTransferRule(currentAxis string, link graphLink) (localAxisTrans
 	}
 	switch axis {
 	case horizonmodels.AxisLegalAccess:
-		if link.Type == horizonmodels.DependencyTypeSuppliesTo {
+		if link.Type == DependencyTypeSuppliesTo {
 			return localAxisTransform{
 				ToAxis:     horizonmodels.AxisPhysicalFlowSupply,
 				Factor:     0.78,
@@ -469,7 +473,7 @@ func consequenceTransferRule(currentAxis string, link graphLink) (localAxisTrans
 			}, true
 		}
 	case horizonmodels.AxisLegalCompliance:
-		if link.Type == horizonmodels.DependencyTypeSuppliesTo {
+		if link.Type == DependencyTypeSuppliesTo {
 			return localAxisTransform{
 				ToAxis:     horizonmodels.AxisPhysicalFlowSupply,
 				Factor:     0.72,
@@ -478,7 +482,7 @@ func consequenceTransferRule(currentAxis string, link graphLink) (localAxisTrans
 			}, true
 		}
 	case horizonmodels.AxisFinancialSettlement:
-		if link.Type == horizonmodels.DependencyTypeSuppliesTo {
+		if link.Type == DependencyTypeSuppliesTo {
 			return localAxisTransform{
 				ToAxis:     horizonmodels.AxisPhysicalFlowSupply,
 				Factor:     0.68,
@@ -487,7 +491,7 @@ func consequenceTransferRule(currentAxis string, link graphLink) (localAxisTrans
 			}, true
 		}
 	case horizonmodels.AxisOperationalContinuity:
-		if link.Type == horizonmodels.DependencyTypeSuppliesTo {
+		if link.Type == DependencyTypeSuppliesTo {
 			return localAxisTransform{
 				ToAxis:     horizonmodels.AxisPhysicalFlowSupply,
 				Factor:     0.82,
@@ -623,7 +627,7 @@ func indexArtifactOverlayEdges(idx *analyzerIndex, artifact *horizonmodels.Mater
 			if leg.Stress != nil {
 				crit = clampRange(0.35+leg.Stress.StressScore*0.65, 0.25, 1.0)
 			}
-			addVirtualGraphLink(idx, supplier, customer, horizonmodels.DependencyTypeSuppliesTo, 0.94, amp, crit, "operational", artifactKey)
+			addVirtualGraphLink(idx, supplier, customer, DependencyTypeSuppliesTo, 0.94, amp, crit, "operational", artifactKey)
 		}
 		overlayTargets := compactUnique(append(append([]string{}, leg.TransportViaRefs...), append(append([]string{}, leg.ZoneRefs...), leg.AffectedZoneRefs...)...))
 		for _, overlayPath := range overlayTargets {
@@ -637,10 +641,10 @@ func indexArtifactOverlayEdges(idx *analyzerIndex, artifact *horizonmodels.Mater
 				crit = clampRange(0.40+maxFloat(leg.Stress.ZonePressure, leg.Stress.AffectedZonePressure)*0.60, 0.30, 1.0)
 			}
 			if supplier != "" {
-				addVirtualGraphLink(idx, overlayPath, supplier, horizonmodels.DependencyTypeAffects, 0.88, amp, crit, "operational", artifactKey)
+				addVirtualGraphLink(idx, overlayPath, supplier, DependencyTypeAffects, 0.88, amp, crit, "operational", artifactKey)
 			}
 			if customer != "" {
-				addVirtualGraphLink(idx, overlayPath, customer, horizonmodels.DependencyTypeAffects, 0.82, amp, crit, "operational", artifactKey)
+				addVirtualGraphLink(idx, overlayPath, customer, DependencyTypeAffects, 0.82, amp, crit, "operational", artifactKey)
 			}
 		}
 	}
@@ -650,7 +654,7 @@ func addVirtualGraphLink(
 	idx *analyzerIndex,
 	source string,
 	target string,
-	edgeType horizonmodels.DependencyType,
+	edgeType DependencyType,
 	weight float64,
 	amp float64,
 	crit float64,
@@ -819,7 +823,7 @@ func propagateSignal(
 		}
 		damping.SetBaseDampingFactor(itemProfile.DefaultDamping)
 		for _, link := range idx.adjacency[item.Path] {
-			if item.Consequence != "" && link.Type == horizonmodels.DependencyTypeSuppliesTo && link.Reverse {
+			if item.Consequence != "" && link.Type == DependencyTypeSuppliesTo && link.Reverse {
 				audit.Steps = append(audit.Steps, PropagationStep{
 					FromPath:      item.Path,
 					ToPath:        link.To,
@@ -1195,7 +1199,7 @@ func propagationEdgeWeight(edge *horizonmodels.DependencyEdge) float64 {
 	if edge == nil {
 		return 0.45
 	}
-	return clampRange(baseEdgeWeight(edge.Type), 0.18, 0.95)
+	return clampRange(baseEdgeWeight(edge.Relation), 0.18, 0.95)
 }
 
 func propagationAmplification(edge *horizonmodels.DependencyEdge) float64 {
@@ -1212,83 +1216,83 @@ func propagationCriticality(edge *horizonmodels.DependencyEdge) float64 {
 	return clampRange(edge.Properties.Criticality, 0.2, 1.0)
 }
 
-func reversePropagationWeight(edgeType horizonmodels.DependencyType, forward float64) float64 {
+func reversePropagationWeight(edgeType DependencyType, forward float64) float64 {
 	switch edgeType {
-	case horizonmodels.DependencyTypeLocatedIn,
-		horizonmodels.DependencyTypeOperatesIn,
-		horizonmodels.DependencyTypeOwns,
-		horizonmodels.DependencyTypeSubsidiaryOf,
-		horizonmodels.DependencyTypeSuppliesTo,
-		horizonmodels.DependencyTypeDependsOn,
-		horizonmodels.DependencyTypeProduces,
-		horizonmodels.DependencyTypeConsumes,
-		horizonmodels.DependencyTypeTransformsInto,
-		horizonmodels.DependencyTypeAssemblesInto,
-		horizonmodels.DependencyTypeUsedIn,
-		horizonmodels.DependencyTypeHasMarketSegment,
-		horizonmodels.DependencyTypeParticipatesIn,
-		horizonmodels.DependencyTypeTradedIn,
-		horizonmodels.DependencyTypeHasSubmarket:
+	case DependencyTypeLocatedIn,
+		DependencyTypeOperatesIn,
+		DependencyTypeOwns,
+		DependencyTypeSubsidiaryOf,
+		DependencyTypeSuppliesTo,
+		DependencyTypeDependsOn,
+		DependencyTypeProduces,
+		DependencyTypeConsumes,
+		DependencyTypeTransformsInto,
+		DependencyTypeAssemblesInto,
+		DependencyTypeUsedIn,
+		DependencyTypeHasMarketSegment,
+		DependencyTypeParticipatesIn,
+		DependencyTypeTradedIn,
+		DependencyTypeHasSubmarket:
 		return clampRange(forward*0.82, 0.14, 0.88)
 	default:
 		return clampRange(forward*0.62, 0.12, 0.74)
 	}
 }
 
-func baseEdgeWeight(edgeType horizonmodels.DependencyType) float64 {
+func baseEdgeWeight(edgeType DependencyType) float64 {
 	switch edgeType {
-	case horizonmodels.DependencyTypeSuppliesTo:
+	case DependencyTypeSuppliesTo:
 		return 0.92
-	case horizonmodels.DependencyTypeDependsOn:
+	case DependencyTypeDependsOn:
 		return 0.88
-	case horizonmodels.DependencyTypeProduces,
-		horizonmodels.DependencyTypeConsumes,
-		horizonmodels.DependencyTypeTransformsInto,
-		horizonmodels.DependencyTypeAssemblesInto,
-		horizonmodels.DependencyTypeUsedIn:
+	case DependencyTypeProduces,
+		DependencyTypeConsumes,
+		DependencyTypeTransformsInto,
+		DependencyTypeAssemblesInto,
+		DependencyTypeUsedIn:
 		return 0.82
-	case horizonmodels.DependencyTypeOwns,
-		horizonmodels.DependencyTypeSubsidiaryOf,
-		horizonmodels.DependencyTypeControls,
-		horizonmodels.DependencyTypeManages:
+	case DependencyTypeOwns,
+		DependencyTypeSubsidiaryOf,
+		DependencyTypeControls,
+		DependencyTypeManages:
 		return 0.74
-	case horizonmodels.DependencyTypeOperatesIn,
-		horizonmodels.DependencyTypeLocatedIn:
+	case DependencyTypeOperatesIn,
+		DependencyTypeLocatedIn:
 		return 0.65
-	case horizonmodels.DependencyTypeParticipatesIn,
-		horizonmodels.DependencyTypeDominates,
-		horizonmodels.DependencyTypeHasMarketSegment,
-		horizonmodels.DependencyTypeTradedIn,
-		horizonmodels.DependencyTypeHasSubmarket:
+	case DependencyTypeParticipatesIn,
+		DependencyTypeDominates,
+		DependencyTypeHasMarketSegment,
+		DependencyTypeTradedIn,
+		DependencyTypeHasSubmarket:
 		return 0.74
-	case horizonmodels.DependencyTypeRegulates,
-		horizonmodels.DependencyTypeControlsAccess,
-		horizonmodels.DependencyTypeAppliesTo,
-		horizonmodels.DependencyTypeImposesCondition,
-		horizonmodels.DependencyTypeGatekeepsDecision:
+	case DependencyTypeRegulates,
+		DependencyTypeControlsAccess,
+		DependencyTypeAppliesTo,
+		DependencyTypeImposesCondition,
+		DependencyTypeGatekeepsDecision:
 		return 0.60
 	default:
 		return 0.48
 	}
 }
 
-func universeRelationAllowed(edgeType horizonmodels.DependencyType) bool {
+func universeRelationAllowed(edgeType DependencyType) bool {
 	switch edgeType {
-	case horizonmodels.DependencyTypeOwns,
-		horizonmodels.DependencyTypeSubsidiaryOf,
-		horizonmodels.DependencyTypeControls,
-		horizonmodels.DependencyTypeManages,
-		horizonmodels.DependencyTypeOperatesIn,
-		horizonmodels.DependencyTypeLocatedIn,
-		horizonmodels.DependencyTypeSuppliesTo,
-		horizonmodels.DependencyTypeDependsOn,
-		horizonmodels.DependencyTypeProduces,
-		horizonmodels.DependencyTypeConsumes,
-		horizonmodels.DependencyTypeTransformsInto,
-		horizonmodels.DependencyTypeAssemblesInto,
-		horizonmodels.DependencyTypeUsedIn,
-		horizonmodels.DependencyTypeParticipatesIn,
-		horizonmodels.DependencyTypeDominates:
+	case DependencyTypeOwns,
+		DependencyTypeSubsidiaryOf,
+		DependencyTypeControls,
+		DependencyTypeManages,
+		DependencyTypeOperatesIn,
+		DependencyTypeLocatedIn,
+		DependencyTypeSuppliesTo,
+		DependencyTypeDependsOn,
+		DependencyTypeProduces,
+		DependencyTypeConsumes,
+		DependencyTypeTransformsInto,
+		DependencyTypeAssemblesInto,
+		DependencyTypeUsedIn,
+		DependencyTypeParticipatesIn,
+		DependencyTypeDominates:
 		return true
 	default:
 		return false
@@ -1458,13 +1462,13 @@ func buildAffinityMembership(clusters []AffinityCluster) map[string]string {
 	return out
 }
 
-func controlAffinityAllowed(edgeType horizonmodels.DependencyType) bool {
+func controlAffinityAllowed(edgeType DependencyType) bool {
 	switch edgeType {
-	case horizonmodels.DependencyTypeOwns,
-		horizonmodels.DependencyTypeSubsidiaryOf,
-		horizonmodels.DependencyTypeControls,
-		horizonmodels.DependencyTypeManages,
-		horizonmodels.DependencyTypeBoardMemberOf:
+	case DependencyTypeOwns,
+		DependencyTypeSubsidiaryOf,
+		DependencyTypeControls,
+		DependencyTypeManages,
+		DependencyTypeBoardMemberOf:
 		return true
 	default:
 		return false
@@ -1666,7 +1670,7 @@ func buildEndpointInterpretationContext(hit EndpointHit, idx analyzerIndex) []In
 	}
 	for _, link := range idx.adjacency[strings.TrimSpace(hit.CanonicalPath)] {
 		switch {
-		case link.Type == horizonmodels.DependencyTypeSuppliesTo && link.Reverse:
+		case link.Type == DependencyTypeSuppliesTo && link.Reverse:
 			relationship := "supplier_candidate"
 			reason := "supplies_endpoint"
 			if containsString(hit.SamplePath, link.To) {
@@ -1677,7 +1681,7 @@ func buildEndpointInterpretationContext(hit EndpointHit, idx analyzerIndex) []In
 				reason = "supplier_not_on_reached_path"
 			}
 			add(link.To, relationship, reason)
-		case link.Type == horizonmodels.DependencyTypeSuppliesTo && !link.Reverse:
+		case link.Type == DependencyTypeSuppliesTo && !link.Reverse:
 			add(link.To, "downstream_customer", "endpoint_supplies_to_target")
 		case controlAffinityAllowed(link.Type):
 			add(link.To, "control_affinity", string(link.Type))
@@ -1694,20 +1698,20 @@ func classifyPropagationTarget(link graphLink, target string, universe map[strin
 		return "focus_universe"
 	}
 	switch link.Type {
-	case horizonmodels.DependencyTypeSuppliesTo:
+	case DependencyTypeSuppliesTo:
 		if link.Reverse {
 			return "upstream_entanglement"
 		}
 		return "downstream_consequence"
-	case horizonmodels.DependencyTypeDependsOn:
+	case DependencyTypeDependsOn:
 		if link.Reverse {
 			return "dependency_exposure"
 		}
 		return "dependency_trace"
-	case horizonmodels.DependencyTypeOwns,
-		horizonmodels.DependencyTypeSubsidiaryOf,
-		horizonmodels.DependencyTypeControls,
-		horizonmodels.DependencyTypeManages:
+	case DependencyTypeOwns,
+		DependencyTypeSubsidiaryOf,
+		DependencyTypeControls,
+		DependencyTypeManages:
 		return "ownership_cascade"
 	default:
 		if link.Reverse {
@@ -1864,7 +1868,7 @@ func deriveBeneficiaryCandidates(anchorPath string, idx analyzerIndex, summary S
 			continue
 		}
 		for _, link := range idx.adjacency[reached.CanonicalPath] {
-			if link.Type != horizonmodels.DependencyTypeSuppliesTo || !link.Reverse {
+			if link.Type != DependencyTypeSuppliesTo || !link.Reverse {
 				continue
 			}
 			candidatePath := strings.TrimSpace(link.To)
@@ -1999,8 +2003,8 @@ func isDemandSinkCandidate(fragment *horizonmodels.HorizonFragment) bool {
 	if fragment == nil {
 		return false
 	}
-	switch fragment.Type {
-	case horizonmodels.FragmentTypeMarket, horizonmodels.FragmentTypeOrganization, horizonmodels.FragmentTypeFacility:
+	switch fragment.Class {
+	case FragmentTypeMarket, FragmentTypeOrganization, FragmentTypeFacility:
 		return true
 	default:
 		return false
@@ -2011,8 +2015,11 @@ func looksLikeBeneficiary(fragment *horizonmodels.HorizonFragment, overlay hprop
 	if fragment == nil {
 		return false
 	}
-	switch fragment.Type {
-	case horizonmodels.FragmentTypeDeposit, horizonmodels.FragmentTypeFacility, horizonmodels.FragmentTypeOrganization:
+	if fragment.IsLegacyDeposit() {
+		return true
+	}
+	switch fragment.Class {
+	case FragmentTypeFacility, FragmentTypeOrganization:
 		return true
 	}
 	switch overlay.BusinessRole {
@@ -2042,11 +2049,11 @@ func pathLooksLikeMarketSubstitution(path []string, idx analyzerIndex) bool {
 		return false
 	}
 	prevFrag := idx.fragmentsByPath[prev]
-	if prevFrag == nil || prevFrag.Type != horizonmodels.FragmentTypeMarket {
+	if prevFrag == nil || prevFrag.Class != FragmentTypeMarket {
 		return false
 	}
 	for _, link := range idx.adjacency[tail] {
-		if strings.TrimSpace(link.To) == prev && link.Type == horizonmodels.DependencyTypeSuppliesTo && !link.Reverse {
+		if strings.TrimSpace(link.To) == prev && link.Type == DependencyTypeSuppliesTo && !link.Reverse {
 			return true
 		}
 	}
@@ -2294,7 +2301,7 @@ func fragmentTypeString(fragment *horizonmodels.HorizonFragment) string {
 	if fragment == nil {
 		return ""
 	}
-	return string(fragment.Type)
+	return string(fragment.Class)
 }
 
 func shouldPopulateArtifactIndexes(artifact *horizonmodels.MaterializedArtifact) bool {

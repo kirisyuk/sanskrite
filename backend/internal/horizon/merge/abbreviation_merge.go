@@ -573,7 +573,7 @@ func migrateEdgesByQuery(ctx context.Context, q firestore.Query, edgesRepo *hori
 			deletedDup++
 			continue
 		}
-		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, edge.TenantID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, edge.TenantID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 		if err == nil && existing != nil && existing.ID != "" && existing.ID != origID {
 			if err := edgesRepo.Delete(ctx, origID); err != nil {
 				return updated, deletedDup, err

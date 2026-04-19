@@ -50,7 +50,7 @@ func ApplyEdgeFamilyPhysics(axis string, fromFrag *horizonmodels.HorizonFragment
 			multiplier += qualifierBoost
 			reasons = append(reasons, "transmission_qualifiers")
 		}
-		if sub := edge.GetSubstitutability(); sub > 0 {
+		if sub := edgeSubstitutability(edge); sub > 0 {
 			subPenalty := minFloat(sub*profile.SubstitutabilityPenalty, profile.SubstitutabilityCap)
 			multiplier -= subPenalty
 			reasons = append(reasons, "substitutability")
@@ -84,8 +84,8 @@ func classifyEdgeFamily(axis string, fromFrag *horizonmodels.HorizonFragment, ed
 	if edge == nil {
 		return "direct_dependency"
 	}
-	edgeType := strings.TrimSpace(string(edge.Type))
-	facet := strings.TrimSpace(string(edge.GetFacet()))
+	edgeType := strings.TrimSpace(string(edge.Relation))
+	facet := strings.TrimSpace(string(edgeFacet(edge)))
 	text := strings.ToLower(strings.Join([]string{
 		edgeType,
 		facet,
@@ -93,50 +93,50 @@ func classifyEdgeFamily(axis string, fromFrag *horizonmodels.HorizonFragment, ed
 		edgePhysicsPathText(fromFrag),
 	}, " "))
 
-	switch edge.Type {
-	case horizonmodels.DependencyTypeRegulates,
-		horizonmodels.DependencyTypeAppliesTo,
-		horizonmodels.DependencyTypeImposesCondition,
-		horizonmodels.DependencyTypeControlsAccess,
-		horizonmodels.DependencyTypeAdministers,
-		horizonmodels.DependencyTypeGatekeepsDecision,
-		horizonmodels.DependencyTypeUsesMechanism:
+	switch edge.Relation {
+	case DependencyTypeRegulates,
+		DependencyTypeAppliesTo,
+		DependencyTypeImposesCondition,
+		DependencyTypeControlsAccess,
+		DependencyTypeAdministers,
+		DependencyTypeGatekeepsDecision,
+		DependencyTypeUsesMechanism:
 		return "regulatory_control"
-	case horizonmodels.DependencyTypeSuppliesTo,
-		horizonmodels.DependencyTypeTransformsInto,
-		horizonmodels.DependencyTypeAssemblesInto,
-		horizonmodels.DependencyTypeUsedIn,
-		horizonmodels.DependencyTypeExtractsFrom,
-		horizonmodels.DependencyTypeProduces:
+	case DependencyTypeSuppliesTo,
+		DependencyTypeTransformsInto,
+		DependencyTypeAssemblesInto,
+		DependencyTypeUsedIn,
+		DependencyTypeExtractsFrom,
+		DependencyTypeProduces:
 		if strings.Contains(text, "lng") || strings.Contains(text, "gas") || strings.Contains(text, "pipeline") || strings.Contains(text, "refinery") {
 			return "energy_supply_chain"
 		}
 		return "facility_dependency"
-	case horizonmodels.DependencyTypeParticipatesIn,
-		horizonmodels.DependencyTypeTradedIn,
-		horizonmodels.DependencyTypeHasMarketSegment,
-		horizonmodels.DependencyTypeHasSubmarket,
-		horizonmodels.DependencyTypeDominates:
+	case DependencyTypeParticipatesIn,
+		DependencyTypeTradedIn,
+		DependencyTypeHasMarketSegment,
+		DependencyTypeHasSubmarket,
+		DependencyTypeDominates:
 		return "market_exposure"
-	case horizonmodels.DependencyTypeOwns,
-		horizonmodels.DependencyTypeControls,
-		horizonmodels.DependencyTypeManages,
-		horizonmodels.DependencyTypeInvestsIn:
+	case DependencyTypeOwns,
+		DependencyTypeControls,
+		DependencyTypeManages,
+		DependencyTypeInvestsIn:
 		return "organizational_control"
-	case horizonmodels.DependencyTypeLocatedIn,
-		horizonmodels.DependencyTypeOperatesIn,
-		horizonmodels.DependencyTypeAffects,
-		horizonmodels.DependencyTypeTriggeredBy,
-		horizonmodels.DependencyTypeInGeoScope:
+	case DependencyTypeLocatedIn,
+		DependencyTypeOperatesIn,
+		DependencyTypeAffects,
+		DependencyTypeTriggeredBy,
+		DependencyTypeInGeoScope:
 		if IsChokepointFragment(fromFrag) {
 			return "chokepoint_logistics"
 		}
 		return "geo_operational_exposure"
-	case horizonmodels.DependencyTypeDependsOn:
-		if facet == string(horizonmodels.FacetLogistics) || facet == string(horizonmodels.FacetDistribution) || strings.Contains(text, "port") || strings.Contains(text, "shipping") || strings.Contains(text, "strait") || strings.Contains(text, "canal") {
+	case DependencyTypeDependsOn:
+		if facet == string(FacetLogistics) || facet == string(FacetDistribution) || strings.Contains(text, "port") || strings.Contains(text, "shipping") || strings.Contains(text, "strait") || strings.Contains(text, "canal") {
 			return "chokepoint_logistics"
 		}
-		if facet == string(horizonmodels.FacetSupply) || facet == string(horizonmodels.FacetInfrastructure) || strings.Contains(text, "pipeline") || strings.Contains(text, "terminal") || strings.Contains(text, "refinery") || strings.Contains(text, "lng") || strings.Contains(text, "gas") || strings.Contains(text, "power") {
+		if facet == string(FacetSupply) || facet == string(FacetInfrastructure) || strings.Contains(text, "pipeline") || strings.Contains(text, "terminal") || strings.Contains(text, "refinery") || strings.Contains(text, "lng") || strings.Contains(text, "gas") || strings.Contains(text, "power") {
 			return "energy_supply_chain"
 		}
 		return "facility_dependency"

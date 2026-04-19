@@ -319,7 +319,7 @@ func (e *PropagationEngine) buildTypedRWRTransition(
 		if hook, err := adapter.TransferHook(ctx, hookSignal, neighbor.edge, fromNode.Fragment); err == nil && hook != nil {
 			traceFactors = mergeFactorMaps(traceFactors, hook.DebugFactors, "adapter.")
 			if hook.Skip {
-				meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), fromNode.Fragment, neighbor.fragmentID, neighbor.edge.Type, nextAxis, fragmentCache)
+				meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), fromNode.Fragment, neighbor.fragmentID, neighbor.edge.Relation, nextAxis, fragmentCache)
 				traceCollector.add(SignalPropagationTraceEvent{
 					SignalID:     signal.ID,
 					FromFragment: fromNode.Fragment.ID,
@@ -329,7 +329,7 @@ func (e *PropagationEngine) buildTypedRWRTransition(
 					FromGeo:      meta.FromGeo,
 					ToGeo:        meta.ToGeo,
 					EdgeID:       neighbor.edge.ID,
-					EdgeType:     string(neighbor.edge.Type),
+					EdgeType:     string(neighbor.edge.Relation),
 					Direction:    neighbor.traversalDirection,
 					Channel:      meta.Channel,
 					Scope:        meta.Scope,
@@ -365,7 +365,7 @@ func (e *PropagationEngine) buildTypedRWRTransition(
 	if targetFrag == nil {
 		return "", signalStateTransition{}, false
 	}
-	meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), fromNode.Fragment, neighbor.fragmentID, neighbor.edge.Type, nextAxis, fragmentCache)
+	meta := e.computeTransferTraceMeta(ctx, traceCollector.isEnabled(), fromNode.Fragment, neighbor.fragmentID, neighbor.edge.Relation, nextAxis, fragmentCache)
 	if nextAmplitude < MinAmplitudeThreshold {
 		traceCollector.add(SignalPropagationTraceEvent{
 			SignalID:     signal.ID,
@@ -376,7 +376,7 @@ func (e *PropagationEngine) buildTypedRWRTransition(
 			FromGeo:      meta.FromGeo,
 			ToGeo:        meta.ToGeo,
 			EdgeID:       neighbor.edge.ID,
-			EdgeType:     string(neighbor.edge.Type),
+			EdgeType:     string(neighbor.edge.Relation),
 			Direction:    neighbor.traversalDirection,
 			Channel:      meta.Channel,
 			Scope:        meta.Scope,
@@ -406,7 +406,7 @@ func (e *PropagationEngine) buildTypedRWRTransition(
 		FromGeo:      meta.FromGeo,
 		ToGeo:        meta.ToGeo,
 		EdgeID:       neighbor.edge.ID,
-		EdgeType:     string(neighbor.edge.Type),
+		EdgeType:     string(neighbor.edge.Relation),
 		Direction:    neighbor.traversalDirection,
 		Channel:      meta.Channel,
 		Scope:        meta.Scope,

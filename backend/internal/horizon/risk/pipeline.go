@@ -693,7 +693,7 @@ func (p *Pipeline) buildProofOfImpact(ctx context.Context, affected []string, pa
 			continue
 		}
 		cp := strings.TrimSpace(frag.CanonicalPath)
-		if !(frag.Type == horizonmodels.FragmentTypeOrganization || strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/")) {
+		if !(frag.Class == FragmentTypeOrganization || strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/")) {
 			continue
 		}
 		entityPaths := make([][]string, 0, 3)

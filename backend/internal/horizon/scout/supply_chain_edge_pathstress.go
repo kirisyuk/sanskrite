@@ -39,10 +39,10 @@ func applyPathStressToSupplyEdge(edge *models.DependencyEdge, chainEdge *ChainEd
 	if st == nil {
 		return
 	}
-	edge.SetSubstitutability(pathStressClamp01(st.Rerouteability))
 	if edge.Qualifiers == nil {
 		edge.Qualifiers = map[string]interface{}{}
 	}
+	edge.Qualifiers["substitutability"] = pathStressClamp01(st.Rerouteability)
 	edge.Qualifiers[models.QualifierReroutePenalty] = pathStressClamp01(1.0 - st.Rerouteability)
 	// Lower fragility ⇒ higher assumed routed share on this leg.
 	edge.Qualifiers[models.QualifierThroughputShare] = pathStressClamp01(1.0 - 0.55*st.Fragility)

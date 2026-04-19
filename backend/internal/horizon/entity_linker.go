@@ -8,16 +8,19 @@ import (
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	ontomodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
-// Supported fragment types for auto Entity linking/enrichment (expandable).
-// Per current requirement: Organization, Person, GeoRegion (+ Facility, Product).
-var supportedFragmentTypes = map[horizonmodels.FragmentType]ontomodels.EntityType{
-	horizonmodels.FragmentTypeOrganization: ontomodels.EntityTypeOrganization,
-	horizonmodels.FragmentTypePerson:       ontomodels.EntityTypePerson,
-	horizonmodels.FragmentTypeGeoRegion:    ontomodels.EntityTypeLocation,
-	horizonmodels.FragmentTypeFacility:     ontomodels.EntityTypeFacility,
-	horizonmodels.FragmentTypeProduct:      ontomodels.EntityTypeProduct,
+// Supported fragment classes for auto Entity linking/enrichment.
+// Class-only mapping is sufficient here: the AH /person, /org, /site, /product,
+// /geo classes line up 1:1 with ontology EntityType. Legacy GEO_REGION and
+// FACILITY fold into ah.FragmentClassGeo and ah.FragmentClassSite respectively.
+var supportedFragmentClasses = map[ah.FragmentClass]ontomodels.EntityType{
+	ah.FragmentClassOrg:     ontomodels.EntityTypeOrganization,
+	ah.FragmentClassPerson:  ontomodels.EntityTypePerson,
+	ah.FragmentClassGeo:     ontomodels.EntityTypeLocation,
+	ah.FragmentClassSite:    ontomodels.EntityTypeFacility,
+	ah.FragmentClassProduct: ontomodels.EntityTypeProduct,
 }
 
 // EnsureEntityForFragment ensures that a fragment has an Entity mapping:
@@ -52,9 +55,8 @@ func (s *HorizonService) EnsureEntityForFragmentObject(ctx context.Context, frag
 		return nil, false, false, fmt.Errorf("fragment is required")
 	}
 
-	entityType, ok := supportedFragmentTypes[frag.Type]
+	entityType, ok := supportedFragmentClasses[frag.Class]
 	if !ok {
-		// Not a supported fragment type: nothing to do.
 		return nil, false, false, nil
 	}
 
@@ -157,7 +159,8 @@ func (s *HorizonService) EnsureEntityForFragmentObject(ctx context.Context, frag
 				"sourceType":          "horizon_fragment",
 				"sourceFragmentId":    strings.TrimSpace(frag.ID),
 				"sourceCanonicalPath": strings.TrimSpace(frag.CanonicalPath),
-				"fragmentType":        string(frag.Type),
+				"fragmentClass":       string(frag.Class),
+				"fragmentSubtype":     strings.TrimSpace(frag.Subtype),
 			},
 		}
 

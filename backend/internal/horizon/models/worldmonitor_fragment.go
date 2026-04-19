@@ -1,6 +1,10 @@
 package models
 
-import "math"
+import (
+	"math"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+)
 
 // HorizonMonitorObjectKind is a normalized object kind imported from Horizon Monitor.
 type HorizonMonitorObjectKind string
@@ -128,21 +132,48 @@ func (f *HorizonFragment) SyncHorizonMonitorAliases() {
 	}
 }
 
-var horizonMonitorGeoUpdatableTypes = map[FragmentType]struct{}{
-	FragmentTypeOrganization: {},
-	FragmentTypeFacility:     {},
-	FragmentTypeGeoRegion:    {},
-	FragmentTypeEvent:        {},
-	FragmentTypeMarket:       {},
-	FragmentTypeDeposit:      {},
-	FragmentTypeTrack:        {},
+// horizonMonitorGeoUpdatableClasses lists the AH fragment classes the
+// Horizon Monitor pipeline is allowed to refresh from geo-driven feeds.
+// Subtype gating (e.g. only site/deposit, only evidence/event) lives in
+// IsHorizonMonitorGeoUpdatableFragment so the predicate can reason about
+// the (Class, Subtype) tuple rather than collapsing them on a single
+// legacy enum.
+var horizonMonitorGeoUpdatableClasses = map[ah.FragmentClass]struct{}{
+	ah.FragmentClassOrg:         {},
+	ah.FragmentClassSite:        {},
+	ah.FragmentClassGeo:         {},
+	ah.FragmentClassEvidence:    {},
+	ah.FragmentClassMarket:      {},
+	ah.FragmentClassMobileAsset: {},
 }
 
-// IsHorizonMonitorGeoUpdatableType reports whether fragment type can be selected
-// for geo-driven updates in the Horizon Monitor pipeline.
-func IsHorizonMonitorGeoUpdatableType(t FragmentType) bool {
-	_, ok := horizonMonitorGeoUpdatableTypes[t]
+// IsHorizonMonitorGeoUpdatableClass reports whether the AH fragment class
+// can be selected for geo-driven updates in the Horizon Monitor pipeline.
+func IsHorizonMonitorGeoUpdatableClass(c ah.FragmentClass) bool {
+	_, ok := horizonMonitorGeoUpdatableClasses[c]
 	return ok
+}
+
+// IsHorizonMonitorGeoUpdatableFragment returns true when the fragment's
+// (Class, Subtype) tuple is eligible for the Horizon Monitor geo refresh
+// pipeline. Replaces the legacy IsHorizonMonitorGeoUpdatableType helper
+// which keyed on the now-removed FragmentType enum (notably FACILITY,
+// DEPOSIT, EVENT, TRACK — all collapsed into AH classes here, with the
+// subtype carrying the specialised gate).
+func IsHorizonMonitorGeoUpdatableFragment(f *HorizonFragment) bool {
+	if f == nil {
+		return false
+	}
+	if !IsHorizonMonitorGeoUpdatableClass(f.Class) {
+		return false
+	}
+	switch f.Class {
+	case ah.FragmentClassEvidence:
+		return f.Subtype == "" || f.Subtype == "event"
+	case ah.FragmentClassMobileAsset:
+		return true
+	}
+	return true
 }
 
 // IsRealGeoCoordinate validates coordinate range and excludes Null Island fallback.
@@ -162,9 +193,9 @@ func HasRealGeoCoordinates(c *Coordinates) bool {
 }
 
 // IsHorizonMonitorGeoEligibleFragment implements selection policy:
-// real geo + allowed fragment type.
+// real geo + allowed fragment class/subtype.
 func IsHorizonMonitorGeoEligibleFragment(f *HorizonFragment) bool {
-	if f == nil || !IsHorizonMonitorGeoUpdatableType(f.Type) {
+	if f == nil || !IsHorizonMonitorGeoUpdatableFragment(f) {
 		return false
 	}
 	if HasRealGeoCoordinates(f.Coordinates) {

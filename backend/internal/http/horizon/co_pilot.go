@@ -120,7 +120,7 @@ func (h *HorizonHandlers) buildCoPilotContext(lens *models.Lens, fragments []*mo
 			context += "... and " + strconv.Itoa(len(fragments)-10) + " more fragments\n"
 			break
 		}
-		context += "- " + fragment.CanonicalPath + " (" + string(fragment.Type) + ")\n"
+		context += "- " + fragment.CanonicalPath + " (" + models.FormatClassSubtype(fragment.Class, fragment.Subtype) + ")\n"
 		if fragment.Description != "" {
 			context += "  " + fragment.Description + "\n"
 		}

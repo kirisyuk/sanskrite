@@ -876,7 +876,7 @@ func (h *HorizonHandlers) repairGraphIntentPlanWithResolvers(ctx context.Context
 		if tempID := strings.TrimSpace(spec.TempID); tempID != "" {
 			nodeRefsByID[tempID] = refInfo
 		}
-		if strings.EqualFold(strings.TrimSpace(spec.Type), string(horizonmodels.FragmentTypeProduct)) {
+		if strings.EqualFold(strings.TrimSpace(spec.Type), string(FragmentTypeProduct)) {
 			ref := strings.TrimSpace(firstNonEmptyGraphIntent(spec.TempID, spec.CanonicalPathHint))
 			if ref != "" && strings.HasPrefix(strings.TrimSpace(spec.CanonicalPathHint), "/product/") {
 				productPathsByRef[ref] = strings.TrimSpace(spec.CanonicalPathHint)
@@ -983,18 +983,27 @@ func graphIntentEdgeEndpointRef(tempID string, nodeID string, refs map[string]gr
 
 func graphIntentNormalizeUnsupportedRelation(relationType string, sourceRef graphIntentNodeRef, targetRef graphIntentNodeRef) (string, string) {
 	relationType = strings.ToUpper(strings.TrimSpace(relationType))
-	if relationType == "" || horizonmodels.IsGraphIntentRelationTypeAllowed(relationType) {
+	if relationType == "" {
 		return relationType, ""
 	}
-	sourceType := strings.ToUpper(strings.TrimSpace(sourceRef.Type))
-	targetType := strings.ToUpper(strings.TrimSpace(targetRef.Type))
+	// Skip the rewrite only when the wire alias resolves cleanly to an AH
+	// edge — Dropped aliases (USED_IN etc.) still need the structural
+	// rewrite below since they have no canonical AH successor.
+	if decode, ok := horizonmodels.NormalizeGraphIntentRelationType(relationType); ok && !decode.Dropped && strings.TrimSpace(string(decode.Relation)) != "" {
+		return relationType, ""
+	}
+	// Source/target types arrive as either UPPER_SNAKE legacy tokens or AH
+	// lower_snake. Normalise both shapes to the AH FragmentClass before
+	// matching, so the rule fires regardless of wire dialect.
+	sourceClass, _, _ := horizonmodels.MapGraphIntentNodeTypeToClass(sourceRef.Type, "")
+	targetClass, _, _ := horizonmodels.MapGraphIntentNodeTypeToClass(targetRef.Type, "")
 	switch relationType {
-	case string(horizonmodels.DependencyTypeUsedIn):
-		if sourceType == string(horizonmodels.FragmentTypeProduct) && (targetType == string(horizonmodels.FragmentTypeOrganization) || targetType == string(horizonmodels.FragmentTypeFacility)) {
-			return string(horizonmodels.DependencyTypeSuppliesTo), "mapped USED_IN to SUPPLIES_TO for product -> actor graph-intent edge"
+	case "USED_IN":
+		if sourceClass == FragmentTypeProduct && (targetClass == FragmentTypeOrganization || targetClass == FragmentTypeFacility) {
+			return "SUPPLIES_TO", "mapped USED_IN to SUPPLIES_TO for product -> actor graph-intent edge"
 		}
-		if sourceType == string(horizonmodels.FragmentTypeProduct) && targetType == string(horizonmodels.FragmentTypeProduct) {
-			return string(horizonmodels.DependencyTypeAssemblesInto), "mapped USED_IN to ASSEMBLES_INTO for product -> product graph-intent edge"
+		if sourceClass == FragmentTypeProduct && targetClass == FragmentTypeProduct {
+			return "ASSEMBLES_INTO", "mapped USED_IN to ASSEMBLES_INTO for product -> product graph-intent edge"
 		}
 	}
 	return relationType, ""
@@ -1036,12 +1045,17 @@ func (h *HorizonHandlers) resolveGraphIntentNodeCanonicalPathHint(ctx context.Co
 	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
 	label = strings.TrimSpace(label)
 	hint = strings.TrimSpace(hint)
-	fragmentType := horizonmodels.MapGraphIntentNodeTypeToFragmentType(nodeType, hint)
+	fragmentClass, fragmentSubtype, _ := horizonmodels.MapGraphIntentNodeTypeToClass(nodeType, hint)
 
-	if strings.EqualFold(nodeType, string(horizonmodels.FragmentTypeProduct)) || fragmentType == horizonmodels.FragmentTypeProduct {
+	if strings.EqualFold(nodeType, string(FragmentTypeProduct)) || fragmentClass == FragmentTypeProduct {
 		return h.resolveGraphIntentProductPathHint(ctx, lens, label, hint)
 	}
-	if strings.EqualFold(nodeType, string(horizonmodels.FragmentTypeDomain)) || fragmentType == horizonmodels.FragmentTypeDomain {
+	// Legacy DOMAIN class folded onto canonical_path overlay (see migration_map);
+	// detect both the legacy wire token and the path-shape inference made by
+	// MapGraphIntentNodeTypeToClass (org/<empty> with `/domain/` hint surfaces
+	// here via fragmentSubtype unset; we therefore also fall back to the raw
+	// nodeType keyword check for back-compat with pre-AH wire payloads).
+	if strings.EqualFold(nodeType, "DOMAIN") || (fragmentClass == FragmentTypeOrganization && fragmentSubtype == "domain") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(hint)), "/domain/") {
 		return h.resolveGraphIntentDomainPathHint(ctx, lens, rawQuery, label, hint)
 	}
 	if key := graphIntentLookupKey(nodeType, label); key != "" {
@@ -1055,18 +1069,18 @@ func (h *HorizonHandlers) resolveGraphIntentNodeCanonicalPathHint(ctx context.Co
 	if h == nil || h.service == nil || h.service.Fragments() == nil || label == "" {
 		return hint, ""
 	}
-	if exact, err := h.service.Fragments().FindByLabelForTenant(ctx, strings.TrimSpace(lens.TenantID), "en", label, fragmentType); err == nil {
-		if canonicalPath := graphIntentPickMatchingFragmentPath(exact, fragmentType); canonicalPath != "" {
+	if exact, err := h.service.Fragments().FindByLabelForTenant(ctx, strings.TrimSpace(lens.TenantID), "en", label, fragmentClass); err == nil {
+		if canonicalPath := graphIntentPickMatchingFragmentPath(exact, fragmentClass); canonicalPath != "" {
 			return canonicalPath, ""
 		}
 	}
 	if prefix, err := h.service.Fragments().SearchPrefixForTenant(ctx, strings.TrimSpace(lens.TenantID), label, 8); err == nil {
-		if canonicalPath := graphIntentPickMatchingFragmentPath(prefix, fragmentType); canonicalPath != "" {
+		if canonicalPath := graphIntentPickMatchingFragmentPath(prefix, fragmentClass); canonicalPath != "" {
 			return canonicalPath, ""
 		}
 	}
 	if semantic, err := h.service.SearchFragments(ctx, label, 8); err == nil {
-		if canonicalPath := graphIntentPickMatchingFragmentPath(semantic, fragmentType); canonicalPath != "" {
+		if canonicalPath := graphIntentPickMatchingFragmentPath(semantic, fragmentClass); canonicalPath != "" {
 			return canonicalPath, ""
 		}
 	}
@@ -1256,12 +1270,12 @@ func productLeafSlugFromCanonicalPath(path string) string {
 	return strings.TrimSpace(parts[len(parts)-1])
 }
 
-func graphIntentPickMatchingFragmentPath(fragments []*horizonmodels.HorizonFragment, fragmentType horizonmodels.FragmentType) string {
+func graphIntentPickMatchingFragmentPath(fragments []*horizonmodels.HorizonFragment, fragmentType FragmentType) string {
 	for _, frag := range fragments {
 		if frag == nil {
 			continue
 		}
-		if fragmentType != "" && frag.Type != fragmentType {
+		if fragmentType != "" && frag.Class != fragmentType {
 			continue
 		}
 		canonicalPath := strings.TrimSpace(frag.CanonicalPath)
@@ -1503,12 +1517,13 @@ func (e *graphIntentApplyExecutor) applyCreateNode(spec horizonmodels.GraphInten
 		}
 	}
 
-	fragType := horizonmodels.MapGraphIntentNodeTypeToFragmentType(nodeType, canonicalPath)
+	fragClass, fragSubtype, _ := horizonmodels.MapGraphIntentNodeTypeToClass(nodeType, canonicalPath)
 	state := toMetricState(spec.State)
 	now := time.Now().UTC()
 	fragment := &horizonmodels.HorizonFragment{
 		TenantID:      "global",
-		Type:          fragType,
+		Class:         fragClass,
+		Subtype:       fragSubtype,
 		CanonicalPath: canonicalPath,
 		Labels:        map[string]string{"en": label},
 		Status:        "active",
@@ -1562,7 +1577,7 @@ func (e *graphIntentApplyExecutor) applyCreateNode(spec horizonmodels.GraphInten
 	if canonicalPath != "" {
 		e.createdScopeCanonicalPaths = append(e.createdScopeCanonicalPaths, canonicalPath)
 	}
-	e.ensureNodeLensItem(id, canonicalPath, label, string(fragType))
+	e.ensureNodeLensItem(id, canonicalPath, label, string(fragClass))
 }
 
 func (e *graphIntentApplyExecutor) applyCreateEdge(spec horizonmodels.GraphIntentEdgeSpec) {
@@ -1584,8 +1599,8 @@ func (e *graphIntentApplyExecutor) applyCreateEdge(spec horizonmodels.GraphInten
 		})
 		return
 	}
-	depType, aliasQualifiers, aliasWarning, ok := horizonmodels.NormalizeGraphIntentRelationType(spec.RelationType)
-	if !ok {
+	relDecode, ok := horizonmodels.NormalizeGraphIntentRelationType(spec.RelationType)
+	if !ok || relDecode.Dropped || strings.TrimSpace(string(relDecode.Relation)) == "" {
 		e.unresolved = append(e.unresolved, horizonmodels.GraphIntentUnresolvedItem{
 			TempID:          strings.TrimSpace(spec.TempID),
 			Reason:          fmt.Sprintf("unsupported relation type: %s", strings.TrimSpace(spec.RelationType)),
@@ -1593,8 +1608,10 @@ func (e *graphIntentApplyExecutor) applyCreateEdge(spec horizonmodels.GraphInten
 		})
 		return
 	}
-	if aliasWarning != "" {
-		e.warnings = appendUniqueStrings(e.warnings, aliasWarning)
+	depType := relDecode.Relation
+	aliasQualifiers := relDecode.ExtraAttributes
+	if relDecode.Note != "" {
+		e.warnings = appendUniqueStrings(e.warnings, relDecode.Note)
 	}
 
 	sourceID := fromID
@@ -1635,7 +1652,7 @@ func (e *graphIntentApplyExecutor) applyCreateEdge(spec horizonmodels.GraphInten
 		TenantID:         strings.TrimSpace(e.lens.TenantID),
 		SourceFragmentID: sourceID,
 		TargetFragmentID: targetID,
-		Type:             depType,
+		Relation:         depType,
 		Properties: horizonmodels.EdgeProperties{
 			Criticality:   criticality,
 			Amplification: 1.0,
@@ -1701,9 +1718,10 @@ func (e *graphIntentApplyExecutor) applyNodePatch(patch horizonmodels.GraphInten
 		}
 	}
 	if patch.Type != nil && strings.TrimSpace(*patch.Type) != "" {
-		targetType := horizonmodels.MapGraphIntentNodeTypeToFragmentType(strings.TrimSpace(*patch.Type), fragment.CanonicalPath)
-		if fragment.Type != targetType && targetType != "" {
-			fragment.Type = targetType
+		targetClass, targetSubtype, _ := horizonmodels.MapGraphIntentNodeTypeToClass(strings.TrimSpace(*patch.Type), fragment.CanonicalPath)
+		if targetClass != "" && (fragment.Class != targetClass || fragment.Subtype != targetSubtype) {
+			fragment.Class = targetClass
+			fragment.Subtype = targetSubtype
 			changed = true
 		}
 	}
@@ -1774,8 +1792,8 @@ func (e *graphIntentApplyExecutor) applyEdgePatch(patch horizonmodels.GraphInten
 
 	changed := false
 	if patch.RelationType != nil && strings.TrimSpace(*patch.RelationType) != "" {
-		newType, aliasQualifiers, aliasWarning, ok := horizonmodels.NormalizeGraphIntentRelationType(*patch.RelationType)
-		if !ok {
+		decode, ok := horizonmodels.NormalizeGraphIntentRelationType(*patch.RelationType)
+		if !ok || decode.Dropped || strings.TrimSpace(string(decode.Relation)) == "" {
 			e.unresolved = append(e.unresolved, horizonmodels.GraphIntentUnresolvedItem{
 				TempID:          strings.TrimSpace(patch.PatchID),
 				Reason:          fmt.Sprintf("unsupported edge patch relation type: %s", strings.TrimSpace(*patch.RelationType)),
@@ -1783,17 +1801,18 @@ func (e *graphIntentApplyExecutor) applyEdgePatch(patch horizonmodels.GraphInten
 			})
 			return
 		}
-		if aliasWarning != "" {
-			e.warnings = appendUniqueStrings(e.warnings, aliasWarning)
+		newType := decode.Relation
+		if decode.Note != "" {
+			e.warnings = appendUniqueStrings(e.warnings, decode.Note)
 		}
 		if edge.Qualifiers == nil {
 			edge.Qualifiers = map[string]interface{}{}
 		}
-		for k, v := range aliasQualifiers {
+		for k, v := range decode.ExtraAttributes {
 			edge.Qualifiers[k] = v
 		}
-		if edge.Type != newType {
-			edge.Type = newType
+		if edge.Relation != newType {
+			edge.Relation = newType
 			changed = true
 		}
 	}
@@ -2004,10 +2023,10 @@ func (e *graphIntentApplyExecutor) reassignEdgesWithDedup(tenantID, fromID, toID
 		return 0, 0
 	}
 	for _, edge := range srcEdges {
-		if edge == nil || strings.TrimSpace(edge.ID) == "" || edge.Type == "" {
+		if edge == nil || strings.TrimSpace(edge.ID) == "" || edge.Relation == "" {
 			continue
 		}
-		existing, err := e.edgesRepo.GetBySourceTargetAndType(e.ctx, tenantID, toID, edge.TargetFragmentID, edge.Type)
+		existing, err := e.edgesRepo.GetBySourceTargetAndType(e.ctx, tenantID, toID, edge.TargetFragmentID, edge.Relation)
 		if err == nil && existing != nil {
 			if graphIntentMergeEdgeMetrics(existing, edge) {
 				_ = e.edgesRepo.Update(e.ctx, existing)
@@ -2031,10 +2050,10 @@ func (e *graphIntentApplyExecutor) reassignEdgesWithDedup(tenantID, fromID, toID
 		}
 	}
 	for _, edge := range tgtEdges {
-		if edge == nil || strings.TrimSpace(edge.ID) == "" || edge.Type == "" {
+		if edge == nil || strings.TrimSpace(edge.ID) == "" || edge.Relation == "" {
 			continue
 		}
-		existing, err := e.edgesRepo.GetBySourceTargetAndType(e.ctx, tenantID, edge.SourceFragmentID, toID, edge.Type)
+		existing, err := e.edgesRepo.GetBySourceTargetAndType(e.ctx, tenantID, edge.SourceFragmentID, toID, edge.Relation)
 		if err == nil && existing != nil {
 			if graphIntentMergeEdgeMetrics(existing, edge) {
 				_ = e.edgesRepo.Update(e.ctx, existing)
@@ -2133,8 +2152,8 @@ func (e *graphIntentApplyExecutor) bestEffortDedupeEdgesForNode(tenantID, fragme
 		}
 		s := strings.TrimSpace(ed.SourceFragmentID)
 		t := strings.TrimSpace(ed.TargetFragmentID)
-		ty := ed.Type
-		ns, nt, nty, _ := horizonmodels.NormalizeSymmetricEdge(s, t, ty)
+		ty := ed.Relation
+		ns, nt, nty, _ := horizonscout.NormalizeSymmetricEdge(s, t, ty)
 		k := key{s: ns, t: nt, ty: string(nty)}
 		if existing, ok := kept[k]; ok && existing != nil {
 			keep := existing
@@ -2164,12 +2183,13 @@ func (e *graphIntentApplyExecutor) bestEffortDedupeEdgesForNode(tenantID, fragme
 }
 
 func (e *graphIntentApplyExecutor) applyRelationRewrite(rw horizonmodels.GraphIntentRelationRewrite) {
-	matchType, _, _, matchTypeOK := horizonmodels.NormalizeGraphIntentRelationType(rw.Match.RelationType)
-	if strings.TrimSpace(rw.Match.RelationType) == "" {
+	matchDecode, matchTypeOK := horizonmodels.NormalizeGraphIntentRelationType(rw.Match.RelationType)
+	if strings.TrimSpace(rw.Match.RelationType) == "" || matchDecode.Dropped {
 		matchTypeOK = false
 	}
-	replaceType, replaceAliasQualifiers, replaceAliasWarning, replaceOK := horizonmodels.NormalizeGraphIntentRelationType(rw.ReplaceWith.RelationType)
-	if !replaceOK {
+	matchType := matchDecode.Relation
+	replaceDecode, replaceOK := horizonmodels.NormalizeGraphIntentRelationType(rw.ReplaceWith.RelationType)
+	if !replaceOK || replaceDecode.Dropped || strings.TrimSpace(string(replaceDecode.Relation)) == "" {
 		e.unresolved = append(e.unresolved, horizonmodels.GraphIntentUnresolvedItem{
 			TempID:          strings.TrimSpace(rw.RewriteID),
 			Reason:          fmt.Sprintf("unsupported rewrite replacement relation type: %s", strings.TrimSpace(rw.ReplaceWith.RelationType)),
@@ -2177,8 +2197,10 @@ func (e *graphIntentApplyExecutor) applyRelationRewrite(rw horizonmodels.GraphIn
 		})
 		return
 	}
-	if replaceAliasWarning != "" {
-		e.warnings = appendUniqueStrings(e.warnings, replaceAliasWarning)
+	replaceType := replaceDecode.Relation
+	replaceAliasQualifiers := replaceDecode.ExtraAttributes
+	if replaceDecode.Note != "" {
+		e.warnings = appendUniqueStrings(e.warnings, replaceDecode.Note)
 	}
 
 	sourceIDs := e.resolveManyNodeRefs(rw.Match.SourceNodeIDs)
@@ -2206,7 +2228,7 @@ func (e *graphIntentApplyExecutor) applyRelationRewrite(rw horizonmodels.GraphIn
 		if edge == nil {
 			continue
 		}
-		if matchTypeOK && edge.Type != matchType {
+		if matchTypeOK && edge.Relation != matchType {
 			continue
 		}
 		if len(sourceIDs) > 0 && !containsString(sourceIDs, edge.SourceFragmentID) {
@@ -2217,8 +2239,8 @@ func (e *graphIntentApplyExecutor) applyRelationRewrite(rw horizonmodels.GraphIn
 		}
 
 		changed := false
-		if edge.Type != replaceType {
-			edge.Type = replaceType
+		if edge.Relation != replaceType {
+			edge.Relation = replaceType
 			changed = true
 		}
 		if edge.Qualifiers == nil {
@@ -2313,9 +2335,9 @@ func (e *graphIntentApplyExecutor) resolvePatchEdge(patch horizonmodels.GraphInt
 		return nil, false
 	}
 	if patch.RelationType != nil && strings.TrimSpace(*patch.RelationType) != "" {
-		typ, _, _, ok := horizonmodels.NormalizeGraphIntentRelationType(*patch.RelationType)
-		if ok {
-			edge, err := e.edgesRepo.GetBySourceTargetAndType(e.ctx, strings.TrimSpace(e.lens.TenantID), sourceID, targetID, typ)
+		decode, ok := horizonmodels.NormalizeGraphIntentRelationType(*patch.RelationType)
+		if ok && !decode.Dropped && strings.TrimSpace(string(decode.Relation)) != "" {
+			edge, err := e.edgesRepo.GetBySourceTargetAndType(e.ctx, strings.TrimSpace(e.lens.TenantID), sourceID, targetID, decode.Relation)
 			if err == nil && edge != nil {
 				return edge, true
 			}
@@ -2349,39 +2371,43 @@ func (e *graphIntentApplyExecutor) normalizeCanonicalPathHint(spec horizonmodels
 	switch typ {
 	case "GOVERNMENT_AGENCY":
 		return taxonomy.GovCanonicalPath(firstNonEmptyGraphIntent(geoHint, "na"), label)
-	case string(horizonmodels.FragmentTypeOrganization):
+	case string(FragmentTypeOrganization):
 		return taxonomy.OrgCanonicalPath(firstNonEmptyGraphIntent(geoHint, "na"), label)
-	case string(horizonmodels.FragmentTypeFacility):
+	case string(FragmentTypeFacility):
 		return taxonomy.FacilityCanonicalPath(firstNonEmptyGraphIntent(geoHint, "na"), label)
-	case string(horizonmodels.FragmentTypeGeoRegion):
+	case string(FragmentTypeGeoRegion):
 		return taxonomy.GeoCanonicalPath("global", slug, "")
-	case string(horizonmodels.FragmentTypeProduct):
+	case string(FragmentTypeProduct):
 		return taxonomy.ProductCanonicalPath("", label)
-	case string(horizonmodels.FragmentTypeProgram):
+	// Legacy UPPER_SNAKE wire tokens with no first-class AH FragmentClass
+	// equivalent (their AH home is a (Class, Subtype) tuple). Match the raw
+	// literal so wire payloads keep deterministic canonical_path scaffolding
+	// during the migration window.
+	case "PROGRAM":
 		return taxonomy.ProgramCanonicalPath("", label)
-	case string(horizonmodels.FragmentTypeMarket):
+	case string(FragmentTypeMarket):
 		return taxonomy.MarketCanonicalPath("global", label)
-	case string(horizonmodels.FragmentTypePerson):
+	case string(FragmentTypePerson):
 		return taxonomy.PersonCanonicalPath(label)
-	case string(horizonmodels.FragmentTypeMediaChannel):
+	case "MEDIA_CHANNEL":
 		return taxonomy.JoinPath("media", "channel", slug)
-	case string(horizonmodels.FragmentTypeDomain):
+	case "DOMAIN":
 		return taxonomy.JoinPath("domain", "v1", "other", slug)
-	case string(horizonmodels.FragmentTypeSphere):
+	case "SPHERE":
 		return taxonomy.JoinPath("sphere", slug)
-	case string(horizonmodels.FragmentTypeEvent):
+	case string(FragmentTypeEvent):
 		return taxonomy.JoinPath("event", slug)
-	case string(horizonmodels.FragmentTypeDecisionPoint):
+	case string(FragmentTypeDecisionPoint):
 		return taxonomy.JoinPath("decision", "general", slug)
-	case string(horizonmodels.FragmentTypeMechanism):
+	case string(FragmentTypeMechanism):
 		return taxonomy.JoinPath("mechanism", "general", slug)
-	case string(horizonmodels.FragmentTypeDeposit):
+	case "DEPOSIT":
 		return taxonomy.JoinPath("deposit", "resource", slug)
-	case string(horizonmodels.FragmentTypeTrack):
+	case string(FragmentTypeTrack):
 		return taxonomy.JoinPath("track", "ground", "global", slug)
-	case string(horizonmodels.FragmentTypeSupplyLink):
+	case "SUPPLY_LINK":
 		return taxonomy.JoinPath("supply-link", "global", "na", slug)
-	case string(horizonmodels.FragmentTypeCommunity), "COMMUNITY_DYNASTY", "COMMUNITY_TRIBE":
+	case string(FragmentTypeCommunity), "COMMUNITY_DYNASTY", "COMMUNITY_TRIBE":
 		communityType := "interest"
 		if typ == "COMMUNITY_DYNASTY" {
 			communityType = "dynasty"
@@ -2554,8 +2580,11 @@ func (e *graphIntentApplyExecutor) syncNodeLensItem(fragment *horizonmodels.Hori
 	if label := strings.TrimSpace(fragment.Labels["en"]); label != "" {
 		updates["label"] = label
 	}
-	if fragment.Type != "" {
-		updates["type"] = string(fragment.Type)
+	if fragment.Class != "" {
+		updates["class"] = string(fragment.Class)
+		if fragment.Subtype != "" {
+			updates["subtype"] = fragment.Subtype
+		}
 	}
 	if cp := strings.TrimSpace(fragment.CanonicalPath); cp != "" {
 		updates["canonicalPath"] = cp
@@ -2620,7 +2649,7 @@ func (e *graphIntentApplyExecutor) syncEdgeLensItem(edge *horizonmodels.Dependen
 	pairKey := edgePairKey(edge.SourceFragmentID, edge.TargetFragmentID)
 	items := e.edgeItemsByPair[pairKey]
 	if len(items) == 0 {
-		e.ensureEdgeLensItem(edge.SourceFragmentID, edge.TargetFragmentID, string(edge.Type), stringValueFromMap(edge.Qualifiers, "direction"), edge.Properties.Criticality, edge.Properties.Amplification, edge.Properties.LatencyHours)
+		e.ensureEdgeLensItem(edge.SourceFragmentID, edge.TargetFragmentID, string(edge.Relation), stringValueFromMap(edge.Qualifiers, "direction"), edge.Properties.Criticality, edge.Properties.Amplification, edge.Properties.LatencyHours)
 		return
 	}
 	var selected *horizonmodels.LensItem
@@ -2628,7 +2657,7 @@ func (e *graphIntentApplyExecutor) syncEdgeLensItem(edge *horizonmodels.Dependen
 		if item == nil {
 			continue
 		}
-		if strings.TrimSpace(stringPtrValue(item.EdgeType)) == string(edge.Type) || strings.TrimSpace(stringPtrValue(item.Subkind)) == string(edge.Type) {
+		if strings.TrimSpace(stringPtrValue(item.EdgeType)) == string(edge.Relation) || strings.TrimSpace(stringPtrValue(item.Subkind)) == string(edge.Relation) {
 			selected = item
 			break
 		}
@@ -2640,8 +2669,8 @@ func (e *graphIntentApplyExecutor) syncEdgeLensItem(edge *horizonmodels.Dependen
 		return
 	}
 	updates := map[string]interface{}{
-		"subkind":       string(edge.Type),
-		"edgeType":      string(edge.Type),
+		"subkind":       string(edge.Relation),
+		"edgeType":      string(edge.Relation),
 		"criticality":   edge.Properties.Criticality,
 		"amplification": edge.Properties.Amplification,
 		"latencyHours":  edge.Properties.LatencyHours,

@@ -22,7 +22,7 @@ func TestEquivalentLocationPaths_InternationalAlias(t *testing.T) {
 func TestAxisTypeFit_AllowsTransitChokepointGeoForLogistics(t *testing.T) {
 	frag := &horizonmodels.HorizonFragment{
 		CanonicalPath: "/loc/int/red-sea",
-		Type:          horizonmodels.FragmentTypeGeoRegion,
+		Class:         FragmentTypeGeoRegion,
 		Labels:        map[string]string{"en": "Red Sea"},
 		Identifiers: map[string]string{
 			"geoKind": "chokepoint_anchor",
@@ -43,7 +43,7 @@ func TestExternalApplicabilityEvaluator_ExactLocationAliasPassesHighStakesSeed(t
 	fragment := &horizonmodels.HorizonFragment{
 		ID:            "frag-red-sea",
 		CanonicalPath: "/loc/int/red-sea",
-		Type:          horizonmodels.FragmentTypeGeoRegion,
+		Class:         FragmentTypeGeoRegion,
 		Labels:        map[string]string{"en": "Red Sea"},
 		Identifiers: map[string]string{
 			"geoKind": "chokepoint_anchor",

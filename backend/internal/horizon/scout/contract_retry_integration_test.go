@@ -18,7 +18,7 @@ func TestContractNormalizer_NonRetryableContractError(t *testing.T) {
 
 	base := &models.HorizonFragment{
 		CanonicalPath: "/org/us/acme",
-		Type:          models.FragmentTypeOrganization,
+		Class:          FragmentTypeOrganization,
 		Governance:    models.Governance{Owner: "SYSTEM", Status: "ACTIVE"},
 		TenantID:      "global",
 	}

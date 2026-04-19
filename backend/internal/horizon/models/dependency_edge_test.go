@@ -3,6 +3,8 @@ package models
 import (
 	"testing"
 	"time"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestDependencyEdge_IsActive(t *testing.T) {
@@ -192,13 +194,17 @@ func TestDependencyEdge_GetEdgeModality(t *testing.T) {
 	}
 }
 
-func TestDependencyEdge_Validate_EXTRACTS_FROM(t *testing.T) {
+// TestDependencyEdge_Validate_Produces_Extraction is the AH replacement
+// for the legacy EXTRACTS_FROM test: per migration_map.yaml, EXTRACTS_FROM
+// now lands as `produces` with attributes.production_kind="extraction".
+func TestDependencyEdge_Validate_Produces_Extraction(t *testing.T) {
 	edge := &DependencyEdge{
 		ID:               "test-edge",
 		TenantID:         "global",
-		SourceFragmentID: "facility-1",
-		TargetFragmentID: "deposit-1",
-		Type:             DependencyTypeExtractsFrom,
+		SourceFragmentID: "deposit-1",
+		TargetFragmentID: "site-1",
+		Relation:         ah.RelationNameProduces,
+		Attributes:       map[string]interface{}{"production_kind": "extraction"},
 		Properties: EdgeProperties{
 			Criticality:   0.8,
 			Amplification: 1.0,
@@ -207,17 +213,21 @@ func TestDependencyEdge_Validate_EXTRACTS_FROM(t *testing.T) {
 	}
 
 	if err := edge.Validate(); err != nil {
-		t.Errorf("Validate() error = %v, expected nil for valid EXTRACTS_FROM edge", err)
+		t.Errorf("Validate() error = %v, expected nil for valid produces (extraction) edge", err)
 	}
 }
 
-func TestDependencyEdge_Validate_WithMetrics(t *testing.T) {
+// TestDependencyEdge_Validate_BeneficiallyOwns_WithMetrics is the AH
+// replacement for OWNS+ownership_percent: per migration_map.yaml, OWNS
+// folds into beneficially_owns; the share moves to attributes.beneficial_share_pct
+// (modelled here on Metrics for back-compat coverage).
+func TestDependencyEdge_Validate_BeneficiallyOwns_WithMetrics(t *testing.T) {
 	edge := &DependencyEdge{
 		ID:               "test-edge",
 		TenantID:         "global",
 		SourceFragmentID: "org-1",
 		TargetFragmentID: "org-2",
-		Type:             DependencyTypeOwns,
+		Relation:         ah.RelationNameBeneficiallyOwns,
 		Properties: EdgeProperties{
 			Criticality:   0.9,
 			Amplification: 1.0,
@@ -279,6 +289,11 @@ func TestDependencyEdge_HasAnyTransmissionQualifier(t *testing.T) {
 	}
 }
 
+// TestDependencyEdge_IsTransmissionSensitive validates the new AH-aligned
+// gate: closed set of physical-flow relations is always sensitive; any
+// other relation falls back to "sensitive iff a transmission qualifier is
+// already present" (preserves the legacy "if data is there, model it"
+// intent without depending on the retired DependencyFacet enum).
 func TestDependencyEdge_IsTransmissionSensitive(t *testing.T) {
 	tests := []struct {
 		name string
@@ -286,36 +301,45 @@ func TestDependencyEdge_IsTransmissionSensitive(t *testing.T) {
 		want bool
 	}{
 		{
-			name: "depends_on logistics facet",
-			edge: &DependencyEdge{
-				Type:       DependencyTypeDependsOn,
-				Qualifiers: map[string]interface{}{"facet": string(FacetLogistics)},
-			},
+			name: "supplies relation always sensitive",
+			edge: &DependencyEdge{Relation: ah.RelationNameSupplies},
 			want: true,
 		},
 		{
-			name: "depends_on non transmission facet",
-			edge: &DependencyEdge{
-				Type:       DependencyTypeDependsOn,
-				Qualifiers: map[string]interface{}{"facet": string(FacetCommunication)},
-			},
+			name: "leg_connects relation always sensitive",
+			edge: &DependencyEdge{Relation: ah.RelationNameLegConnects},
+			want: true,
+		},
+		{
+			name: "passes_through relation always sensitive",
+			edge: &DependencyEdge{Relation: ah.RelationNamePassesThrough},
+			want: true,
+		},
+		{
+			name: "transships_at relation always sensitive",
+			edge: &DependencyEdge{Relation: ah.RelationNameTransshipsAt},
+			want: true,
+		},
+		{
+			name: "non-flow relation without qualifiers - not sensitive",
+			edge: &DependencyEdge{Relation: ah.RelationNameRegulates},
 			want: false,
 		},
 		{
-			name: "depends_on unknown facet but with transmission qualifier",
+			name: "non-flow relation with transmission qualifier - sensitive",
 			edge: &DependencyEdge{
-				Type:       DependencyTypeDependsOn,
+				Relation:   ah.RelationNameInfluences,
 				Qualifiers: map[string]interface{}{QualifierReroutePenalty: 0.2},
 			},
 			want: true,
 		},
 		{
-			name: "non depends_on never transmission sensitive",
+			name: "regulates relation with transmission alias qualifier - sensitive",
 			edge: &DependencyEdge{
-				Type:       DependencyTypeSuppliesTo,
-				Qualifiers: map[string]interface{}{"facet": string(FacetLogistics)},
+				Relation:   ah.RelationNameRegulates,
+				Qualifiers: map[string]interface{}{QualifierAliasFlowShare: 0.5},
 			},
-			want: false,
+			want: true,
 		},
 	}
 

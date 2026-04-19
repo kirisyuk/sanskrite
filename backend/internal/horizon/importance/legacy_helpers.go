@@ -1,6 +1,49 @@
-package models
+package importance
 
-// Semantic group names for edge types (TZ §6.2). Used for filtering, allowlist by domain mode, shouldRecurse.
+import (
+	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+)
+
+// edgeSubstitutability is a local replacement for the retired
+// edge.GetSubstitutability() helper; the qualifier itself still lives on
+// the free-form Qualifiers bag (see models/transmission_qualifiers.go).
+func edgeSubstitutability(e *horizonmodels.DependencyEdge) float64 {
+	if e == nil || e.Qualifiers == nil {
+		return 0
+	}
+	raw, ok := e.Qualifiers[horizonmodels.QualifierAliasSubstitutability]
+	if !ok || raw == nil {
+		return 0
+	}
+	switch v := raw.(type) {
+	case float64:
+		return clampUnit(v)
+	case float32:
+		return clampUnit(float64(v))
+	case int:
+		return clampUnit(float64(v))
+	case int64:
+		return clampUnit(float64(v))
+	}
+	return 0
+}
+
+func clampUnit(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
+// Legacy helper port of the deleted models.SemanticGroup* vocabulary and
+// SemanticGroupForEdgeType resolver. Importance reuses the same closed
+// vocabulary the scout package keeps in scout/legacy_helpers.go; this is
+// a faithful local replica so the importance scorer/explainer can keep
+// classifying edges without the now-removed models helper.
+
 const (
 	SemanticGroupSupplyChain = "supply_chain"
 	SemanticGroupGovernance  = "governance"
@@ -13,8 +56,6 @@ const (
 	SemanticGroupOther       = "other"
 )
 
-// SemanticGroupForEdgeType returns the semantic group for a dependency type.
-// Per TZ §6.2. After Stage 5 consolidation, domain group will only have FOCUSES_ON and DOMAIN_RELATION.
 func SemanticGroupForEdgeType(t DependencyType) string {
 	if g, ok := edgeTypeToSemanticGroup[t]; ok {
 		return g
@@ -23,7 +64,6 @@ func SemanticGroupForEdgeType(t DependencyType) string {
 }
 
 var edgeTypeToSemanticGroup = map[DependencyType]string{
-	// supply_chain
 	DependencyTypeProduces:       SemanticGroupSupplyChain,
 	DependencyTypeSuppliesTo:     SemanticGroupSupplyChain,
 	DependencyTypeTransformsInto: SemanticGroupSupplyChain,
@@ -32,7 +72,7 @@ var edgeTypeToSemanticGroup = map[DependencyType]string{
 	DependencyTypeExtractsFrom:   SemanticGroupSupplyChain,
 	DependencyTypeLocatedIn:      SemanticGroupSupplyChain,
 	DependencyTypeOperatesIn:     SemanticGroupSupplyChain,
-	// governance
+
 	DependencyTypeOwns:          SemanticGroupGovernance,
 	DependencyTypeSubsidiaryOf:  SemanticGroupGovernance,
 	DependencyTypeControls:      SemanticGroupGovernance,
@@ -41,22 +81,22 @@ var edgeTypeToSemanticGroup = map[DependencyType]string{
 	DependencyTypeEmployedBy:    SemanticGroupGovernance,
 	DependencyTypeFounded:       SemanticGroupGovernance,
 	DependencyTypeAdministers:   SemanticGroupGovernance,
-	// assurance (Third Line: audit, certification, regulatory oversight)
+
 	DependencyTypeAssures:   SemanticGroupAssurance,
 	DependencyTypeAuditedBy: SemanticGroupAssurance,
 	DependencyTypeRegulates: SemanticGroupAssurance,
-	// market
+
 	DependencyTypeParticipatesIn:   SemanticGroupMarket,
 	DependencyTypeTradedIn:         SemanticGroupMarket,
 	DependencyTypeHasMarketSegment: SemanticGroupMarket,
 	DependencyTypeDominates:        SemanticGroupMarket,
-	// strategic
+
 	DependencyTypeControlsAccess:    SemanticGroupStrategic,
 	DependencyTypeImposesCondition:  SemanticGroupStrategic,
 	DependencyTypeGatekeepsDecision: SemanticGroupStrategic,
 	DependencyTypeUsesMechanism:     SemanticGroupStrategic,
 	DependencyTypeAppliesTo:         SemanticGroupStrategic,
-	// domain (canonical: FOCUSES_ON, DOMAIN_RELATION)
+
 	DependencyTypeFocusesOn:      SemanticGroupDomain,
 	DependencyTypeDomainRelation: SemanticGroupDomain,
 	DependencyTypeRelatedDomain:  SemanticGroupDomain,
@@ -67,7 +107,7 @@ var edgeTypeToSemanticGroup = map[DependencyType]string{
 	DependencyTypeSurfaces:       SemanticGroupDomain,
 	DependencyTypeInvolvesActor:  SemanticGroupDomain,
 	DependencyTypeInGeoScope:     SemanticGroupDomain,
-	// person (canonical: ASSOCIATED_WITH, EMPLOYED_BY, MEMBER_OF, RELATIVE_OF)
+
 	DependencyTypeRelativeOf:     SemanticGroupPerson,
 	DependencyTypeAssociatedWith: SemanticGroupPerson,
 	DependencyTypeRelatedTo:      SemanticGroupPerson,
@@ -77,7 +117,7 @@ var edgeTypeToSemanticGroup = map[DependencyType]string{
 	DependencyTypeWorksFor:       SemanticGroupPerson,
 	DependencyTypeKeyPerson:      SemanticGroupPerson,
 	DependencyTypeHasKeyPerson:   SemanticGroupPerson,
-	// transition (canonical: CORPORATE_TRANSITION)
+
 	DependencyTypeCorporateTransition: SemanticGroupTransition,
 	DependencyTypeRenamedTo:           SemanticGroupTransition,
 	DependencyTypeRebrandedTo:         SemanticGroupTransition,
@@ -85,7 +125,7 @@ var edgeTypeToSemanticGroup = map[DependencyType]string{
 	DependencyTypeMergedInto:          SemanticGroupTransition,
 	DependencyTypeSpunOffFrom:         SemanticGroupTransition,
 	DependencyTypeAcquiredBy:          SemanticGroupTransition,
-	// other
+
 	DependencyTypeCompetesWith: SemanticGroupOther,
 	DependencyTypeInfluences:   SemanticGroupOther,
 	DependencyTypeDependsOn:    SemanticGroupOther,

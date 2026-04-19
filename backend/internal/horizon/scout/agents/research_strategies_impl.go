@@ -2118,7 +2118,7 @@ func isDomainFragment(fragment *models.HorizonFragment) bool {
 		return false
 	}
 	cp := strings.TrimSpace(strings.ToLower(fragment.CanonicalPath))
-	return fragment.Type == models.FragmentTypeDomain || strings.HasPrefix(cp, "/domain/")
+	return fragment.IsLegacyDomain() || strings.HasPrefix(cp, "/domain/")
 }
 
 func buildGeneralResearchDomainExpansionBlock(fragment *models.HorizonFragment) string {
@@ -2187,8 +2187,8 @@ func buildResearchDecompositionGuidanceBlock(fragment *models.HorizonFragment, h
 		return ""
 	}
 	cp := strings.TrimSpace(fragment.CanonicalPath)
-	isAnchor := fragment.Type == models.FragmentTypeMarket ||
-		fragment.Type == models.FragmentTypeProgram ||
+	isAnchor := fragment.Class == FragmentTypeMarket ||
+		fragment.IsLegacyProgram() ||
 		strings.HasPrefix(cp, "/market/") ||
 		strings.HasPrefix(cp, "/program/")
 	if !isAnchor {
@@ -2266,10 +2266,10 @@ func (a *ResearchAgent) buildGeneralEnrichmentPrompt(input ResearchStrategyInput
 	domainBlock := buildGeneralResearchDomainExpansionBlock(frag)
 	specBlock := buildResearchSpecializationModulesBlock(input.Specialties)
 	businessRulesBlock := taxonomy.BusinessTagRulesPrompt()
-	profileBlock := entity_semantics.ResearchBlockForPath(frag.CanonicalPath, frag.Type, frag.CommunityType)
-	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlockWithHints(frag.CanonicalPath, frag.Type, frag.CommunityType, frag.Qualifiers, frag.Identifiers, frag.SpherePaths)
+	profileBlock := entity_semantics.ResearchBlockForPath(frag.CanonicalPath, frag.Class, frag.Subtype, frag.CommunityType)
+	objectTypeTaskBlock := buildObjectTypeTaskSpecializationBlockWithHints(frag.CanonicalPath, frag.Class, frag.CommunityType, frag.Qualifiers, frag.Identifiers, frag.SpherePaths)
 	coreBusinessTaxonomyBlock := buildCoreBusinessTaxonomyBlock()
-	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
+	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Class, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	nameRulesBlock := naming.PromptEntityNameNormalizationRules()
 	canonicalRulesBlock := taxonomy.ExtendedCanonicalPathRulesPrompt() + "\n" + generalResearchCanonicalSupplementBlock()
 	relationTaxonomyBlock := buildGeneralResearchRelationTaxonomyBlock(isDomainFragment(frag))
@@ -2396,7 +2396,7 @@ func (a *ResearchAgent) buildOperationalChainEnrichmentPrompt(mode string, input
 	geoContext := geoAndSectorContext(frag)
 	chainBlock := buildResearchChainContextBlock(input.ChainContext)
 	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
-	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
+	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Class, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for %s context. Build coherent operational chains.
 
 %s
@@ -3066,7 +3066,7 @@ func (a *ResearchAgent) buildGovernanceEnrichmentPrompt(input ResearchStrategyIn
 	}
 	geoContext := geoAndSectorContext(frag)
 	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
-	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
+	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Class, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for GOVERNANCE context. Aim for COMPLETE ownership and control structure:
 
 ENTITY TYPES in governance: %s. Use correct targetType for each relation.
@@ -3144,7 +3144,7 @@ func (a *ResearchAgent) buildAssuranceEnrichmentPrompt(input ResearchStrategyInp
 	}
 	geoContext := geoAndSectorContext(frag)
 	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
-	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
+	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Class, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for ASSURANCE context (Third Line: independent audit, certification, regulatory oversight). Aim for COMPLETE assurance picture:
 
 ENTITY TYPES in assurance: %s. Assurers are audit firms, certifiers, regulators. Assurees are orgs, facilities, programs.
@@ -3201,7 +3201,7 @@ func (a *ResearchAgent) buildMarketEnrichmentPrompt(input ResearchStrategyInput)
 		questions = "Identify market participation, sub-markets, key players, market sizing (TAM, CAGR, HHI, CR4), geographic concentration."
 	}
 	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
-	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
+	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Class, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for MARKET context. Aim for COMPLETE market picture:
 
 ENTITY TYPES in market: %s. PARTICIPATES_IN source can be active market players; TRADED_IN source is PRODUCT. Use correct targetType for each relation.
@@ -3275,7 +3275,7 @@ func (a *ResearchAgent) buildStrategicEnrichmentPrompt(input ResearchStrategyInp
 		questions = "Identify decision points, mechanisms, gatekeepers, control/access relations, export controls, sanctions, licensing."
 	}
 	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
-	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
+	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Class, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for STRATEGIC context only.
 
 ENTITY TYPES in strategic: %s. Gatekeepers can be org, gov, community, or person. Use correct targetType for each relation.
@@ -3328,7 +3328,7 @@ func (a *ResearchAgent) buildPolicyImpactEnrichmentPrompt(input ResearchStrategy
 		questions = "Identify policy parameters, affected segments, impact channels, and regulator/program links."
 	}
 	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
-	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
+	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Class, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for POLICY IMPACT context.
 
 ENTITY TYPES in policy impact: %s. Use correct targetType for each relation.
@@ -3424,7 +3424,7 @@ func (a *ResearchAgent) buildEcosystemEnrichmentPrompt(input ResearchStrategyInp
 		questions = "Map all actors in this ecosystem, their roles, mutual relationships, power dynamics, and dependencies."
 	}
 	existingEntitiesBlock := buildResearchExistingEntitiesBlock(input.ExistingEntities)
-	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Type, frag.Qualifiers, frag.Identifiers, frag.Labels)
+	objectQualifierContractBlock := buildObjectQualifierContractBlockWithHints(frag.CanonicalPath, frag.Class, frag.Qualifiers, frag.Identifiers, frag.Labels)
 	return fmt.Sprintf(`You are a research agent. Enrich the entity for ECOSYSTEM/STAKEHOLDER MAPPING context.
 
 ENTITY TYPES in ecosystem context: %s. Use correct targetType for each relation.
@@ -4040,7 +4040,7 @@ Nodes MUST alternate actor→product. Include FACILITY where transformation happ
 
 Return ONLY valid JSON. No markdown.`,
 		input.OriginalQuery,
-		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		nameForPrompt(frag), frag.Class, frag.CanonicalPath,
 		string(fragJSON),
 		taxonomy.SupplyChainEdgeTypesString(),
 		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeSupplyChain),
@@ -4081,7 +4081,7 @@ ENTITY TYPES: %s
 
 Return ONLY valid JSON. No markdown.`,
 		input.OriginalQuery,
-		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		nameForPrompt(frag), frag.Class, frag.CanonicalPath,
 		string(fragJSON),
 		relationTypesPromptForDomainMode(taxonomy.DomainModeEcosystem),
 		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeEcosystem),
@@ -4122,7 +4122,7 @@ ENTITY TYPES: %s
 
 Return ONLY valid JSON. No markdown.`,
 		input.OriginalQuery,
-		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		nameForPrompt(frag), frag.Class, frag.CanonicalPath,
 		string(fragJSON),
 		relationTypesPromptForDomainMode(taxonomy.DomainModeGovernance),
 		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeGovernance),
@@ -4163,7 +4163,7 @@ ENTITY TYPES: %s
 
 Return ONLY valid JSON. No markdown.`,
 		input.OriginalQuery,
-		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		nameForPrompt(frag), frag.Class, frag.CanonicalPath,
 		string(fragJSON),
 		relationTypesPromptForDomainMode(taxonomy.DomainModePolicyImpact),
 		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModePolicyImpact),
@@ -4204,7 +4204,7 @@ ENTITY TYPES: %s
 
 Return ONLY valid JSON. No markdown.`,
 		input.OriginalQuery,
-		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		nameForPrompt(frag), frag.Class, frag.CanonicalPath,
 		string(fragJSON),
 		relationTypesPromptForDomainMode(taxonomy.DomainModeMarket),
 		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeMarket),
@@ -4245,7 +4245,7 @@ ENTITY TYPES: %s
 
 Return ONLY valid JSON. No markdown.`,
 		input.OriginalQuery,
-		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		nameForPrompt(frag), frag.Class, frag.CanonicalPath,
 		string(fragJSON),
 		relationTypesPromptForDomainMode(taxonomy.DomainModeStrategic),
 		taxonomy.EntityTypesForDomainMode(taxonomy.DomainModeStrategic),
@@ -4281,7 +4281,7 @@ In the context of the analytical query above, provide all relevant information a
 
 Return ONLY valid JSON. No markdown.`,
 		originalQuery,
-		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		nameForPrompt(frag), frag.Class, frag.CanonicalPath,
 		string(fragJSON),
 		taxonomy.ExtendedCanonicalPathRulesPrompt(),
 		researchPreferExistingEntitiesBlock(),
@@ -4295,7 +4295,7 @@ func (a *ResearchAgent) EnrichEntityTypeHolistic(ctx context.Context, frag *mode
 		return nil, fmt.Errorf("entity-type holistic research input is incomplete")
 	}
 	fragJSON, _ := json.Marshal(compactFragmentForPrompt(frag))
-	focusAreas := entityTypeHolisticFocusAreas(frag.Type)
+	focusAreas := entityTypeHolisticFocusAreas(frag.Class)
 	prompt := fmt.Sprintf(`You are an analytical research agent building a comprehensive profile of an entity.
 
 ENTITY: %s (type: %s, canonical path: %s)
@@ -4310,7 +4310,7 @@ Provide a comprehensive profile covering:
 %s
 
 Return ONLY valid JSON. No markdown.`,
-		nameForPrompt(frag), frag.Type, frag.CanonicalPath,
+		nameForPrompt(frag), frag.Class, frag.CanonicalPath,
 		string(fragJSON),
 		focusAreas,
 		taxonomy.ExtendedCanonicalPathRulesPrompt(),
@@ -4319,51 +4319,47 @@ Return ONLY valid JSON. No markdown.`,
 	return a.runResearchPrompt(ctx, prompt, frag)
 }
 
-func entityTypeHolisticFocusAreas(ft models.FragmentType) string {
+func entityTypeHolisticFocusAreas(ft FragmentType) string {
 	switch ft {
-	case models.FragmentTypeOrganization:
+	case FragmentTypeOrganization:
 		return `- Ownership structure and parent/subsidiary relationships
 - Products and services offered
 - Key markets and geographic presence
 - Financial overview (revenue, employees, market cap if public)
 - Key personnel (CEO, board members)
 - Principal facilities and operations`
-	case models.FragmentTypeFacility:
+	case FragmentTypeFacility:
 		return `- Operator and owner
 - Capacity and throughput
 - Geographic location and coordinates
 - Inputs and outputs (what it processes/produces)
 - Connected infrastructure (pipelines, ports, grids)
 - Operational status and commissioning date`
-	case models.FragmentTypeProduct:
+	case FragmentTypeProduct:
 		return `- Major producers and suppliers
 - Key consumers and end markets
 - Alternative products and substitutes
 - Price dynamics and benchmarks
 - Position in supply chains
 - Quality grades and specifications`
-	case models.FragmentTypeGeoRegion:
+	case FragmentTypeGeoRegion:
 		return `- Key industries and economic base
 - Major organizations and employers
 - Infrastructure and logistics
 - Regulatory environment
 - Demographics and population
 - Political structure and governance`
-	case models.FragmentTypeDeposit:
-		return `- Resource type and classification
-- Proven and probable reserves
-- Current operators and concession holders
-- Extraction methods and technology
-- Grade and quality characteristics
-- Infrastructure connectivity`
-	case models.FragmentTypeCommunity:
+	// FragmentTypeDeposit collapses to FragmentClassSite under AH; the
+	// "deposit" lane is recovered via fragment.Subtype == "deposit".
+	// Skipped here to avoid a duplicate switch case.
+	case FragmentTypeCommunity:
 		return `- Geographic scope and boundaries
 - Demographics and population
 - Economic base and key industries
 - Political structure and governance
 - Key institutions and organizations
 - Infrastructure and services`
-	case models.FragmentTypeMarket:
+	case FragmentTypeMarket:
 		return `- Market size and value
 - Growth dynamics and trends
 - Key players and market shares
@@ -4409,7 +4405,7 @@ func compactFragmentForPrompt(frag *models.HorizonFragment) map[string]interface
 	}
 	m := map[string]interface{}{
 		"canonicalPath": frag.CanonicalPath,
-		"type":          frag.Type,
+		"type":          frag.Class,
 	}
 	if len(frag.Labels) > 0 {
 		m["labels"] = frag.Labels

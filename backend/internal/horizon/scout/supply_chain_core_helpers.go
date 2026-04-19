@@ -60,22 +60,29 @@ func deriveSupplyLinkSegmentsFromEdges(edges []*ChainEdge) []*SupplyLinkSegment 
 		}
 		src := strings.TrimSpace(norm.SourceCanonicalPath)
 		dst := strings.TrimSpace(norm.TargetCanonicalPath)
-		switch strings.TrimSpace(norm.RelationType) {
-		case string(models.DependencyTypeProduces):
+		// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+		// ChainEdge.RelationType is a stringly-typed wire field that
+		// can carry either an AH RelationName ("produces") or a
+		// pre-migration legacy wire token ("PRODUCES", "SUPPLIES_TO").
+		// Run it through the scout normalizer so the switch below —
+		// keyed on AH RelationName constants surfaced via
+		// DependencyType* aliases — matches both shapes.
+		switch normalizeToScoutRelation(norm.RelationType) {
+		case DependencyTypeProduces:
 			if isSupplyChainProducerPath(src) && strings.HasPrefix(dst, "/product/") {
 				key := actorProductKey{supplier: src, product: dst}
 				if existing := producesByActorProduct[key]; existing == nil || norm.Confidence > existing.Confidence {
 					producesByActorProduct[key] = norm
 				}
 			}
-		case string(models.DependencyTypeSuppliesTo):
+		case DependencyTypeSuppliesTo:
 			product := extractProductQualifier(norm.Qualifiers)
 			if isSupplyChainSupplierPath(src) && isSupplyChainCustomerPath(dst) && product != "" && src != dst {
 				derived = append(derived, &SupplyLinkSegment{
 					SupplierRef:      src,
 					ProductRef:       product,
 					CustomerRef:      dst,
-					TransportViaRefs: parseStateStringSlice(norm.Qualifiers[models.QualifierTransportVia]),
+					TransportViaRefs: parseStateStringSlice(norm.Qualifiers[QualifierTransportVia]),
 					SegmentClass:     supplysemantics.SegmentClassExternalProductFlow,
 					Confidence:       norm.Confidence,
 				})
@@ -112,7 +119,7 @@ func deriveSupplyLinkSegmentsFromEdges(edges []*ChainEdge) []*SupplyLinkSegment 
 				SupplierRef:      key.supplier,
 				ProductRef:       key.product,
 				CustomerRef:      customer,
-				TransportViaRefs: parseStateStringSlice(productSupply.Qualifiers[models.QualifierTransportVia]),
+				TransportViaRefs: parseStateStringSlice(productSupply.Qualifiers[QualifierTransportVia]),
 				SegmentClass:     supplysemantics.SegmentClassExternalProductFlow,
 				Confidence:       confidence,
 			})
@@ -268,7 +275,7 @@ func buildOperationalEdgesFromSegments(segments []*SupplyLinkSegment) []*ChainEd
 			out = append(out, &ChainEdge{
 				SourceCanonicalPath: supplier,
 				TargetCanonicalPath: product,
-				RelationType:        string(models.DependencyTypeProduces),
+				RelationType:        string(DependencyTypeProduces),
 				Confidence:          seg.Confidence,
 				Reason:              fmt.Sprintf("Supply chain segment: %s produces %s", supplier, product),
 			})
@@ -282,12 +289,12 @@ func buildOperationalEdgesFromSegments(segments []*SupplyLinkSegment) []*ChainEd
 				"direction_basis": "supply_flow",
 			}
 			if len(seg.TransportViaRefs) > 0 {
-				qualifiers[models.QualifierTransportVia] = append([]string(nil), seg.TransportViaRefs...)
+				qualifiers[QualifierTransportVia] = append([]string(nil), seg.TransportViaRefs...)
 			}
 			out = append(out, &ChainEdge{
 				SourceCanonicalPath: product,
 				TargetCanonicalPath: customer,
-				RelationType:        string(models.DependencyTypeSuppliesTo),
+				RelationType:        string(DependencyTypeSuppliesTo),
 				Confidence:          seg.Confidence,
 				Reason:              fmt.Sprintf("Supply chain segment: %s supplied to %s", product, customer),
 				Qualifiers:          qualifiers,
@@ -302,12 +309,12 @@ func buildOperationalEdgesFromSegments(segments []*SupplyLinkSegment) []*ChainEd
 				"direction_basis": "supply_flow",
 			}
 			if len(seg.TransportViaRefs) > 0 {
-				qualifiers[models.QualifierTransportVia] = append([]string(nil), seg.TransportViaRefs...)
+				qualifiers[QualifierTransportVia] = append([]string(nil), seg.TransportViaRefs...)
 			}
 			out = append(out, &ChainEdge{
 				SourceCanonicalPath: supplier,
 				TargetCanonicalPath: customer,
-				RelationType:        string(models.DependencyTypeSuppliesTo),
+				RelationType:        string(DependencyTypeSuppliesTo),
 				Confidence:          seg.Confidence,
 				Reason:              fmt.Sprintf("Supply chain segment: %s supplies %s to %s", supplier, product, customer),
 				Qualifiers:          qualifiers,
@@ -403,12 +410,12 @@ func chainEdgeDedupKeyByPath(edge *ChainEdge) string {
 
 func chainEdgeVariantKey(relationType string, qualifiers map[string]interface{}) string {
 	switch strings.TrimSpace(relationType) {
-	case string(models.DependencyTypeSuppliesTo):
+	case string(DependencyTypeSuppliesTo):
 		if product := extractProductQualifier(qualifiers); product != "" {
 			return "product=" + product
 		}
-	case string(models.DependencyTypeTransformsInto), string(models.DependencyTypeAssemblesInto):
-		if atFacility := strings.TrimSpace(parseStateString(qualifiers[models.QualifierAtFacility])); atFacility != "" {
+	case string(DependencyTypeTransformsInto), string(DependencyTypeAssemblesInto):
+		if atFacility := strings.TrimSpace(parseStateString(qualifiers[QualifierAtFacility])); atFacility != "" {
 			return "at_facility=" + atFacility
 		}
 	}
@@ -442,7 +449,7 @@ func mergeChainEdgeQualifiers(existing, incoming map[string]interface{}) map[str
 			continue
 		}
 		switch key {
-		case models.QualifierTransportVia:
+		case QualifierTransportVia:
 			out[key] = compactPathList(append(parseStateStringSlice(out[key]), parseStateStringSlice(value)...))
 		default:
 			out[key] = value
@@ -471,11 +478,11 @@ func normalizeChainEdgeQualifiers(q map[string]interface{}) {
 		q["product_ref"] = product
 		q["productRef"] = product
 	}
-	if rawVia, ok := q[models.QualifierTransportVia]; ok {
+	if rawVia, ok := q[QualifierTransportVia]; ok {
 		if via := compactPathList(parseStateStringSlice(rawVia)); len(via) > 0 {
-			q[models.QualifierTransportVia] = via
+			q[QualifierTransportVia] = via
 		} else {
-			delete(q, models.QualifierTransportVia)
+			delete(q, QualifierTransportVia)
 		}
 	}
 }
@@ -493,10 +500,10 @@ func rewriteChainEdgeQualifierRefs(q map[string]interface{}, pathRewrites map[st
 		out["product_ref"] = product
 		out["productRef"] = product
 	}
-	if atFacility := strings.TrimSpace(parseStateString(out[models.QualifierAtFacility])); atFacility != "" {
-		out[models.QualifierAtFacility] = rewriteCanonicalPathWithMap(atFacility, pathRewrites)
+	if atFacility := strings.TrimSpace(parseStateString(out[QualifierAtFacility])); atFacility != "" {
+		out[QualifierAtFacility] = rewriteCanonicalPathWithMap(atFacility, pathRewrites)
 	}
-	if rawVia, ok := out[models.QualifierTransportVia]; ok {
+	if rawVia, ok := out[QualifierTransportVia]; ok {
 		rewrittenVia := make([]string, 0, len(parseStateStringSlice(rawVia)))
 		for _, via := range parseStateStringSlice(rawVia) {
 			if rewritten := rewriteCanonicalPathWithMap(via, pathRewrites); rewritten != "" {
@@ -504,9 +511,9 @@ func rewriteChainEdgeQualifierRefs(q map[string]interface{}, pathRewrites map[st
 			}
 		}
 		if len(rewrittenVia) > 0 {
-			out[models.QualifierTransportVia] = compactPathList(rewrittenVia)
+			out[QualifierTransportVia] = compactPathList(rewrittenVia)
 		} else {
-			delete(out, models.QualifierTransportVia)
+			delete(out, QualifierTransportVia)
 		}
 	}
 	normalizeChainEdgeQualifiers(out)

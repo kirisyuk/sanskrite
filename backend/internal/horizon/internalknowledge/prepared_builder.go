@@ -493,7 +493,7 @@ func summarizePreparedObjects(fragments map[string]*hmodels.HorizonFragment, sco
 		}
 		out = append(out, ObjectSummary{
 			CanonicalPath: row.path,
-			Type:          string(fragment.Type),
+			Type:          string(fragment.Class),
 			DisplayName:   fragmentDisplayName(fragment),
 		})
 		if len(out) >= limit {
@@ -1156,7 +1156,7 @@ func buildObjectDoc(fragment *hmodels.HorizonFragment) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Object: %s\n", fragmentDisplayName(fragment))
 	fmt.Fprintf(&b, "Canonical path: %s\n", fragment.CanonicalPath)
-	fmt.Fprintf(&b, "Type: %s\n", fragment.Type)
+	fmt.Fprintf(&b, "Type: %s\n", fragment.Class)
 	if strings.TrimSpace(fragment.Description) != "" {
 		fmt.Fprintf(&b, "Description: %s\n", strings.TrimSpace(fragment.Description))
 	}

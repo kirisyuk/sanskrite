@@ -1,5 +1,18 @@
 package models
 
+// TRANSITIONAL: this whole file exists only to keep the legacy
+// SUPPLY_LINK edge-as-fragment artifact addressable (canonical-path
+// generation, route-variant key derivation, dedup key) until migrate-cli
+// converts every SUPPLY_LINK fragment into a proper `supplies` edge plus
+// a leg_connects chain through /route fragments. The whole block —
+// including canonicalTransportViaRefAliases, ValidateSupplyLinkFields,
+// BuildSupplyLinkCanonicalPath, BuildSupplyLinkRouteVariantKey, and the
+// SupplyLinkRouteVariant payload — is scheduled for deletion in the
+// `materialized-payload-rewrite` task once migration completes. Do not
+// add new call sites; do not extend the canonical alias table; refer to
+// docs/taxonomy/migration_map.yaml -> SUPPLY_LINK / SUPPLIES_TO for the
+// canonical replacement. Gating predicate is HorizonFragment.IsLegacySupplyLink().
+
 import (
 	"crypto/sha1"
 	"encoding/hex"
@@ -298,8 +311,8 @@ func ValidateSupplyLinkFields(f *HorizonFragment) error {
 	if f == nil {
 		return fmt.Errorf("fragment is nil")
 	}
-	if f.Type != FragmentTypeSupplyLink {
-		return fmt.Errorf("fragment type must be SUPPLY_LINK")
+	if !f.IsLegacySupplyLink() {
+		return fmt.Errorf("fragment must be a legacy SUPPLY_LINK (Class=site, Subtype=supply_link, identifiers.legacy_supply_link=true)")
 	}
 	// SupplyLink can be tenant-scoped OR global-scoped (global = assumption layer).
 	if f.TenantID == "" {
@@ -352,9 +365,11 @@ func ValidateSupplyLinkFields(f *HorizonFragment) error {
 	return nil
 }
 
-// IsSupplyLink checks if a fragment is a SupplyLink.
+// IsSupplyLink checks if a fragment is a legacy SUPPLY_LINK artifact.
+// Same predicate as HorizonFragment.IsLegacySupplyLink — kept as a free
+// function for callers that want a nil-safe wrapper.
 func IsSupplyLink(f *HorizonFragment) bool {
-	return f != nil && f.Type == FragmentTypeSupplyLink
+	return f.IsLegacySupplyLink()
 }
 
 // GetSupplyLinkKey returns a stable key for a SupplyLink (for deduplication).

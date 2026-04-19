@@ -251,11 +251,14 @@
       }
     },
     {
-      "id": "edge-factory-depends-zone",
+      "id": "edge-zone-disrupts-factory",
       "tenantId": "global",
-      "sourceFragmentId": "frag-acme-fac",
-      "targetFragmentId": "frag-bab-el-mandeb",
-      "type": "DEPENDS_ON",
+      "sourceFragmentId": "frag-bab-el-mandeb",
+      "targetFragmentId": "frag-acme-fac",
+      "relation": "disrupts",
+      "qualifiers": {
+        "disruption_kind": "blockade"
+      },
       "properties": {
         "criticality": 0.7,
         "amplification": 0.9,

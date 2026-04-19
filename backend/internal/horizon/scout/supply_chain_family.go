@@ -256,7 +256,7 @@ func (e *ScoutEngine) representativeFragmentForSupplyChainFamily(ctx context.Con
 		}
 		return &models.HorizonFragment{
 			CanonicalPath: candidate,
-			Type:          InferFragmentTypeFromCanonicalPath(candidate),
+			Class:          InferFragmentTypeFromCanonicalPath(candidate),
 			TenantID:      "global",
 		}
 	}

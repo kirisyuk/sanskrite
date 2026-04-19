@@ -3,11 +3,13 @@ package models
 import (
 	"testing"
 	"time"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func baseFragmentForCoordinatesTest() *HorizonFragment {
 	return &HorizonFragment{
-		Type:          FragmentTypeOrganization,
+		Class:         ah.FragmentClassOrg,
 		TenantID:      "global",
 		CanonicalPath: "/org/global/coords-test",
 		Governance: Governance{
@@ -109,16 +111,18 @@ func TestValidateKeepsExplicitCoordinates(t *testing.T) {
 
 func TestIsHorizonMonitorGeoEligibleFragment(t *testing.T) {
 	f := baseFragmentForCoordinatesTest()
-	f.Type = FragmentTypeFacility
+	f.Class = ah.FragmentClassSite
+	f.CanonicalPath = "/site/global/coords-test"
 	f.Coordinates = &Coordinates{Lat: 55.7558, Lon: 37.6176}
 	if !IsHorizonMonitorGeoEligibleFragment(f) {
-		t.Fatalf("expected geo-eligible fragment for valid geo + allowed type")
+		t.Fatalf("expected geo-eligible fragment for valid geo + allowed class")
 	}
 }
 
 func TestIsHorizonMonitorGeoEligibleFragmentRejectsNullIsland(t *testing.T) {
 	f := baseFragmentForCoordinatesTest()
-	f.Type = FragmentTypeFacility
+	f.Class = ah.FragmentClassSite
+	f.CanonicalPath = "/site/global/coords-test"
 	f.Coordinates = &Coordinates{Lat: 0, Lon: 0}
 	if IsHorizonMonitorGeoEligibleFragment(f) {
 		t.Fatalf("null-island coordinates must be rejected")

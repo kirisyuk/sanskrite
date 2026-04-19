@@ -9,6 +9,15 @@ import (
 	"time"
 )
 
+// This file holds *universal* model primitives shared across HorizonFragment,
+// DependencyEdge, MaterializedArtifact, RouteGeometryProfile and friends.
+//
+// Closed enumerations that describe the AgentHorde taxonomy itself
+// (FragmentClass, RelationName, MechanismCategory, AssuranceType,
+// DisruptionKind, MobileAssetKind, etc.) live in
+// `internal/taxonomy/ah` and are imported by name from the other model files.
+// Do NOT add new domain enums here — extend the taxonomy SoT instead.
+
 var reISO6709Pair = regexp.MustCompile(`^([+-]\d+(?:\.\d+)?)([+-]\d+(?:\.\d+)?)/?$`)
 
 // MetricValue представляет гибкую метрику с описанием, типом и метаданными
@@ -44,9 +53,9 @@ type locationJSON struct {
 	ISO6709       *string `json:"iso6709,omitempty"`
 	ISO3166_1     *string `json:"iso3166_1,omitempty"`
 	ISO3166_2     *string `json:"iso3166_2,omitempty"`
-	Country       *string `json:"country,omitempty"`       // LLM alias
-	CountryCode   *string `json:"countryCode,omitempty"`   // LLM alias
-	CountryAlpha2 *string `json:"countryAlpha2,omitempty"` // ontology extractor style
+	Country       *string `json:"country,omitempty"`
+	CountryCode   *string `json:"countryCode,omitempty"`
+	CountryAlpha2 *string `json:"countryAlpha2,omitempty"`
 }
 
 // UnmarshalJSON accepts both canonical fields and common LLM aliases (country, countryCode, countryAlpha2).
@@ -58,7 +67,6 @@ func (l *Location) UnmarshalJSON(data []byte) error {
 	l.Name = strings.TrimSpace(raw.Name)
 	l.ISO6709 = raw.ISO6709
 	l.ISO3166_2 = raw.ISO3166_2
-	// ISO3166_1: prefer canonical, then aliases
 	if raw.ISO3166_1 != nil && strings.TrimSpace(*raw.ISO3166_1) != "" {
 		v := strings.TrimSpace(*raw.ISO3166_1)
 		l.ISO3166_1 = &v
@@ -121,7 +129,7 @@ func ParseISO6709Coordinates(raw string) (float64, float64, bool) {
 
 // KBReference представляет ссылку на внешнюю базу знаний
 type KBReference struct {
-	KB         string     `json:"kb" firestore:"kb"` // Wikidata, DBpedia, etc.
+	KB         string     `json:"kb" firestore:"kb"`
 	ExternalID string     `json:"externalId" firestore:"externalId"`
 	Confidence float64    `json:"confidence" firestore:"confidence"` // 0..1
 	LastSync   *time.Time `json:"lastSync,omitempty" firestore:"lastSync,omitempty"`
@@ -129,33 +137,25 @@ type KBReference struct {
 
 // Provenance представляет прослеживаемость источника данных
 type Provenance struct {
-	SourceIDs     []string    `json:"sourceIds" firestore:"sourceIds"` // для обратной совместимости
-	SourceRefs    []SourceRef `json:"sourceRefs,omitempty" firestore:"sourceRefs,omitempty"`
-	DataSourceIDs []string    `json:"dataSourceIds,omitempty" firestore:"dataSourceIds,omitempty"` // DataSource IDs
-	DocumentIDs   []string    `json:"documentIds,omitempty" firestore:"documentIds,omitempty"`     // Document IDs
-	// Contributions is the bounded, structured provenance for this metric path on this node.
-	// It is the primary contract for tracing how a value arrived (docs/notes/risk-architecture.md "Top-K provenance").
-	Contributions []Contribution `json:"contributions,omitempty" firestore:"contributions,omitempty"`
-	ObservedAt    *time.Time     `json:"observedAt,omitempty" firestore:"observedAt,omitempty"`
-	Method        string         `json:"method,omitempty" firestore:"method,omitempty"` // extracted, curated, imported
-	// GroundingContractVersion is the version of internal-first grounding provenance contract.
-	// Example: "v1"
-	GroundingContractVersion string `json:"groundingContractVersion,omitempty" firestore:"groundingContractVersion,omitempty"`
-	// OriginMode classifies where evidence came from: internal_only | external_only | mixed.
-	OriginMode string `json:"originMode,omitempty" firestore:"originMode,omitempty"`
-	// InternalEvidence stores deterministic IDs/URIs proving internal datastore grounding.
-	InternalEvidence *GroundingInternalEvidence `json:"internalEvidence,omitempty" firestore:"internalEvidence,omitempty"`
-	// ExternalEvidence stores web citations/URLs used by grounded generation.
-	ExternalEvidence *GroundingExternalEvidence `json:"externalEvidence,omitempty" firestore:"externalEvidence,omitempty"`
-	// ResolutionStats captures grounding-aware materialization counters.
-	ResolutionStats *GroundingResolutionStats `json:"resolutionStats,omitempty" firestore:"resolutionStats,omitempty"`
+	SourceIDs                []string                   `json:"sourceIds" firestore:"sourceIds"`
+	SourceRefs               []SourceRef                `json:"sourceRefs,omitempty" firestore:"sourceRefs,omitempty"`
+	DataSourceIDs            []string                   `json:"dataSourceIds,omitempty" firestore:"dataSourceIds,omitempty"`
+	DocumentIDs              []string                   `json:"documentIds,omitempty" firestore:"documentIds,omitempty"`
+	Contributions            []Contribution             `json:"contributions,omitempty" firestore:"contributions,omitempty"`
+	ObservedAt               *time.Time                 `json:"observedAt,omitempty" firestore:"observedAt,omitempty"`
+	Method                   string                     `json:"method,omitempty" firestore:"method,omitempty"`
+	GroundingContractVersion string                     `json:"groundingContractVersion,omitempty" firestore:"groundingContractVersion,omitempty"`
+	OriginMode               string                     `json:"originMode,omitempty" firestore:"originMode,omitempty"`
+	InternalEvidence         *GroundingInternalEvidence `json:"internalEvidence,omitempty" firestore:"internalEvidence,omitempty"`
+	ExternalEvidence         *GroundingExternalEvidence `json:"externalEvidence,omitempty" firestore:"externalEvidence,omitempty"`
+	ResolutionStats          *GroundingResolutionStats  `json:"resolutionStats,omitempty" firestore:"resolutionStats,omitempty"`
 }
 
 // SourceRef представляет ссылку на источник данных
 type SourceRef struct {
-	SourceID   string  `json:"sourceId" firestore:"sourceId"`                         // DataSource ID или Document ID
-	SourceType string  `json:"sourceType" firestore:"sourceType"`                     // "dataSource", "document", "web", "rss", "telegram_channel"
-	DocumentID *string `json:"documentId,omitempty" firestore:"documentId,omitempty"` // Если SourceType = "dataSource", может быть Document
+	SourceID   string  `json:"sourceId" firestore:"sourceId"`
+	SourceType string  `json:"sourceType" firestore:"sourceType"`
+	DocumentID *string `json:"documentId,omitempty" firestore:"documentId,omitempty"`
 }
 
 // GroundingInternalEvidence captures internal datastore evidence used by grounded calls.
@@ -180,12 +180,10 @@ type GroundingResolutionStats struct {
 }
 
 // Contribution represents a single source contribution to a metric at a node.
-// It stores the source signal, source event, propagation path, and the post-decay amplitude.
-// This matches docs/notes/risk-architecture.md (Lazy Interpretation input contract).
 type Contribution struct {
 	SignalID      string    `json:"signalId" firestore:"signalId"`
 	SourceEventID string    `json:"sourceEventId" firestore:"sourceEventId"`
-	Path          []string  `json:"path" firestore:"path"` // propagation path (canonical paths preferred)
+	Path          []string  `json:"path" firestore:"path"`
 	Amplitude     float64   `json:"amplitude" firestore:"amplitude"`
 	Hops          int       `json:"hops" firestore:"hops"`
 	ObservedAt    time.Time `json:"observedAt" firestore:"observedAt"`
@@ -193,73 +191,11 @@ type Contribution struct {
 
 // Governance управляет жизненным циклом HorizonFragment
 type Governance struct {
-	Owner              string  `json:"owner" firestore:"owner"`                                               // Всегда "SYSTEM"
-	ActiveSubscribers  int     `json:"activeSubscribers" firestore:"activeSubscribers"`                       // Количество активных Lens
-	Status             string  `json:"status" firestore:"status"`                                             // "ACTIVE", "DORMANT", "ARCHIVED"
-	CreatedByProjectID *string `json:"createdByProjectId,omitempty" firestore:"createdByProjectId,omitempty"` // Проект, оплативший создание (для биллинга)
+	Owner              string  `json:"owner" firestore:"owner"`
+	ActiveSubscribers  int     `json:"activeSubscribers" firestore:"activeSubscribers"`
+	Status             string  `json:"status" firestore:"status"`
+	CreatedByProjectID *string `json:"createdByProjectId,omitempty" firestore:"createdByProjectId,omitempty"`
 }
-
-// FragmentType тип HorizonFragment
-type FragmentType string
-
-const (
-	FragmentTypeOrganization FragmentType = "ORGANIZATION"
-	FragmentTypeFacility     FragmentType = "FACILITY"
-	FragmentTypeGeoRegion    FragmentType = "GEO_REGION"
-	// FragmentTypeDomain is a contract type identifier (domain is config, not a graph node).
-	// Canonical path format: /domain/v1/{contractType}/{facetKey}/{facetValue}...
-	// Examples:
-	// - /domain/v1/supply-chain/geo/us/application/ev/material/lithium
-	// - /domain/v1/bilateral-relations/subject/uae-saudi-arabia
-	FragmentTypeDomain  FragmentType = "DOMAIN"
-	FragmentTypeSphere  FragmentType = "SPHERE"
-	FragmentTypeEvent   FragmentType = "EVENT"
-	FragmentTypeProduct FragmentType = "PRODUCT"
-	FragmentTypeProgram FragmentType = "PROGRAM"
-	FragmentTypeMarket  FragmentType = "MARKET"
-	FragmentTypePerson  FragmentType = "PERSON"
-	// FragmentTypeMediaChannel represents a "last-mile" media endpoint (e.g., a specific public Telegram channel),
-	// not a media holding/company. This helps model narratives and distribution channels separately from owners.
-	FragmentTypeMediaChannel FragmentType = "MEDIA_CHANNEL"
-	// FragmentTypeDecisionPoint represents a strategic decision point (domain-scoped).
-	// Canonical path format: /decision/{domain-slug}/{decision-slug}
-	FragmentTypeDecisionPoint FragmentType = "DECISION_POINT"
-	// FragmentTypeMechanism represents a control mechanism (global, reusable).
-	// Canonical path format: /mechanism/{category}/{slug}
-	FragmentTypeMechanism  FragmentType = "MECHANISM"
-	FragmentTypeSupplyLink FragmentType = "SUPPLY_LINK" // Tenant-specific supply chain link
-	// FragmentTypeTrack represents movable objects with frequently updated position/state.
-	// Canonical path format: /track/{kind}/{geo}/{slug}-{id8}
-	// - kind: air | sea | ground
-	// - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
-	FragmentTypeTrack FragmentType = "TRACK"
-	// FragmentTypeDeposit represents a natural resource deposit (oil field, mine, basin, etc.).
-	// Canonical path format: /deposit/{resource-slug}/{deposit-slug}
-	// Example: /deposit/crude-oil/permian-basin, /deposit/lithium/atacama-salar
-	FragmentTypeDeposit FragmentType = "DEPOSIT"
-	// FragmentTypeCommunity represents an informal social group without legal structure.
-	// Examples: trade networks (hawala), activist groups, criminal networks, diaspora communities.
-	// Unlike ORGANIZATION, communities have no formal legal registration.
-	// Unlike MEDIA_CHANNEL, communities are social entities that *use* channels.
-	// Canonical path format: /community/{geo}/{type}/{slug}
-	// - geo: ISO3166-1 alpha2 lowercase (2 chars) OR "global"
-	// - type: trade | activist | professional | criminal | religious | ethnic | interest
-	// - slug: lowercase-slug derived from community name
-	// Examples:
-	// - /community/ae/trade/hawala-dubai-network
-	// - /community/ru/criminal/kazan-synthetic-dealers
-	// - /community/by/activist/nexta-supporters
-	// - /community/global/professional/osint-researchers
-	FragmentTypeCommunity FragmentType = "COMMUNITY"
-	// FragmentTypeAffectedZone represents a geographic area with an ongoing condition (conflict, disaster, tension).
-	// Canonical path format: /zone/{geo}/{condition_type}/{slug}
-	// - geo: ISO3166-1 alpha2, composite (e.g. tr-sy), or regional token (eu, gcc, etc.)
-	// - condition_type: military_conflict, natural_disaster, political_tension, humanitarian_crisis, earthquake_affected, flood_zone, etc.
-	// - slug: lowercase descriptive slug (donbas, marawi, epicenter-xyz)
-	// Relations: AFFECTS (zone → facility/org/route), LOCATED_IN (zone → geo), TRIGGERED_BY (zone → event)
-	// State metrics: zone_severity_score, population_affected_estimate; Description: politically-neutral.
-	FragmentTypeAffectedZone FragmentType = "AFFECTED_ZONE"
-)
 
 // EpistemicStatus статус эпистемической достоверности
 type EpistemicStatus string
@@ -288,115 +224,3 @@ const (
 	ExtractionMethodAPI     ExtractionMethod = "API"
 	ExtractionMethodKBAlign ExtractionMethod = "KBAlign"
 )
-
-// AgentRole represents the role of an agent in a decision context.
-// Used in DecisionPoint entities to describe how an agent participates in a decision.
-type AgentRole string
-
-const (
-	// AgentRoleGatekeeper can block/enable access (export control, licensing).
-	AgentRoleGatekeeper AgentRole = "gatekeeper"
-	// AgentRoleApprover must approve before action (regulatory approval).
-	AgentRoleApprover AgentRole = "approver"
-	// AgentRoleInfluencer can affect but not block (lobbying, standards bodies).
-	AgentRoleInfluencer AgentRole = "influencer"
-	// AgentRoleEnforcer ensures compliance (audit, inspection).
-	AgentRoleEnforcer AgentRole = "enforcer"
-	// AgentRoleArbiter resolves disputes (courts, arbitration).
-	AgentRoleArbiter AgentRole = "arbiter"
-)
-
-// ValidAgentRoles is a set of all valid agent roles for validation.
-var ValidAgentRoles = map[AgentRole]bool{
-	AgentRoleGatekeeper: true,
-	AgentRoleApprover:   true,
-	AgentRoleInfluencer: true,
-	AgentRoleEnforcer:   true,
-	AgentRoleArbiter:    true,
-}
-
-// IsValidAgentRole checks if the given role is a valid AgentRole.
-func IsValidAgentRole(role string) bool {
-	return ValidAgentRoles[AgentRole(role)]
-}
-
-// MechanismCategory represents the category/type of a control mechanism.
-type MechanismCategory string
-
-const (
-	// MechanismCategoryRegulatory - Export control, licensing, certification.
-	MechanismCategoryRegulatory MechanismCategory = "regulatory"
-	// MechanismCategoryEconomic - Pricing power, capacity allocation.
-	MechanismCategoryEconomic MechanismCategory = "economic"
-	// MechanismCategoryTechnological - IP lock-in, standards control.
-	MechanismCategoryTechnological MechanismCategory = "technological"
-	// MechanismCategoryContractual - Exclusivity, long-term agreements.
-	MechanismCategoryContractual MechanismCategory = "contractual"
-	// MechanismCategoryPolitical - Sanctions, diplomatic pressure.
-	MechanismCategoryPolitical MechanismCategory = "political"
-)
-
-// ValidMechanismCategories is a set of all valid mechanism categories.
-var ValidMechanismCategories = map[MechanismCategory]bool{
-	MechanismCategoryRegulatory:    true,
-	MechanismCategoryEconomic:      true,
-	MechanismCategoryTechnological: true,
-	MechanismCategoryContractual:   true,
-	MechanismCategoryPolitical:     true,
-}
-
-// IsValidMechanismCategory checks if the given category is valid.
-func IsValidMechanismCategory(category string) bool {
-	return ValidMechanismCategories[MechanismCategory(category)]
-}
-
-// ControlAccessType represents the type of control in a CONTROLS_ACCESS relation.
-type ControlAccessType string
-
-const (
-	// ControlAccessTypeBlock - veto power, can completely block.
-	ControlAccessTypeBlock ControlAccessType = "block"
-	// ControlAccessTypeEnable - grant access, can enable.
-	ControlAccessTypeEnable ControlAccessType = "enable"
-	// ControlAccessTypeDelay - bureaucratic delay, slows down.
-	ControlAccessTypeDelay ControlAccessType = "delay"
-	// ControlAccessTypeMonitor - surveillance, observes but doesn't block.
-	ControlAccessTypeMonitor ControlAccessType = "monitor"
-)
-
-// ValidControlAccessTypes is a set of all valid control access types.
-var ValidControlAccessTypes = map[ControlAccessType]bool{
-	ControlAccessTypeBlock:   true,
-	ControlAccessTypeEnable:  true,
-	ControlAccessTypeDelay:   true,
-	ControlAccessTypeMonitor: true,
-}
-
-// IsValidControlAccessType checks if the given type is valid.
-func IsValidControlAccessType(t string) bool {
-	return ValidControlAccessTypes[ControlAccessType(t)]
-}
-
-// ConditionType represents the type of condition in an IMPOSES_CONDITION relation.
-type ConditionType string
-
-const (
-	// ConditionTypeCost - tariffs, fees, economic burden.
-	ConditionTypeCost ConditionType = "cost"
-	// ConditionTypeCompliance - ESG, standards, regulatory compliance.
-	ConditionTypeCompliance ConditionType = "compliance"
-	// ConditionTypeTechnical - technical specifications, compatibility requirements.
-	ConditionTypeTechnical ConditionType = "technical"
-)
-
-// ValidConditionTypes is a set of all valid condition types.
-var ValidConditionTypes = map[ConditionType]bool{
-	ConditionTypeCost:       true,
-	ConditionTypeCompliance: true,
-	ConditionTypeTechnical:  true,
-}
-
-// IsValidConditionType checks if the given type is valid.
-func IsValidConditionType(t string) bool {
-	return ValidConditionTypes[ConditionType(t)]
-}

@@ -4,12 +4,13 @@ import (
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestInferFacilityCanonicalPathFromGeo(t *testing.T) {
 	us := "US"
 	frag := &models.HorizonFragment{
-		Type:          models.FragmentTypeFacility,
+		Class:         ah.FragmentClassSite,
 		CanonicalPath: "/fac/na/tustin-facility",
 		Labels:        map[string]string{"en": "Tustin Facility"},
 		HomeLocation:  &models.Location{ISO3166_1: &us},

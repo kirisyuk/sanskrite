@@ -18,23 +18,23 @@ type ownershipEdgeRef struct {
 	Edge *models.DependencyEdge
 }
 
-var ownershipPrimaryEdgeTypes = []models.DependencyType{
-	models.DependencyTypeOwns,
-	models.DependencyTypeSubsidiaryOf,
-	models.DependencyTypeControls,
-	models.DependencyTypeInvestsIn,
+var ownershipPrimaryEdgeTypes = []DependencyType{
+	DependencyTypeOwns,
+	DependencyTypeSubsidiaryOf,
+	DependencyTypeControls,
+	DependencyTypeInvestsIn,
 }
 
-var ownershipSupportEdgeTypes = []models.DependencyType{
-	models.DependencyTypeHasSubgroup,
-	models.DependencyTypeMemberOf,
-	models.DependencyTypeAffiliatedWith,
-	models.DependencyTypeOperatesVia,
-	models.DependencyTypeBoardMemberOf,
-	models.DependencyTypeEmployedBy,
-	models.DependencyTypeFounded,
-	models.DependencyTypeManages,
-	models.DependencyTypeAdministers,
+var ownershipSupportEdgeTypes = []DependencyType{
+	DependencyTypeHasSubgroup,
+	DependencyTypeMemberOf,
+	DependencyTypeAffiliatedWith,
+	DependencyTypeOperatesVia,
+	DependencyTypeBoardMemberOf,
+	DependencyTypeEmployedBy,
+	DependencyTypeFounded,
+	DependencyTypeManages,
+	DependencyTypeAdministers,
 }
 
 var ownershipFilterRelTypes = []string{
@@ -598,13 +598,33 @@ func ownershipThinNodePaths(
 		hasSupport := len(support) > 0
 		hasEvidence := evidenceCoverage[nodeID]
 		needsResearch := false
-		switch frag.Type {
-		case models.FragmentTypeOrganization:
+		// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+		// supportCoverage stores raw scout DependencyType values which
+		// under AH are snake_case (RelationName slugs like "member_of"
+		// or legacy literals like "has_subgroup"). The pre-migration
+		// allow-list pinned on UPPER_SNAKE wire labels and silently
+		// missed every snake_case entry, falsely flagging well-supported
+		// community/person nodes as "thin". Build the probe set from
+		// the scout DependencyType constants so the comparison stays
+		// case-aligned.
+		switch frag.Class {
+		case FragmentTypeOrganization:
 			needsResearch = !hasEvidence || !hasSupport
-		case models.FragmentTypeCommunity:
-			needsResearch = !supportContainsAny(support, "HAS_SUBGROUP", "MEMBER_OF", "AFFILIATED_WITH", "OPERATES_VIA")
-		case models.FragmentTypePerson:
-			needsResearch = !supportContainsAny(support, "MEMBER_OF", "AFFILIATED_WITH", "BOARD_MEMBER_OF", "EMPLOYED_BY", "FOUNDED")
+		case FragmentTypeCommunity:
+			needsResearch = !supportContainsAny(support,
+				string(DependencyTypeHasSubgroup),
+				string(DependencyTypeMemberOf),
+				string(DependencyTypeAffiliatedWith),
+				string(DependencyTypeOperatesVia),
+			)
+		case FragmentTypePerson:
+			needsResearch = !supportContainsAny(support,
+				string(DependencyTypeMemberOf),
+				string(DependencyTypeAffiliatedWith),
+				string(DependencyTypeBoardMemberOf),
+				string(DependencyTypeEmployedBy),
+				string(DependencyTypeFounded),
+			)
 		default:
 			needsResearch = !hasEvidence && !hasSupport
 		}

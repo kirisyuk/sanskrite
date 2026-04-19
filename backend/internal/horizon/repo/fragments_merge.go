@@ -12,6 +12,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 const mergeRedirectStableTTL = 7 * 24 * time.Hour
@@ -259,9 +260,9 @@ func (r *FragmentsMergeRepository) recordMergeRedirects(ctx context.Context, dup
 	if target == "" {
 		return
 	}
-	fragType := string(primary.Type)
+	fragType := string(primary.Class)
 	if fragType == "" {
-		fragType = string(dup.Type)
+		fragType = string(dup.Class)
 	}
 	r.recordPathRedirects(ctx, fragType, collectFragmentMergePaths(dup, target), target)
 }
@@ -293,10 +294,34 @@ func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPaths(ctx context
 	if target == "" {
 		return
 	}
-	r.rewriteMaterializedArtifactsPathsForPaths(ctx, tenantID, dup.Type, collectFragmentMergePaths(dup, target), target)
+	r.rewriteMaterializedArtifactsPathsForPaths(ctx, tenantID, fragmentMergeProfile(dup), collectFragmentMergePaths(dup, target), target)
 }
 
-func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPathsForPaths(ctx context.Context, tenantID string, fragType models.FragmentType, pathsToReplace []string, target string) {
+// fragmentMergeProfile returns a coarse string discriminator that the
+// materialized-artifact rewrite uses to pick between geo / supply-link /
+// affected-zone secondary lookups. Returns the legacy uppercase aliases
+// expected by the pre-existing switch logic (kept for behavioral
+// equivalence after the AH migration removed FragmentType).
+func fragmentMergeProfile(frag *models.HorizonFragment) string {
+	if frag == nil {
+		return ""
+	}
+	if frag.IsLegacySupplyLink() {
+		return "SUPPLY_LINK"
+	}
+	switch frag.Class {
+	case ah.FragmentClassGeo:
+		switch strings.TrimSpace(frag.Subtype) {
+		case "affected_zone":
+			return "AFFECTED_ZONE"
+		default:
+			return "GEO_REGION"
+		}
+	}
+	return ""
+}
+
+func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPathsForPaths(ctx context.Context, tenantID string, fragType string, pathsToReplace []string, target string) {
 	if r.materializedRepo == nil {
 		return
 	}
@@ -332,15 +357,15 @@ func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPathsForPaths(ctx
 				collectArtifacts(artifacts)
 			}
 			switch fragType {
-			case models.FragmentTypeGeoRegion:
+			case "GEO_REGION":
 				if artifacts, err := r.materializedRepo.FindByGeoRefsAnyTenant(ctx, []string{oldPath}, kind, 500); err == nil {
 					collectArtifacts(artifacts)
 				}
-			case models.FragmentTypeSupplyLink:
+			case "SUPPLY_LINK":
 				if artifacts, err := r.materializedRepo.FindByFlowRefsAnyTenant(ctx, []string{oldPath}, kind, 500); err == nil {
 					collectArtifacts(artifacts)
 				}
-			case models.FragmentTypeAffectedZone:
+			case "AFFECTED_ZONE":
 				if artifacts, err := r.materializedRepo.FindByZoneRefsAnyTenant(ctx, []string{oldPath}, kind, 500); err == nil {
 					collectArtifacts(artifacts)
 				}
@@ -357,21 +382,21 @@ func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPathsForPaths(ctx
 			collectArtifacts(artifacts)
 		}
 		switch fragType {
-		case models.FragmentTypeGeoRegion:
+		case "GEO_REGION":
 			if artifacts, err := r.materializedRepo.FindByGeoRefsAny(ctx, tenantID, []string{oldPath}, kind, 500); err == nil {
 				collectArtifacts(artifacts)
 			}
 			if artifacts, err := r.materializedRepo.FindByGeoRefsAny(ctx, "global", []string{oldPath}, kind, 500); err == nil {
 				collectArtifacts(artifacts)
 			}
-		case models.FragmentTypeSupplyLink:
+		case "SUPPLY_LINK":
 			if artifacts, err := r.materializedRepo.FindByFlowRefsAny(ctx, tenantID, []string{oldPath}, kind, 500); err == nil {
 				collectArtifacts(artifacts)
 			}
 			if artifacts, err := r.materializedRepo.FindByFlowRefsAny(ctx, "global", []string{oldPath}, kind, 500); err == nil {
 				collectArtifacts(artifacts)
 			}
-		case models.FragmentTypeAffectedZone:
+		case "AFFECTED_ZONE":
 			if artifacts, err := r.materializedRepo.FindByZoneRefsAny(ctx, tenantID, []string{oldPath}, kind, 500); err == nil {
 				collectArtifacts(artifacts)
 			}
@@ -578,8 +603,8 @@ func (r *FragmentsMergeRepository) RewriteSupplyLinksForPathPairs(ctx context.Co
 			return updated, err
 		}
 		if oldLinkPath != "" && link.CanonicalPath != "" && oldLinkPath != link.CanonicalPath {
-			r.recordPathRedirects(ctx, string(models.FragmentTypeSupplyLink), []string{oldLinkPath}, link.CanonicalPath)
-			r.rewriteMaterializedArtifactsPathsForPaths(ctx, link.TenantID, models.FragmentTypeSupplyLink, []string{oldLinkPath}, link.CanonicalPath)
+			r.recordPathRedirects(ctx, "SUPPLY_LINK", []string{oldLinkPath}, link.CanonicalPath)
+			r.rewriteMaterializedArtifactsPathsForPaths(ctx, link.TenantID, "SUPPLY_LINK", []string{oldLinkPath}, link.CanonicalPath)
 			r.rewriteLensScopePathsForPaths(ctx, link.TenantID, []string{oldLinkPath}, link.CanonicalPath)
 			r.rewriteWatchSubjectsPathsForPaths(ctx, link.TenantID, []string{oldLinkPath}, link.CanonicalPath, "", "")
 			r.rewriteOntologyFactsPathsForPaths(ctx, link.TenantID, []string{oldLinkPath}, link.CanonicalPath)
@@ -612,8 +637,8 @@ func (r *FragmentsMergeRepository) RewriteProductPathReferencesForPathPairs(ctx 
 			log.Printf("[FragmentsMerge] rewrite product path references progress: processed=%d total=%d", idx, len(orderedOldPaths))
 		}
 		target := replacements[oldPath]
-		r.recordPathRedirects(ctx, string(models.FragmentTypeProduct), []string{oldPath}, target)
-		r.rewriteMaterializedArtifactsPathsForPaths(ctx, tenantID, models.FragmentTypeProduct, []string{oldPath}, target)
+		r.recordPathRedirects(ctx, "PRODUCT", []string{oldPath}, target)
+		r.rewriteMaterializedArtifactsPathsForPaths(ctx, tenantID, "PRODUCT", []string{oldPath}, target)
 		r.rewriteLensScopePathsForPaths(ctx, tenantID, []string{oldPath}, target)
 		r.rewriteWatchSubjectsPathsForPaths(ctx, tenantID, []string{oldPath}, target, "", "")
 		r.rewriteOntologyFactsPathsForPaths(ctx, tenantID, []string{oldPath}, target)
@@ -630,7 +655,7 @@ func (r *FragmentsMergeRepository) collectSupplyLinksForPathPairs(ctx context.Co
 	supplyLinks := make(map[string]*models.HorizonFragment)
 	collectLinks := func(items []*models.HorizonFragment) {
 		for _, item := range items {
-			if item == nil || item.Type != models.FragmentTypeSupplyLink || strings.TrimSpace(item.ID) == "" {
+			if item == nil || !item.IsLegacySupplyLink() || strings.TrimSpace(item.ID) == "" {
 				continue
 			}
 			supplyLinks[item.ID] = item
@@ -669,7 +694,7 @@ func (r *FragmentsMergeRepository) findSupplyLinksByPath(ctx context.Context, te
 	limit := 10000
 	collect := func(out map[string]*models.HorizonFragment, items []*models.HorizonFragment) {
 		for _, item := range items {
-			if item == nil || item.Type != models.FragmentTypeSupplyLink || strings.TrimSpace(item.ID) == "" {
+			if item == nil || !item.IsLegacySupplyLink() || strings.TrimSpace(item.ID) == "" {
 				continue
 			}
 			out[item.ID] = item
@@ -908,10 +933,10 @@ func (r *FragmentsMergeRepository) reassignEdgesWithDedup(
 		return 0, 0
 	}
 	for _, edge := range srcEdges {
-		if edge == nil || strings.TrimSpace(edge.ID) == "" || edge.Type == "" {
+		if edge == nil || strings.TrimSpace(edge.ID) == "" || edge.Relation == "" {
 			continue
 		}
-		existing, err := r.edgesRepo.GetBySourceTargetAndType(ctx, tenantID, toID, edge.TargetFragmentID, edge.Type)
+		existing, err := r.edgesRepo.GetBySourceTargetAndType(ctx, tenantID, toID, edge.TargetFragmentID, edge.Relation)
 		if err == nil && existing != nil {
 			if mergeEdgeMetrics(existing, edge) {
 				_ = r.edgesRepo.Update(ctx, existing)
@@ -937,10 +962,10 @@ func (r *FragmentsMergeRepository) reassignEdgesWithDedup(
 		}
 	}
 	for _, edge := range tgtEdges {
-		if edge == nil || strings.TrimSpace(edge.ID) == "" || edge.Type == "" {
+		if edge == nil || strings.TrimSpace(edge.ID) == "" || edge.Relation == "" {
 			continue
 		}
-		existing, err := r.edgesRepo.GetBySourceTargetAndType(ctx, tenantID, edge.SourceFragmentID, toID, edge.Type)
+		existing, err := r.edgesRepo.GetBySourceTargetAndType(ctx, tenantID, edge.SourceFragmentID, toID, edge.Relation)
 		if err == nil && existing != nil {
 			if mergeEdgeMetrics(existing, edge) {
 				_ = r.edgesRepo.Update(ctx, existing)
@@ -1369,8 +1394,8 @@ func (r *FragmentsMergeRepository) bestEffortDedupeEdgesForNode(ctx context.Cont
 		}
 		s := strings.TrimSpace(ed.SourceFragmentID)
 		t := strings.TrimSpace(ed.TargetFragmentID)
-		ty := ed.Type
-		ns, nt, nty, _ := models.NormalizeSymmetricEdge(s, t, ty)
+		ty := ed.Relation
+		ns, nt, nty, _ := policy.NormalizeSymmetricEdge(s, t, ty)
 		k := key{s: ns, t: nt, ty: string(nty)}
 		if existing, ok := kept[k]; ok && existing != nil {
 			keep := existing

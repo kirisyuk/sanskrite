@@ -6,6 +6,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestEvaluateMissingInfoRules_TriggerSeed(t *testing.T) {
@@ -81,7 +82,7 @@ func TestEvaluateMissingInfoRules_TriggerFieldEmpty(t *testing.T) {
 	}
 
 	// Empty Labels.en: fires
-	frag := &models.HorizonFragment{Type: models.FragmentTypeOrganization, CanonicalPath: "/org/us/acme"}
+	frag := &models.HorizonFragment{Class: ah.FragmentClassOrg, CanonicalPath: "/org/us/acme"}
 	out2 := EvaluateMissingInfoRules(frag, nil, rules, nil, "/org/us/acme", EvaluateModeFull)
 	if len(out2) != 1 {
 		t.Fatalf("empty Labels.en: expected 1, got %d", len(out2))
@@ -131,7 +132,7 @@ func TestEvaluateMissingInfoRules_GeneralRuleNoDomainFilter(t *testing.T) {
 	rules := []MissingInfoRule{
 		{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "label for %s"},
 	}
-	frag := &models.HorizonFragment{Type: models.FragmentTypeOrganization, CanonicalPath: "/org/us/acme"}
+	frag := &models.HorizonFragment{Class: ah.FragmentClassOrg, CanonicalPath: "/org/us/acme"}
 	out := EvaluateMissingInfoRules(frag, nil, rules, []string{taxonomy.DomainModeMarket}, "/org/us/acme", EvaluateModeFull)
 	if len(out) != 1 {
 		t.Fatalf("general rule (DomainMode empty): should apply regardless of domainModes, got %d", len(out))
@@ -193,9 +194,9 @@ func TestEvaluateMissingInfoRules_SeedModeForMarket(t *testing.T) {
 func TestResolveByPath_PathPrecedenceOverFragmentType(t *testing.T) {
 	// Bug scenario: taxonomy returns Organization for /market/global/public-safety.
 	// ResolveByPath must return Market so we get Market MissingInfoRules, not Organization.
-	key := ResolveByPath("/market/global/public-safety", models.FragmentTypeOrganization, "")
+	key := ResolveByPath("/market/global/public-safety", ah.FragmentClassOrg, "", "")
 	if key != EntityTypeMarket {
-		t.Fatalf("path /market/ must yield EntityTypeMarket even when fragmentType=ORGANIZATION; got %q", key)
+		t.Fatalf("path /market/ must yield EntityTypeMarket even when class=org; got %q", key)
 	}
 	def := GetDefinition(key)
 	if def == nil || len(def.MissingInfoRules) == 0 {

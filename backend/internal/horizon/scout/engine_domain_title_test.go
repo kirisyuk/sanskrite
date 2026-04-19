@@ -89,11 +89,11 @@ func TestShouldSkipRecursivePlaceholderTarget(t *testing.T) {
 
 func TestIsSoftDeniedRelationForRecurse_GeoToMarketOperatesIn(t *testing.T) {
 	if !isSoftDeniedRelationForRecurse(
-		hmodels.FragmentTypeGeoRegion,
-		hmodels.FragmentTypeMarket,
+		FragmentTypeGeoRegion,
+		FragmentTypeMarket,
 		"/loc/ch/zg/na",
 		"/market/ch/technology/blockchain",
-		string(hmodels.DependencyTypeOperatesIn),
+		string(DependencyTypeOperatesIn),
 	) {
 		t.Fatalf("expected soft deny for GEO_REGION OPERATES_IN MARKET")
 	}
