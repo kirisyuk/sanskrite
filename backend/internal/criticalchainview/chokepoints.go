@@ -1,16 +1,4 @@
-package criticalchain
-
-// Chokepoint represents a strategic maritime/transit point (whitepaper 4.4).
-type Chokepoint struct {
-	ID               string  `json:"id"`
-	Path             string  `json:"path"`
-	Name             string  `json:"name"`
-	Latitude         float64 `json:"latitude"`
-	Longitude        float64 `json:"longitude"`
-	ShareOfSupply    float64 `json:"shareOfSupply,omitempty"`
-	RiskMultiplier   float64 `json:"riskMultiplier,omitempty"`
-	MaterialID       string  `json:"materialId,omitempty"`
-}
+package criticalchainview
 
 // Known chokepoints with coordinates (Hormuz, Bab-el-Mandeb, Malacca, etc.)
 var knownChokepoints = []Chokepoint{

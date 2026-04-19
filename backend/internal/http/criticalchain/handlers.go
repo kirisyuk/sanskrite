@@ -6,26 +6,25 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/igorkirisyuk/sanskrite/internal/criticalchain"
-	"github.com/igorkirisyuk/sanskrite/internal/criticalchain/pipeline"
-	"github.com/igorkirisyuk/sanskrite/internal/criticalchain/repo"
+	ccsignal "github.com/igorkirisyuk/sanskrite/internal/criticalchainview/signal"
+
+	"github.com/igorkirisyuk/sanskrite/internal/criticalchainview"
 )
 
 // Handlers provides HTTP handlers for CriticalChain API.
 type Handlers struct {
-	svc    *criticalchain.Service
-	runner *pipeline.Runner
+	svc *criticalchainview.Service
 }
 
 // NewHandlers creates new CriticalChain handlers.
-func NewHandlers(svc *criticalchain.Service, runner *pipeline.Runner) *Handlers {
-	return &Handlers{svc: svc, runner: runner}
+func NewHandlers(svc *criticalchainview.Service) *Handlers {
+	return &Handlers{svc: svc}
 }
 
 // RegisterRoutes registers CriticalChain routes.
 // Demo endpoints (materials, facilities, routes, conflict-zones, graph, signals) are public.
-// Admin pipeline run requires jobAuth.
-func (h *Handlers) RegisterRoutes(mux *http.ServeMux, authMiddleware, jobAuth func(http.Handler) http.Handler) {
+// Admin pipeline run returns 410 Gone (ingestion moved to taxonomy migrate / scout path).
+func (h *Handlers) RegisterRoutes(mux *http.ServeMux, _ func(http.Handler) http.Handler, jobAuth func(http.Handler) http.Handler) {
 	// Public demo endpoints (read-only)
 	mux.Handle("/api/v1/criticalchain/materials", http.HandlerFunc(h.handleMaterialsRoot))
 	mux.Handle("/api/v1/criticalchain/materials/", http.HandlerFunc(h.handleMaterialsByID))
@@ -37,7 +36,7 @@ func (h *Handlers) RegisterRoutes(mux *http.ServeMux, authMiddleware, jobAuth fu
 	mux.Handle("/api/v1/criticalchain/signals", http.HandlerFunc(h.handleSignals))
 	mux.Handle("/api/v1/criticalchain/country-risk", http.HandlerFunc(h.handleCountryRisk))
 	mux.Handle("/api/v1/criticalchain/chokepoints", http.HandlerFunc(h.handleChokepoints))
-	// Admin: pipeline run (jobAuth)
+	// Admin: legacy pipeline endpoint (removed)
 	mux.Handle("/api/v1/criticalchain/admin/pipeline/run", jobAuth(http.HandlerFunc(h.handlePipelineRun)))
 }
 
@@ -50,6 +49,9 @@ func (h *Handlers) handleMaterialsRoot(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if list == nil {
+		list = []*criticalchainview.Material{}
 	}
 	writeJSON(w, list)
 }
@@ -77,7 +79,7 @@ func (h *Handlers) handleFacilitiesRoot(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	opts := &repo.ListFacilitiesOpts{}
+	opts := &criticalchainview.ListFacilitiesOpts{}
 	if q := r.URL.Query().Get("material"); q != "" {
 		opts.MaterialID = q
 	}
@@ -96,6 +98,9 @@ func (h *Handlers) handleFacilitiesRoot(w http.ResponseWriter, r *http.Request) 
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if list == nil {
+		list = []*criticalchainview.Facility{}
 	}
 	writeJSON(w, list)
 }
@@ -128,6 +133,9 @@ func (h *Handlers) handleRoutes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if list == nil {
+		list = []*criticalchainview.Route{}
+	}
 	writeJSON(w, list)
 }
 
@@ -140,6 +148,9 @@ func (h *Handlers) handleConflictZones(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if list == nil {
+		list = []*criticalchainview.ConflictZone{}
 	}
 	writeJSON(w, list)
 }
@@ -160,6 +171,12 @@ func (h *Handlers) handleGraph(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if graph.Facilities == nil {
+		graph.Facilities = []*criticalchainview.Facility{}
+	}
+	if graph.ProcessingSteps == nil {
+		graph.ProcessingSteps = []*criticalchainview.ProcessingStep{}
+	}
 	writeJSON(w, graph)
 }
 
@@ -173,6 +190,9 @@ func (h *Handlers) handleSignals(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if signals == nil {
+		signals = []ccsignal.FusedSignal{}
+	}
 	writeJSON(w, map[string]interface{}{"regions": signals})
 }
 
@@ -185,6 +205,9 @@ func (h *Handlers) handleCountryRisk(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
+	}
+	if risk == nil {
+		risk = map[string]float64{}
 	}
 	writeJSON(w, risk)
 }
@@ -200,6 +223,9 @@ func (h *Handlers) handleChokepoints(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	if list == nil {
+		list = []*criticalchainview.Chokepoint{}
+	}
 	writeJSON(w, list)
 }
 
@@ -208,15 +234,12 @@ func (h *Handlers) handlePipelineRun(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
 	}
-	if h.runner == nil {
-		writeJSON(w, map[string]string{"status": "ok", "message": "pipeline not configured"})
-		return
-	}
-	if err := h.runner.Run(r.Context()); err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	writeJSON(w, map[string]string{"status": "ok", "message": "pipeline completed"})
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusGone)
+	_ = json.NewEncoder(w).Encode(map[string]string{
+		"status":  "gone",
+		"message": "CriticalChain pipeline ingestion was removed; use backend/cmd/taxonomy_migrate (see docs/taxonomy/REMAINING_WORK_SPEC.md §6).",
+	})
 }
 
 func writeJSON(w http.ResponseWriter, v interface{}) {

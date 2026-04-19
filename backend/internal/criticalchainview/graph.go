@@ -1,27 +1,26 @@
-package criticalchain
+package criticalchainview
 
 import (
 	"fmt"
 	"sort"
 	"strings"
 
-	"github.com/igorkirisyuk/sanskrite/internal/criticalchain/config"
-	"github.com/igorkirisyuk/sanskrite/internal/criticalchain/models"
+	"github.com/igorkirisyuk/sanskrite/internal/criticalchainview/config"
 )
 
-func buildGraphMaterialsAndSteps(material *models.Material, def *config.MaterialDefinition, facilities []*models.Facility, stored []*models.ProcessingStep) ([]*models.Material, []*models.ProcessingStep) {
+func buildGraphMaterialsAndSteps(material *Material, def *config.MaterialDefinition, facilities []*Facility, stored []*ProcessingStep) ([]*Material, []*ProcessingStep) {
 	if material == nil {
 		return nil, stored
 	}
 
-	materials := []*models.Material{material}
-	stageNodes := make(map[int]*models.Material)
+	materials := []*Material{material}
+	stageNodes := make(map[int]*Material)
 	stageDefs := make(map[int]config.ProductionStage)
 	if def != nil {
 		stages := append([]config.ProductionStage(nil), def.ProductionStages...)
 		sort.Slice(stages, func(i, j int) bool { return stages[i].ID < stages[j].ID })
 		for _, stage := range stages {
-			stageNode := &models.Material{
+			stageNode := &Material{
 				ID:               stageNodeID(def.MaterialID, stage.ID),
 				Name:             fmt.Sprintf("%s / %s", material.Name, humanizeStageName(stage.Name)),
 				Category:         material.Category,
@@ -36,8 +35,8 @@ func buildGraphMaterialsAndSteps(material *models.Material, def *config.Material
 	}
 
 	stepKey := make(map[string]bool)
-	var out []*models.ProcessingStep
-	addStep := func(step *models.ProcessingStep) {
+	var out []*ProcessingStep
+	addStep := func(step *ProcessingStep) {
 		if step == nil {
 			return
 		}
@@ -58,7 +57,7 @@ func buildGraphMaterialsAndSteps(material *models.Material, def *config.Material
 			if node == nil {
 				continue
 			}
-			addStep(&models.ProcessingStep{
+			addStep(&ProcessingStep{
 				From: prev,
 				To:   node.ID,
 				Type: processingStepType(stage.Type),
@@ -69,12 +68,12 @@ func buildGraphMaterialsAndSteps(material *models.Material, def *config.Material
 
 	for _, facility := range facilities {
 		from := material.ID
-		stepType := models.StepProcessing
+		stepType := StepProcessing
 		if stage, ok := stageDefs[facility.Stage]; ok {
 			from = stageNodeID(material.ID, facility.Stage)
 			stepType = processingStepType(stage.Type)
 		}
-		addStep(&models.ProcessingStep{
+		addStep(&ProcessingStep{
 			From: from,
 			To:   facility.ID,
 			Type: stepType,
@@ -113,17 +112,17 @@ func humanizeStageName(name string) string {
 	return strings.ToUpper(name[:1]) + name[1:]
 }
 
-func processingStepType(kind string) models.ProcessingStepType {
+func processingStepType(kind string) ProcessingStepType {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "extraction":
-		return models.StepExtraction
+		return StepExtraction
 	case "refining":
-		return models.StepRefining
+		return StepRefining
 	case "manufacturing":
-		return models.StepManufacturing
+		return StepManufacturing
 	case "transport", "logistics", "distribution":
-		return models.StepTransport
+		return StepTransport
 	default:
-		return models.StepProcessing
+		return StepProcessing
 	}
 }

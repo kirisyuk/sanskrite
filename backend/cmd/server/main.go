@@ -55,8 +55,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/cache"
 
 	// Horizon system
-	criticalchain "github.com/igorkirisyuk/sanskrite/internal/criticalchain"
-	criticalchainpipeline "github.com/igorkirisyuk/sanskrite/internal/criticalchain/pipeline"
+	"github.com/igorkirisyuk/sanskrite/internal/criticalchainview"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon"
 	horizonanalytical "github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	horizoncriticalpath "github.com/igorkirisyuk/sanskrite/internal/horizon/critical_path"
@@ -412,6 +411,8 @@ func main() {
 	var horizonSimulationSubmitter *agentmeshsubmitter.Service
 	var horizonAgentMeshSubmitter *agentmeshsubmitter.Service
 	var horizonAgentMeshStore *agentmeshrepo.Store
+	var horizonFragmentsRepoForCriticalChain *horizonrepo.HorizonFragmentsRepository
+	var horizonEdgesRepoForCriticalChain *horizonrepo.DependencyEdgesRepository
 	{
 		meshStore := agentmeshrepo.NewStore(fsClient.Client(), gcsClient)
 		horizonAgentMeshStore = meshStore
@@ -3589,6 +3590,8 @@ func main() {
 			}
 
 			logger.Printf("Horizon system initialized")
+			horizonFragmentsRepoForCriticalChain = horizonFragmentsRepo
+			horizonEdgesRepoForCriticalChain = horizonEdgesRepo
 
 			// Wire Horizon Lens service to projects handler for cascade delete
 			if horizonService != nil && horizonService.Lens() != nil {
@@ -5458,10 +5461,8 @@ func main() {
 	mux.Handle("/api/v1/admin/nv_horizon/watchdog/run", jobAuth(http.HandlerFunc(watchdogCronHandler)))
 	mux.Handle("/api/v1/admin/horizon/watchdog/run", jobAuth(http.HandlerFunc(watchdogCronHandler))) // legacy alias
 
-	// CriticalChain routes (demo endpoints public, admin pipeline jobAuth)
-	criticalchainSvc := criticalchain.NewService(fsClient.Client())
-	criticalchainRunner := criticalchainpipeline.NewRunner(fsClient.Client())
-	criticalchainHandlers := criticalchainhttp.NewHandlers(criticalchainSvc, criticalchainRunner)
+	// CriticalChain routes (demo endpoints public; legacy pipeline -> 410 Gone)
+	criticalchainHandlers := criticalchainhttp.NewHandlers(criticalchainview.NewService(horizonFragmentsRepoForCriticalChain, horizonEdgesRepoForCriticalChain))
 	criticalchainHandlers.RegisterRoutes(mux, authMiddleware, jobAuth)
 	logger.Printf("CriticalChain routes registered")
 
