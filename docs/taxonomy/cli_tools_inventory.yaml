@@ -1,0 +1,58 @@
+# cli_tools_inventory.yaml
+# Author: tools-cleanup audit, P6 prep.
+# Cutoff: 2026-03-05 (1.5 months ago, today=2026-04-19).
+#
+# Disposition rules (in priority order):
+#   1. KEEP-CORE-DEDUP     fragment deduplication / merging / edge re-pointing.
+#   2. KEEP-CORE-GEO       geo-tagging / geo-coords / zone repair / geo path debt.
+#   3. KEEP-DOCS           referenced from current docs/horizon/{architecture,implementation}/*.md
+#                          (docs/archive/* alone is NOT enough).
+#   4. DROP                everything else, including: all tmp_*, all *_smoke / *_e2e,
+#                          all audit/diagnose/inspect/show/count/check (unless geo),
+#                          backfill non-geo, repair non-geo, completed migrations,
+#                          recent-but-tactical scaffolding, anything older than cutoff
+#                          regardless of category.
+#
+# Total: 198 cmd/tools/* packages → ~27 KEEP, ~171 DROP.
+
+keep:
+  core_dedup:
+    - horizon_deduplicate_fragments    # main dedup tool
+    - horizon_smart_dedup              # newer smart-dedup pipeline
+    - horizon_dedup_scanner            # offline dedup scanner / report
+    - horizon_merge_discovered         # merges discovered duplicates with edge re-pointing
+    - horizon_merge_org_aliases        # merges org aliases (with edges)
+    - horizon_merge_abbreviation_to_full  # merge abbrev forms
+    - horizon_merge_geo_locations      # merges geo loc fragments
+
+  core_geo:
+    - horizon_backfill_coordinates              # core lat/lon backfill
+    - horizon_backfill_zone_coordinates         # zone geo coords
+    - horizon_backfill_geo_slug                 # geo slug normalization
+    - horizon_backfill_facility_geo_paths       # facility canonical geo path
+    - horizon_normalize_loc_geonames            # geonames normalization
+    - horizon_audit_zone_geo_coords             # geo audit (read-only diagnostic, retained)
+    - horizon_geo_conflict_audit                # geo conflict audit
+    - horizon_geocode_debug                     # geocoder debugger
+    - horizon_geo_path_debt_diagnose            # geo path tech-debt
+    - horizon_inspect_placeholder_geo_failures  # placeholder geo failures
+    - horizon_relink_affected_zones             # relink AZ to geo
+    - horizon_repair_affected_zones             # repair AZ
+    - horizon_repair_zone_twins                 # zone twins repair
+    - horizon_repair_synthetic_facilities       # synthetic facility geo repair
+    - geonames_smoke                            # geonames smoke (geo)
+    - loc_canon_smoke                           # loc canonicalization smoke (geo)
+
+  docs_actual:
+    - horizon_seed_taxonomy           # 4 refs in taxonomy.md / industry-taxonomy.md
+    - horizon_import_worldmonitor     # critical import path (recent, refs in archive)
+    - horizon_supply_repair           # 2 refs in implementation/sanctions-simulation
+    - horizon_lens_path_bootstrap     # 2 refs in implementation/sanctions-simulation
+
+# DROP list materialized at apply time (everything in cmd/tools/* not in keep above
+# AND not in cmd/* root). Verified counts:
+#   198 cmd/tools/*  - 27 KEEP = 171 DROP packages.
+#
+# Out of scope for tools-cleanup (NOT under cmd/tools/):
+#   server, agentmesh, run_worker, run_poller, agentmesh_scout_eval,
+#   migrate_*, sync-*, reindex-*, check-* (cmd/* root packages stay; reviewed at P6).
