@@ -1,0 +1,580 @@
+# Migration map: legacy backend taxonomy -> AgentHorde canonical taxonomy.
+#
+# Source of truth used by:
+#   - backend/cmd/taxonomy_migrate (Firestore in-place rewrite)
+#   - backend/internal/horizon/scout/taxonomy converters (read-side back-compat)
+#   - frontend codegen consumers (display fall-back)
+#
+# Every legacy enum value MUST appear here; a missing value fails the
+# migrate-cli precheck. New AgentHorde additions belong in
+# agents/shared/agenthorde_common/agenthorde_common/canonicalizer/taxonomy.py
+# first; this file only describes the transform from legacy -> AH.
+#
+# disposition vocabulary:
+#   - rename                : straight rename to a single target enum value
+#   - subtype               : map to (target_class, subtype) tuple; subtype
+#                             goes to attributes.<subtype_attr>
+#   - fold_to_attributes    : drop the typed enum and keep the data on
+#                             attributes.<attribute_name> of the same
+#                             fragment/edge (no graph-shape change)
+#   - fold_to_canonical_path: drop the typed enum; the information is
+#                             expressible inside canonical_path slots
+#   - rewrite_edge          : delete and recreate as a different edge type
+#                             with attribute payload (e.g. SUPPLIES_TO ->
+#                             supplies + leg_connects chain)
+#   - reverse               : preserved relation but src/dst swapped
+#   - drop_after_migration  : data is intentionally removed (legacy/noise)
+#   - per_pair_routing      : the legacy edge fans out by (src_class,dst_class)
+#                             into different target relations / attributes;
+#                             routing rules listed in `routing:` block
+#   - attribute_heuristic   : the legacy edge fans out into multiple specific
+#                             relations based on attribute heuristics; the
+#                             rules are listed in the `heuristics:` block,
+#                             everything not matching falls back to a
+#                             `fallback:` clause (typically a candidate queue)
+#   - needs_design          : explicit "this is unresolved" — migrate-cli
+#                             refuses to run while any legacy doc still
+#                             carries this value (forces the team to decide)
+#
+# All `target_*` values must exist in taxonomy.py:
+#   - target_class       in FRAGMENT_CLASSES
+#   - target_relation    in RELATION_NAMES
+#   - target_subtype     normalized via the matching normalize_* helper
+
+schema_version: "2.0"
+
+# -----------------------------------------------------------------------------
+# FragmentType (backend/internal/horizon/models/common.go)
+# -----------------------------------------------------------------------------
+fragment_type_map:
+
+  ORGANIZATION:
+    disposition: rename
+    target_class: org
+    canonical_path_template: "/org/{geo}/{slug}"
+    notes: "Direct rename. Existing canonicalPath already shaped /org/..."
+
+  PROGRAM:
+    disposition: subtype
+    target_class: org
+    target_subtype: program
+    subtype_attr: org_subtype
+    notes: "PROGRAM was an awkward parallel class; folded into org with subtype=program. canonicalPath rewrite: /program/* -> /org/{geo}/program/{slug}."
+
+  PERSON:
+    disposition: rename
+    target_class: person
+    canonical_path_template: "/person/{geo}/{slug}"
+
+  FACILITY:
+    disposition: rename
+    target_class: site
+    canonical_path_template: "/site/{geo}/{slug}"
+    notes: "FACILITY -> site. siteTransforms[] (extraction/refining/assembly) attached on the site by migrate-cli using the legacy TRANSFORMS_INTO/ASSEMBLES_INTO edges (see relation map)."
+
+  DEPOSIT:
+    disposition: subtype
+    target_class: site
+    target_subtype: deposit
+    subtype_attr: site_subtype
+    canonical_path_template: "/site/{geo}/deposit/{resource}/{slug}"
+    notes: "Natural-resource deposits become site with subtype=deposit. Preserves resource axis through canonical path."
+
+  GEO_REGION:
+    disposition: rename
+    target_class: geo
+    canonical_path_template: "/geo/{iso2}[/{admin}]/{slug}"
+
+  PRODUCT:
+    disposition: rename
+    target_class: product
+    canonical_path_template: "/product/{family}/{slug}"
+
+  MARKET:
+    disposition: rename
+    target_class: market
+    canonical_path_template: "/market/{domain}/{vertical}/{slug}"
+
+  COMMUNITY:
+    disposition: rename
+    target_class: community
+    canonical_path_template: "/community/{geo}/{community_subtype}/{slug}"
+    notes: "community_subtype already aligned with COMMUNITY_SUBTYPES enum in taxonomy.py. CommunityType field maps to attributes.community_subtype via field_inventory.yaml."
+
+  MEDIA_CHANNEL:
+    disposition: subtype
+    target_class: org
+    target_subtype: media_channel
+    subtype_attr: org_subtype
+    canonical_path_template: "/org/{geo}/media-channel/{slug}"
+    notes: "Channels are operated entities; folded into org with subtype=media_channel. The community USING the channel stays a /community fragment."
+
+  TRACK:
+    disposition: rename
+    target_class: mobile_asset
+    canonical_path_template: "/mobile_asset/{kind}/{geo}/{slug}-{id8}"
+    requires_attribute: mobile_asset_kind
+    notes: "TRACK -> /mobile_asset/* (new dedicated class — see taxonomy.py MOBILE_ASSET_KINDS). Migrate-cli derives `attributes.mobile_asset_kind` from legacy track.kind (vessel/aircraft/locomotive/rig/satellite/vehicle), falls back to 'asset' when undecidable. Last-known position fields move to attributes.last_known_position + attributes.last_position_observed_at. The /vessel_class/* fragment continues to model the *class* (LR2, VLCC); the /mobile_asset/* fragment is the individual hull/airframe and links via attributes.vessel_class_path. Operator/owner/flag move to attributes.operator_org_path / owner_org_path / flag_geo_path."
+
+  EVENT:
+    disposition: subtype
+    target_class: evidence
+    target_subtype: event
+    subtype_attr: evidence_subtype
+    canonical_path_template: "/evidence/{geo}/event-{slug}"
+    notes: "Events fold into /evidence with subtype=event (closed enum EvidenceSubtype). The temporal axis is captured by attributes.valid_from / valid_to (universal time-bound qualifier on evidence). Their actor/scope qualifiers (involvesActor, inGeoScope, about) move to attributes.actors / attributes.scope_geos / attributes.about_refs on the evidence fragment. When the event is itself a disruption (war, embargo, typhoon), migrate-cli additionally emits a `disrupts` edge from the resulting /evidence to each impaired endpoint with attributes.disruption_kind heuristically derived from the event description. See relation map (AFFECTS) for the disrupts-edge synthesis."
+
+  AFFECTED_ZONE:
+    disposition: subtype
+    target_class: geo
+    target_subtype: affected_zone
+    subtype_attr: geo_subtype
+    canonical_path_template: "/geo/{geo}/zone/{condition_type}/{slug}"
+    notes: "An affected zone is a derived geo region with an ongoing condition. condition_type stays as attribute. Severity metrics ride on state.zone_severity_score. AFFECTED_ZONE -> AFFECTS edges become /geo (subtype=affected_zone) -> `disrupts` edges with attributes.disruption_kind derived from condition_type (war_zone -> armed_conflict, typhoon -> natural_disaster, blockade -> blockade, etc.; unknown -> other). See relation map (AFFECTS)."
+
+  DECISION_POINT:
+    disposition: rename
+    target_class: decision
+    canonical_path_template: "/decision/{domain-slug}/{slug}"
+    notes: "DecisionSubtype enum (see taxonomy.py) is required on attributes.decision_subtype."
+
+  MECHANISM:
+    disposition: rename
+    target_class: mechanism
+    canonical_path_template: "/mechanism/{category}/{slug}"
+    notes: "MechanismCategory enum is required on attributes.mechanism_category and drives the canonical path category slot."
+
+  DOMAIN:
+    disposition: fold_to_attributes
+    target_class: null
+    notes: "DOMAIN was a contract-typed config artifact, never a real graph node. Migrate-cli deletes the documents. The domain identity survives as the {domain-slug} slot on /decision/* canonical paths and as attributes.domain on relevant fragments."
+
+  SPHERE:
+    disposition: fold_to_attributes
+    target_class: null
+    notes: "SPHERE collapses into HorizonFragment.spherePaths (already typed; see field_inventory). Standalone /sphere/* documents are deleted. FE filters keep working through sphere_paths attribute."
+
+  SUPPLY_LINK:
+    disposition: rewrite_edge
+    target_class: null
+    target_relation: supplies
+    notes: "Edge-as-fragment artifact. Migrate-cli reads supplierRef/customerRef/productRef/transportViaRefs and emits one supplies edge plus N leg_connects edges through /route fragments. Then deletes the SUPPLY_LINK doc. See materialized-payload-rewrite for path overlays."
+
+# -----------------------------------------------------------------------------
+# DependencyType (backend/internal/horizon/models/dependency_edge.go)
+# -----------------------------------------------------------------------------
+dependency_type_map:
+
+  # ---- Core supply-chain ----
+  SUPPLIES_TO:
+    disposition: rename
+    target_relation: supplies
+    notes: "Direct rename. transport_via qualifier expands into a leg_connects chain via /route fragments (see edge_qualifiers in field_inventory.yaml)."
+  PRODUCES:
+    disposition: rename
+    target_relation: produces
+  CONSUMES:
+    disposition: reverse
+    target_relation: supplies
+    notes: "B CONSUMES A becomes A supplies B."
+  EXTRACTS_FROM:
+    disposition: rename
+    target_relation: produces
+    extra_attributes:
+      production_kind: extraction
+    notes: "Site extracts from deposit: emit produces with attributes.production_kind=extraction; the deposit becomes the source."
+  USED_IN:
+    disposition: drop_after_migration
+    notes: "Inverse of produces; redundant once produces is canonical. FE always queries by produces."
+  TRANSFORMS_INTO:
+    disposition: fold_to_attributes
+    notes: "Folded onto /site fragments as siteTransforms[].kind=transform. Migrate-cli walks PRODUCT->PRODUCT TRANSFORMS_INTO edges anchored at the producing site and synthesizes siteTransforms entries; original edges deleted."
+  ASSEMBLES_INTO:
+    disposition: fold_to_attributes
+    notes: "Same as TRANSFORMS_INTO but siteTransforms[].kind=assembly."
+
+  # ---- Geographic / locational ----
+  LOCATED_IN:
+    disposition: fold_to_canonical_path
+    notes: "Geographic location is encoded in canonical_path geo slot (/site/{geo}/...). Edges deleted; admin hierarchy is recoverable from canonical_path parsing or HomeLocation."
+  OPERATES_IN:
+    disposition: fold_to_attributes
+    attribute_name: operating_geos
+    notes: "Multi-geo operations recorded as attributes.operating_geos[] on the org fragment."
+  IN_GEO_SCOPE:
+    disposition: fold_to_attributes
+    attribute_name: scope_geos
+    notes: "Used by EVENT/regime fragments. Becomes attributes.scope_geos[] on the resulting evidence/regime fragment."
+
+  # ---- Ownership / control ----
+  OWNS:
+    disposition: rename
+    target_relation: beneficially_owns
+    notes: "OWNS is generic equity ownership; collapses into beneficially_owns. Voting-rights nuance lives in attributes.beneficial_share_pct."
+  SUBSIDIARY_OF:
+    disposition: rename
+    target_relation: subsidiary_of
+  CONTROLS:
+    disposition: rename
+    target_relation: controls_via
+  CONTROLS_ACCESS:
+    disposition: rewrite_edge
+    target_relation: imposes
+    extra_attributes:
+      mechanism_category: access_control
+    notes: "Becomes mechanism+imposes edge: synthesize a /mechanism/access-control/{slug} and emit org wields mechanism + mechanism imposes target."
+  ADMINISTERS:
+    disposition: rename
+    target_relation: operates
+    notes: "ADMINISTERS was used for govt-operates-program. With PROGRAM folded into org, this becomes a structural operates."
+  MANAGES:
+    disposition: reverse
+    target_relation: managed_by
+    notes: "A MANAGES B becomes B managed_by A."
+  OPERATES_VIA:
+    disposition: rename
+    target_relation: wields
+    notes: "Org operates via a mechanism — direct fit for the new wields relation."
+
+  # ---- Corporate events ----
+  INVESTS_IN:
+    disposition: rename
+    target_relation: invested_in
+  PARTNERS_WITH:
+    disposition: rename
+    target_relation: joint_venture_with
+  BOARD_MEMBER_OF:
+    disposition: rename
+    target_relation: holds_board_seat
+  FOUNDED:
+    disposition: fold_to_attributes
+    attribute_name: founders
+    notes: "Founder identity becomes attributes.founders[] on the org. Edges deleted (rare and historical)."
+  EMPLOYED_BY:
+    disposition: drop_after_migration
+    notes: "Generic employment relation has too many false positives (LLM noise). Person-as-key-person is captured by KEY_PERSON instead; rank-and-file employment is dropped."
+  WORKS_FOR:
+    disposition: drop_after_migration
+    notes: "Duplicate of EMPLOYED_BY in practice. Same fate."
+  KEY_PERSON:
+    disposition: fold_to_attributes
+    attribute_name: key_persons
+    notes: "Direction: person KEY_PERSON org. Becomes attributes.key_persons[] on the org with role/title."
+  HAS_KEY_PERSON:
+    disposition: fold_to_attributes
+    attribute_name: key_persons
+    notes: "Direction: org HAS_KEY_PERSON person. Same destination as KEY_PERSON; migrate-cli normalizes both directions onto the org."
+
+  # ---- Corporate transitions ----
+  RENAMED_TO:
+    disposition: fold_to_attributes
+    attribute_name: name_history
+    notes: "Name change is identity continuity, not a graph edge. Old name moves to nameHistory."
+  REBRANDED_TO:
+    disposition: fold_to_attributes
+    attribute_name: name_history
+  LEGAL_SUCCESSOR_OF:
+    disposition: reverse
+    target_relation: merged_into
+    notes: "B LEGAL_SUCCESSOR_OF A becomes A merged_into B."
+  MERGED_INTO:
+    disposition: rename
+    target_relation: merged_into
+  SPUN_OFF_FROM:
+    disposition: reverse
+    target_relation: spun_out
+    notes: "B SPUN_OFF_FROM A becomes A spun_out B."
+  ACQUIRED_BY:
+    disposition: reverse
+    target_relation: acquired_stake_from
+    notes: "B ACQUIRED_BY A becomes A acquired_stake_from B."
+  CORPORATE_TRANSITION:
+    disposition: attribute_heuristic
+    heuristics:
+      - if_attr: { transition_kind: stake_purchase }
+        target_relation: acquired_stake_from
+      - if_attr: { transition_kind: merger }
+        target_relation: merged_into
+      - if_attr: { transition_kind: spinoff }
+        target_relation: spun_out
+      - if_attr: { transition_kind: divestiture }
+        target_relation: divested_to
+      - if_attr: { transition_kind: investment }
+        target_relation: invested_in
+      - if_attr: { transition_kind: asset_transfer }
+        target_relation: asset_contribution
+      - if_attr: { transition_kind: rename }
+        disposition: fold_to_attributes
+        attribute_name: name_history
+    fallback:
+      disposition: candidate_queue
+      queue: corporate_transition_needs_review
+      notes: "When no transition_kind is set or the value is unknown, keep the legacy edge as a candidate for human review instead of guessing."
+    notes: "Routes by attributes.transition_kind on the legacy edge. Six known kinds map to the corresponding /agenthorde corporate-event relations; unknown values land in a review queue. No edges are dropped silently."
+
+  # ---- Regulation / regime ----
+  REGULATES:
+    disposition: rename
+    target_relation: regulates
+  IMPOSES_CONDITION:
+    disposition: rewrite_edge
+    target_relation: imposes
+    notes: "IMPOSES_CONDITION emitted before the mechanism layer existed. Migrate-cli synthesizes a /mechanism fragment when one isn't already wired and emits the source-org wields mechanism + mechanism imposes target chain."
+  APPLIES_TO:
+    disposition: rewrite_edge
+    target_relation: imposes
+    notes: "Same machinery as IMPOSES_CONDITION."
+  GATEKEEPS_DECISION:
+    disposition: rename
+    target_relation: gatekeeps
+    notes: "Direct fit for the new gatekeeps relation (org -> decision)."
+  USES_MECHANISM:
+    disposition: rename
+    target_relation: wields
+    notes: "Direct fit for the new wields relation (org -> mechanism)."
+
+  # ---- Influence / soft power ----
+  INFLUENCES:
+    disposition: rename
+    target_relation: influences
+    requires_attribute: influence_kind
+    notes: "Migrate-cli fills attributes.influence_kind from heuristics on edge qualifiers (lobbying, advisory, narrative, financing, kinship, intelligence). When undecidable, defaults to 'advisory' and tags edge for review."
+  DOMINATES:
+    disposition: rewrite_edge
+    target_relation: influences
+    extra_attributes:
+      influence_kind: structural_dominance
+    notes: "Folded into influences with closed-enum kind. Avoids creating yet another relation for an already-fuzzy concept."
+
+  # ---- Markets ----
+  HAS_MARKET_SEGMENT:
+    disposition: fold_to_attributes
+    attribute_name: market_segment_norms
+    notes: "Already mirrored on the org as MarketSegmentNorms (see field_inventory). Edges deleted post-mirror-verify."
+  HAS_SUBMARKET:
+    disposition: fold_to_attributes
+    attribute_name: submarkets
+    notes: "Hierarchical market relations become attributes.submarkets[] on the parent market fragment."
+  TRADED_IN:
+    disposition: rename
+    target_relation: listed_on
+    notes: "Product TRADED_IN exchange becomes product listed_on exchange (org fragment subtype=exchange)."
+  COMPETES_WITH:
+    disposition: drop_after_migration
+    notes: "Symmetric and noisy; FE never used it. If competitive context becomes a real need, reintroduce as attributes.competitors[] on market or org."
+  PARTICIPATES_IN:
+    disposition: per_pair_routing
+    routing:
+      - from_class: org
+        to_class: market
+        disposition: fold_to_attributes
+        target_attribute: market_segments
+        on_fragment: from
+        notes: "Org-on-market participation collapses to market_segments[] on the org. Drop the edge afterwards."
+      - from_class: person
+        to_class: evidence
+        disposition: fold_to_attributes
+        target_attribute: actors
+        on_fragment: to
+        notes: "Person-in-event becomes attributes.actors[] on the resulting /evidence fragment (subtype=event)."
+      - from_class: org
+        to_class: evidence
+        disposition: fold_to_attributes
+        target_attribute: actors
+        on_fragment: to
+      - from_class: org
+        to_class: org
+        if_to_subtype: program
+        disposition: fold_to_attributes
+        target_attribute: participating_orgs
+        on_fragment: to
+        notes: "Legacy PROGRAM is now org with subtype=program; participation collapses into attributes.participating_orgs[] on the program-org."
+      - from_class: org
+        to_class: community
+        disposition: rewrite_edge
+        target_relation: member_of
+        notes: "Industry-association style participation becomes member_of (org -> community)."
+      - from_class: person
+        to_class: community
+        disposition: rewrite_edge
+        target_relation: member_of
+        notes: "Person-in-community becomes member_of (person -> community)."
+    fallback:
+      disposition: drop_after_migration
+      notes: "Anything else is too ambiguous (e.g. org PARTICIPATES_IN regime) and carries no value beyond noise."
+    notes: "Per-pair fan-out. Organizational participation in markets is folded onto the org; participation in evidence/events lands on the evidence; community/program participation upgrades to first-class member_of edges."
+
+  # ---- Assurance ----
+  ASSURES:
+    disposition: rename
+    target_relation: assures
+    requires_attribute: assurance_type
+    notes: "Direct fit. Migrate-cli backfills attributes.assurance_type from edge qualifiers (default 'audit')."
+  AUDITED_BY:
+    disposition: reverse
+    target_relation: assures
+    extra_attributes:
+      assurance_type: audit
+    notes: "B AUDITED_BY A becomes A assures B with assurance_type=audit."
+
+  # ---- Membership / affiliation (mostly deprecated) ----
+  MEMBER_OF:
+    disposition: rename
+    target_relation: member_of
+    notes: "Direct fit for the new structural relation (see taxonomy.py). Endpoints (person/org -> org/community) match the legacy usage. Migrate-cli backfills attributes.membership_status='active' and lifts any role qualifier into attributes.membership_role; legacy joined_at/left_at survive untouched as edge attributes."
+  AFFILIATED_WITH:
+    disposition: drop_after_migration
+    notes: "Too vague; LLM-extracted noise. Real affiliation goes through joint_venture_with / subsidiary_of / wields."
+  ASSOCIATED_WITH:
+    disposition: drop_after_migration
+    notes: "Same as AFFILIATED_WITH."
+  RELATIVE_OF:
+    disposition: fold_to_attributes
+    attribute_name: relations
+    notes: "Person<->person family ties become attributes.relations[] on each person fragment with kind+target."
+  RELATED_TO:
+    disposition: drop_after_migration
+    notes: "Generic. Almost always re-derivable from a stronger relation if it matters."
+
+  # ---- Domain / sphere bookkeeping (auto-deleted with DOMAIN/SPHERE classes) ----
+  DOMAIN_RELATION:
+    disposition: drop_after_migration
+    notes: "Tied to deleted DOMAIN class."
+  RELATED_DOMAIN:
+    disposition: drop_after_migration
+  BROADENS_TO:
+    disposition: drop_after_migration
+    notes: "Domain-hierarchy bookkeeping; subsumed by configuration."
+  NARROWS_TO:
+    disposition: drop_after_migration
+  FOCUSES_ON:
+    disposition: drop_after_migration
+    notes: "Domain-scoping bookkeeping."
+  HAS_SUBGROUP:
+    disposition: fold_to_attributes
+    attribute_name: subgroups
+    notes: "Used on community fragments for sub-communities. Becomes attributes.subgroups[]."
+
+  # ---- Event scaffolding (folded with EVENT->evidence) ----
+  INVOLVES_ACTOR:
+    disposition: fold_to_attributes
+    attribute_name: actors
+    notes: "Becomes attributes.actors[] on the resulting evidence fragment."
+  ABOUT:
+    disposition: fold_to_attributes
+    attribute_name: about_refs
+  SURFACES:
+    disposition: drop_after_migration
+    notes: "evidence SURFACES org/site was a discovery-time provenance hint; superseded by Provenance.sourceFrameId."
+  AFFECTS:
+    disposition: rename
+    target_relation: disrupts
+    requires_attribute: disruption_kind
+    notes: "Direct fit for the new structural disrupts relation (geo/evidence -> site/route/org/vessel_class/mobile_asset/community). Migrate-cli derives attributes.disruption_kind from the source AFFECTED_ZONE.condition_type (war_zone -> armed_conflict, typhoon -> natural_disaster, blockade -> blockade, strike -> labor_action, outage -> infrastructure_failure, civil_unrest -> civil_unrest, pandemic -> epidemic, regulatory_freeze -> regulatory_freeze, cyber -> cyber_incident; everything else -> other). Severity, valid_from, valid_to inherited from the legacy edge."
+  TRIGGERED_BY:
+    disposition: fold_to_attributes
+    attribute_name: triggers
+    notes: "AFFECTED_ZONE TRIGGERED_BY EVENT becomes attributes.triggers[] on the resulting geo (subtype=affected_zone) fragment."
+
+  # ---- Generic catch-all ----
+  DEPENDS_ON:
+    disposition: per_pair_routing
+    routing:
+      - from_class: site
+        to_class: site
+        disposition: rewrite_edge
+        target_relation: supplies
+        synthesize_product: true
+        notes: "Site->site dependency means a supplies leg without a known cargo; migrate-cli synthesizes a /product/general/unspecified-dependency placeholder so attributes.product_fragment_id stays valid, and queues a candidate review for product enrichment."
+      - from_class: org
+        to_class: mechanism
+        disposition: rename
+        target_relation: wields
+      - from_class: org
+        to_class: regime
+        disposition: rename
+        target_relation: subject_to
+      - from_class: product
+        to_class: site
+        disposition: rename
+        target_relation: requires_capability
+      - from_class: product
+        to_class: product
+        disposition: site_transform_candidate
+        notes: "Product->product dependency lands in a candidate queue; the canonical home is siteTransforms[] on the producing /site, which migrate-cli cannot infer without knowing the host site."
+      - from_class: org
+        to_class: org
+        disposition: candidate_queue
+        queue: depends_on_org_to_org
+        notes: "Generic org->org dependency is too ambiguous (commercial vs control vs supply); queued for human routing into supplies / managed_by / controls_via / influences."
+    fallback:
+      disposition: drop_after_migration
+      notes: "Anything not matched by the routing block is generic noise."
+    notes: "Five recognized pairs route deterministically; one pair (product->product) lands in a candidate queue because the canonical home is siteTransforms[] on the producing site."
+
+# -----------------------------------------------------------------------------
+# DependencyFacet (backend/internal/horizon/models/dependency_edge.go)
+# -----------------------------------------------------------------------------
+# Per the convergence decision, the entire DependencyFacet enum is dropped.
+# The criminal/illicit dimension that legitimization+enforcement were trying
+# to encode will return as a future closed-enum attribute on `supplies` /
+# `controls_via` (tracked separately).
+dependency_facet_map:
+  communication:
+    disposition: drop_after_migration
+  infrastructure:
+    disposition: drop_after_migration
+  payment:
+    disposition: drop_after_migration
+  distribution:
+    disposition: drop_after_migration
+  logistics:
+    disposition: drop_after_migration
+    notes: "The logistics signal lives in the supplies/leg_connects chain itself."
+  supply:
+    disposition: drop_after_migration
+    notes: "Same; the supplies edge IS the supply signal."
+  labor:
+    disposition: drop_after_migration
+  legitimization:
+    disposition: drop_after_migration
+    notes: "Will return as illicit_kind attribute later; explicitly dropped now."
+  enforcement:
+    disposition: drop_after_migration
+    notes: "Same; enforcement nuance returns later as a closed-enum attribute."
+  regulatory:
+    disposition: drop_after_migration
+    notes: "Already covered by regulates / subject_to / imposes relations."
+
+# -----------------------------------------------------------------------------
+# MaterializedKind (backend/internal/horizon/models/materialized_artifact.go)
+# -----------------------------------------------------------------------------
+# Materialized artifacts are derived overlays, not graph fragments. The
+# migration keeps them but rewrites payload contents to the new taxonomy
+# (siteTransform descriptors, /route geometry refs, normalized relation
+# names). Tracking only — driven by materialized-payload-rewrite task.
+materialized_kind_map:
+  SUPPLY_CHAIN_PATH:
+    disposition: rewrite_payload
+    notes: "Rewrite legCount-style payload to use leg_connects chain refs and route_fragment_id per leg."
+  SERVICE_CHAIN_PATH:
+    disposition: rewrite_payload
+  SUPPLY_CHAIN_ASSEMBLY_GRAPH:
+    disposition: rewrite_payload
+    notes: "Replace TRANSFORMS_INTO/ASSEMBLES_INTO references with siteTransforms descriptors."
+  REGULATORY_IMPACT_MAP:
+    disposition: rewrite_payload
+    notes: "Replace IMPOSES_CONDITION refs with imposes-edge ids; mechanism objects become first-class."
+  REGULATORY_IMPACT_TRANSMISSION_PATH:
+    disposition: rewrite_payload
+  REGULATORY_TIMELINE:
+    disposition: rewrite_payload
+  REGULATORY_CASCADE_MAP:
+    disposition: rewrite_payload
+  REGULATORY_IMPACT_SCENARIO:
+    disposition: rewrite_payload
+  GOVERNANCE_CHAIN:
+    disposition: rewrite_payload
+    notes: "Replace ADMINISTERS/MANAGES chains with operates / managed_by chains."
+  ECOSYSTEM_MAP:
+    disposition: rewrite_payload

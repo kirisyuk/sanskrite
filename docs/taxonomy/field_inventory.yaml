@@ -1,0 +1,788 @@
+# Field inventory for the converge-to-AgentHorde migration.
+#
+# Source of truth for every typed field on `HorizonFragment`,
+# `DependencyEdge`, `MaterializedArtifact`, `RouteGeometryProfile`, and
+# `HorizonMonitorFragmentData`. Each field has a disposition that drives
+# both codegen (which Go fields stay typed) and migrate-cli (what to lift,
+# preserve, or drop).
+#
+# Disposition vocabulary:
+#   - keep_typed         : remains a typed field on the Go struct AND mirrors
+#                          to attributes.<attribute_name> in the AH model so
+#                          the FE getter-helpers see a single canonical key.
+#   - lift_to_attributes : drops the typed Go field; value moves into
+#                          attributes.<attribute_name> only.
+#   - drop_after_migration: not migrated; document removed from Firestore by
+#                          migrate-cli; codegen does not emit a Go field.
+#
+# `attribute_name` is the canonical AH attribute key (must match
+# ATTRIBUTE_SPEC in agenthorde_common/canonicalizer/taxonomy.py for any
+# non-drop disposition).
+#
+# CI guard: every Go field listed in fragment.go / dependency_edge.go must
+# appear here. Adding a new typed field without an entry fails the build.
+
+schema_version: "2.0"
+
+# -----------------------------------------------------------------------------
+# HorizonFragment (backend/internal/horizon/models/fragment.go)
+# -----------------------------------------------------------------------------
+horizon_fragment:
+  # --- Identity / lifecycle (universal, always typed) ---
+  - field: ID
+    used_by_fe: [graph, map, inspector, lens, search]
+    used_by_backend: [repo, propagation, policy, agentmesh, http, scout]
+    disposition: keep_typed
+    attribute_name: id
+    note: "Document identity. Never lifted."
+  - field: TenantID
+    used_by_fe: [lens]
+    used_by_backend: [repo, policy, agentmesh, http]
+    disposition: keep_typed
+    attribute_name: tenant_id
+    note: "Always 'global' except SUPPLY_LINK; required for Firestore composite indexes."
+  - field: Version
+    used_by_fe: [inspector]
+    used_by_backend: [repo, optimistic concurrency]
+    disposition: keep_typed
+    attribute_name: version
+  - field: CreatedAt
+    used_by_fe: [inspector]
+    used_by_backend: [repo, lens, watch]
+    disposition: keep_typed
+    attribute_name: created_at
+  - field: UpdatedAt
+    used_by_fe: [inspector, realtime]
+    used_by_backend: [repo, lens, watch, realtime]
+    disposition: keep_typed
+    attribute_name: updated_at
+  - field: CreatedBy
+    used_by_fe: [inspector]
+    used_by_backend: [repo, audit]
+    disposition: keep_typed
+    attribute_name: created_by
+  - field: UpdatedBy
+    used_by_fe: [inspector]
+    used_by_backend: [repo, audit]
+    disposition: keep_typed
+    attribute_name: updated_by
+  - field: Labels
+    used_by_fe: [graph, inspector, search, map]
+    used_by_backend: [repo, scout, naming, search]
+    disposition: keep_typed
+    attribute_name: labels
+    note: "Multi-language label map (labels.en is primary). Required for FE name rendering."
+  - field: Description
+    used_by_fe: [inspector, search]
+    used_by_backend: [scout, search]
+    disposition: keep_typed
+    attribute_name: description
+  - field: Tags
+    used_by_fe: [filters, inspector]
+    used_by_backend: [scout, taxonomy, lens]
+    disposition: keep_typed
+    attribute_name: tags
+  - field: Status
+    used_by_fe: [inspector, filters]
+    used_by_backend: [repo, policy]
+    disposition: keep_typed
+    attribute_name: status
+  # --- Canonical path / classification ---
+  - field: CanonicalPath
+    used_by_fe: [graph, map, inspector, search, lens]
+    used_by_backend: [repo, scout, canonicalizer, policy]
+    disposition: keep_typed
+    attribute_name: canonical_path
+  - field: CanonicalParts
+    used_by_fe: []
+    used_by_backend: [repo, scout, canonicalizer]
+    disposition: keep_typed
+    attribute_name: canonical_parts
+    note: "Semantic representation of canonicalPath; preserved for concurrent canonicalization."
+  - field: GeoSlug
+    used_by_fe: [filters, map]
+    used_by_backend: [repo, lens]
+    disposition: keep_typed
+    attribute_name: geo_slug
+  - field: Type
+    used_by_fe: [graph, map, inspector, lens, filters]
+    used_by_backend: [repo, scout, policy, propagation]
+    disposition: keep_typed
+    attribute_name: fragment_class
+    note: "FragmentType enum -> generated FragmentClass. Drives all rendering & policy."
+  - field: EntityPath
+    used_by_fe: [inspector]
+    used_by_backend: [scout, taxonomy]
+    disposition: lift_to_attributes
+    attribute_name: entity_path
+    note: "Legacy /Organization/Corporation/Public hierarchy; FE only displays in inspector."
+  - field: IndustryPaths
+    used_by_fe: [inspector, filters, lens]
+    used_by_backend: [scout, taxonomy, lens]
+    disposition: keep_typed
+    attribute_name: industry_paths
+  # --- Market segments + derived norms ---
+  - field: MarketSegments
+    used_by_fe: [inspector, filters, lens]
+    used_by_backend: [scout, taxonomy, lens]
+    disposition: keep_typed
+    attribute_name: market_segments
+  - field: MarketSegmentNorms
+    used_by_fe: [inspector, filters]
+    used_by_backend: [taxonomy]
+    disposition: lift_to_attributes
+    attribute_name: market_segment_norms
+    note: "Derived from MarketSegments. Lift to attributes; recompute on FE if needed."
+  - field: MarketSegmentNormDomains
+    used_by_fe: [filters]
+    used_by_backend: [lens, search]
+    disposition: keep_typed
+    attribute_name: market_segment_norm_domains
+    note: "Indexed for filter queries (Firestore array-contains)."
+  - field: MarketSegmentNormVerticals
+    used_by_fe: [filters]
+    used_by_backend: [lens, search]
+    disposition: keep_typed
+    attribute_name: market_segment_norm_verticals
+  - field: MarketSegmentNormPairs
+    used_by_fe: [filters, inspector]
+    used_by_backend: [lens, search]
+    disposition: keep_typed
+    attribute_name: market_segment_norm_pairs
+  - field: OrgSize
+    used_by_fe: [inspector, filters]
+    used_by_backend: [scout, taxonomy]
+    disposition: keep_typed
+    attribute_name: org_size
+  # --- Market-specific (when Type == MARKET) ---
+  - field: MarketDomain
+    used_by_fe: [inspector, filters]
+    used_by_backend: [taxonomy, scout]
+    disposition: keep_typed
+    attribute_name: market_domain
+  - field: MarketVertical
+    used_by_fe: [inspector, filters]
+    used_by_backend: [taxonomy, scout]
+    disposition: keep_typed
+    attribute_name: market_vertical
+  - field: MarketChannels
+    used_by_fe: [inspector, filters]
+    used_by_backend: [taxonomy, scout]
+    disposition: keep_typed
+    attribute_name: market_channels
+  - field: ParentMarketPath
+    used_by_fe: [inspector, graph]
+    used_by_backend: [scout, propagation]
+    disposition: lift_to_attributes
+    attribute_name: parent_path
+    note: "Folded into the universal parent_path attribute."
+  # --- Gov-specific ---
+  - field: GovType
+    used_by_fe: [inspector, filters]
+    used_by_backend: [scout, taxonomy]
+    disposition: keep_typed
+    attribute_name: gov_type
+  - field: ParentGovPath
+    used_by_fe: [inspector, graph]
+    used_by_backend: [scout, propagation]
+    disposition: lift_to_attributes
+    attribute_name: parent_path
+    note: "Folded into the universal parent_path attribute."
+  # --- Community-specific ---
+  - field: CommunityType
+    used_by_fe: [inspector, filters, graph]
+    used_by_backend: [scout, taxonomy]
+    disposition: keep_typed
+    attribute_name: community_subtype
+    note: "Maps to /community/{geo}/{subtype}/{slug} subtype slot."
+  - field: CommunityPlatforms
+    used_by_fe: [inspector]
+    used_by_backend: [scout]
+    disposition: lift_to_attributes
+    attribute_name: community_platforms
+  - field: CommunityEstimatedSize
+    used_by_fe: [inspector]
+    used_by_backend: [scout]
+    disposition: lift_to_attributes
+    attribute_name: community_estimated_size
+  - field: AffiliatedOrgPath
+    used_by_fe: [inspector, graph]
+    used_by_backend: [scout]
+    disposition: lift_to_attributes
+    attribute_name: affiliated_org_path
+  # --- Geo / map essentials ---
+  - field: RadiusKm
+    used_by_fe: [map]
+    used_by_backend: [propagation, exposure]
+    disposition: keep_typed
+    attribute_name: radius_km
+  - field: HasCoordinates
+    used_by_fe: [map]
+    used_by_backend: [repo, lens]
+    disposition: keep_typed
+    attribute_name: has_coordinates
+    note: "Index flag for fast Firestore queries on map-renderable fragments."
+  - field: Coordinates
+    used_by_fe: [map, inspector]
+    used_by_backend: [repo, propagation, geo]
+    disposition: keep_typed
+    attribute_name: coordinates
+  - field: GeoFeatureType
+    used_by_fe: [map, filters, inspector]
+    used_by_backend: [propagation, geo]
+    disposition: keep_typed
+    attribute_name: geo_feature_type
+    note: "Drives chokepoint detection + map iconography."
+  - field: HomeLocation
+    used_by_fe: [map, inspector]
+    used_by_backend: [repo, geo, scout]
+    disposition: keep_typed
+    attribute_name: home_location
+    note: "ISO standards-bearing structured location; richer than Coordinates."
+  # --- Indexing / classification ---
+  - field: IndexPaths
+    used_by_fe: [filters, lens]
+    used_by_backend: [repo, lens, expand]
+    disposition: keep_typed
+    attribute_name: index_paths
+    note: "Denormalized cardinality-bounded coordinates; required for fast lens filtering."
+  - field: SpherePaths
+    used_by_fe: [inspector, filters]
+    used_by_backend: [scout, taxonomy, lens]
+    disposition: keep_typed
+    attribute_name: sphere_paths
+    note: "Replaces folded /sphere/* fragments; remains as multi-valued classifier."
+  - field: ResolutionHint
+    used_by_fe: [inspector]
+    used_by_backend: [taxonomy, scout]
+    disposition: lift_to_attributes
+    attribute_name: resolution_hint
+  - field: ParentPath
+    used_by_fe: [inspector, graph]
+    used_by_backend: [scout, propagation]
+    disposition: keep_typed
+    attribute_name: parent_path
+    note: "Universal parent path (folds ParentGovPath/ParentMarketPath into one)."
+  # --- Entity binding / metrics / qualifiers ---
+  - field: EntityID
+    used_by_fe: []
+    used_by_backend: [repo, scout]
+    disposition: keep_typed
+    attribute_name: entity_id
+    note: "Optional pointer to legacy Entity collection."
+  - field: State
+    used_by_fe: [inspector, lens]
+    used_by_backend: [repo, propagation, metrics, lens]
+    disposition: keep_typed
+    attribute_name: state
+    note: "Canonical metric map (MetricValue) — performance-critical."
+  - field: Qualifiers
+    used_by_fe: [inspector]
+    used_by_backend: [policy, scout]
+    disposition: keep_typed
+    attribute_name: qualifiers
+    note: "Free-form policy/runtime annotations; kept as opaque map."
+  # --- Enrichment ---
+  - field: KBRefs
+    used_by_fe: [inspector]
+    used_by_backend: [repo, scout, identity-resolver]
+    disposition: keep_typed
+    attribute_name: kb_refs
+    note: "External knowledge-base references (Wikidata/GeoNames/OpenCorporates). Critical for dedup."
+  - field: Identifiers
+    used_by_fe: [inspector, search]
+    used_by_backend: [repo, scout, dedup, taxonomy]
+    disposition: keep_typed
+    attribute_name: identifiers
+  - field: NameHistory
+    used_by_fe: [inspector, search]
+    used_by_backend: [scout, dedup]
+    disposition: keep_typed
+    attribute_name: name_history
+  - field: AlternativeNames
+    used_by_fe: [inspector, search]
+    used_by_backend: [scout, dedup]
+    disposition: keep_typed
+    attribute_name: alternative_names
+  - field: AlternativePaths
+    used_by_fe: []
+    used_by_backend: [repo, redirect-lookup, dedup]
+    disposition: keep_typed
+    attribute_name: alternative_paths
+    note: "Required by redirect-lookup to avoid re-creating merged duplicates."
+  # --- Validity window ---
+  - field: ValidFrom
+    used_by_fe: [inspector]
+    used_by_backend: [repo, propagation]
+    disposition: keep_typed
+    attribute_name: valid_from
+  - field: ValidTo
+    used_by_fe: [inspector]
+    used_by_backend: [repo, propagation]
+    disposition: keep_typed
+    attribute_name: valid_to
+  # --- Per-domain typed extensions ---
+  - field: HorizonMonitor
+    used_by_fe: [inspector, map]
+    used_by_backend: [scout, geo, importer]
+    disposition: keep_typed
+    attribute_name: horizon_monitor
+    note: "Typed Horizon Monitor payload; kept structured for the importer pipeline."
+  - field: WorldMonitorLegacy
+    used_by_fe: []
+    used_by_backend: [importer (back-compat read only)]
+    disposition: drop_after_migration
+    attribute_name: ""
+    note: "Legacy alias of HorizonMonitor. Migrate-cli mirrors content into HorizonMonitor and drops this field."
+  - field: Track
+    used_by_fe: [map, inspector]
+    used_by_backend: [scout, geo, realtime]
+    disposition: keep_typed
+    attribute_name: track
+    note: "Latest movement state for legacy TRACK fragments. Post-migration these fragments live at /mobile_asset/{kind}/{geo}/{slug}-{id8}; the Track payload still rides on the same typed Go field but the canonical home is /mobile_asset, not /site. Position fields additionally project into attributes.last_known_position + attributes.last_position_observed_at for FE convenience (see ATTRIBUTE_SPEC)."
+  # --- Provenance / metadata / governance ---
+  - field: Provenance
+    used_by_fe: [inspector]
+    used_by_backend: [repo, scout, audit]
+    disposition: keep_typed
+    attribute_name: provenance
+  - field: Metadata
+    used_by_fe: [inspector]
+    used_by_backend: [repo, scout, watch]
+    disposition: keep_typed
+    attribute_name: metadata
+  - field: Governance
+    used_by_fe: [inspector]
+    used_by_backend: [repo, policy]
+    disposition: keep_typed
+    attribute_name: governance
+  # --- SUPPLY_LINK-specific (legacy edge-as-fragment artifact) ---
+  - field: SupplierRef
+    used_by_fe: [graph]
+    used_by_backend: [supply-chain, repo]
+    disposition: lift_to_attributes
+    attribute_name: supplier_ref
+    note: "Migrate to supplies edge attributes; will be derivable from edge once SUPPLY_LINK fragments are deprecated."
+  - field: CustomerRef
+    used_by_fe: [graph]
+    used_by_backend: [supply-chain, repo]
+    disposition: lift_to_attributes
+    attribute_name: customer_ref
+  - field: ProductRef
+    used_by_fe: [graph]
+    used_by_backend: [supply-chain, repo]
+    disposition: lift_to_attributes
+    attribute_name: product_fragment_id
+    note: "Aligns with the canonical supplies-edge attribute name."
+  - field: SupplierFacilityRef
+    used_by_fe: []
+    used_by_backend: [supply-chain]
+    disposition: lift_to_attributes
+    attribute_name: supplier_facility_ref
+  - field: CustomerFacilityRef
+    used_by_fe: []
+    used_by_backend: [supply-chain]
+    disposition: lift_to_attributes
+    attribute_name: customer_facility_ref
+  - field: TransportViaRefs
+    used_by_fe: [map, graph]
+    used_by_backend: [supply-chain, propagation]
+    disposition: lift_to_attributes
+    attribute_name: transport_via_refs
+    note: "Becomes attributes.route_fragment_id chain on supplies edges."
+  # --- Lifecycle (FACILITY/DEPOSIT/ORG real-world stages) ---
+  - field: LifecycleStage
+    used_by_fe: [inspector, filters]
+    used_by_backend: [scout, taxonomy, propagation]
+    disposition: keep_typed
+    attribute_name: lifecycle_stage
+  - field: ExpectedStartDate
+    used_by_fe: [inspector]
+    used_by_backend: [scout]
+    disposition: lift_to_attributes
+    attribute_name: expected_start_date
+  - field: ActualStartDate
+    used_by_fe: [inspector]
+    used_by_backend: [scout]
+    disposition: lift_to_attributes
+    attribute_name: actual_start_date
+  - field: ExpectedEndDate
+    used_by_fe: [inspector]
+    used_by_backend: [scout]
+    disposition: lift_to_attributes
+    attribute_name: expected_end_date
+  - field: ActualEndDate
+    used_by_fe: [inspector]
+    used_by_backend: [scout]
+    disposition: lift_to_attributes
+    attribute_name: actual_end_date
+
+# -----------------------------------------------------------------------------
+# DependencyEdge (backend/internal/horizon/models/dependency_edge.go)
+# -----------------------------------------------------------------------------
+dependency_edge:
+  - field: ID
+    used_by_fe: [graph, inspector]
+    used_by_backend: [repo, propagation, all]
+    disposition: keep_typed
+    attribute_name: id
+  - field: TenantID
+    used_by_fe: [lens]
+    used_by_backend: [repo, policy]
+    disposition: keep_typed
+    attribute_name: tenant_id
+  - field: SourceFragmentID
+    used_by_fe: [graph]
+    used_by_backend: [repo, propagation, all]
+    disposition: keep_typed
+    attribute_name: source_fragment_id
+  - field: TargetFragmentID
+    used_by_fe: [graph]
+    used_by_backend: [repo, propagation, all]
+    disposition: keep_typed
+    attribute_name: target_fragment_id
+  - field: Type
+    used_by_fe: [graph, inspector, filters]
+    used_by_backend: [repo, propagation, policy, all]
+    disposition: keep_typed
+    attribute_name: relation
+    note: "DependencyType -> generated RelationType (snake_case)."
+  - field: Properties.Criticality
+    used_by_fe: [graph, inspector]
+    used_by_backend: [propagation, exposure]
+    disposition: keep_typed
+    attribute_name: criticality
+    note: "Exposed as metrics.criticality on the AH model; keep typed for performance."
+  - field: Properties.Amplification
+    used_by_fe: [graph]
+    used_by_backend: [propagation]
+    disposition: keep_typed
+    attribute_name: amplification
+  - field: Properties.LatencyHours
+    used_by_fe: [inspector]
+    used_by_backend: [propagation]
+    disposition: keep_typed
+    attribute_name: latency_hours
+  - field: Qualifiers
+    used_by_fe: [inspector]
+    used_by_backend: [policy, propagation, scout]
+    disposition: keep_typed
+    attribute_name: qualifiers
+    note: "Heterogeneous map. Migrate-cli moves named qualifiers into attributes.* per below."
+  - field: Provenance
+    used_by_fe: [inspector]
+    used_by_backend: [repo, scout, audit]
+    disposition: keep_typed
+    attribute_name: provenance
+  - field: ValidFrom
+    used_by_fe: [inspector]
+    used_by_backend: [propagation]
+    disposition: keep_typed
+    attribute_name: valid_from
+  - field: ValidTo
+    used_by_fe: [inspector]
+    used_by_backend: [propagation]
+    disposition: keep_typed
+    attribute_name: valid_to
+  - field: Metadata
+    used_by_fe: [inspector]
+    used_by_backend: [repo, watch]
+    disposition: keep_typed
+    attribute_name: metadata
+  - field: Metrics
+    used_by_fe: [inspector, graph]
+    used_by_backend: [propagation, metrics]
+    disposition: keep_typed
+    attribute_name: metrics
+
+# Named edge qualifiers — current keys and their disposition.
+# Anything not listed here that appears in the wild is dropped by migrate-cli.
+edge_qualifiers:
+  - key: facet
+    disposition: drop_after_migration
+    note: "DependencyFacet (infrastructure/payment/legitimization/...) is removed entirely. Criminal/illicit dimension will return as a future attribute on supplies."
+  - key: substitutability
+    disposition: lift_to_attributes
+    attribute_name: substitutability
+  - key: throughput_share
+    disposition: lift_to_attributes
+    attribute_name: throughput_share
+  - key: reroute_penalty
+    disposition: lift_to_attributes
+    attribute_name: reroute_penalty
+  - key: reroute_latency_delta_hours
+    disposition: lift_to_attributes
+    attribute_name: reroute_latency_delta_hours
+  - key: reroute_cost_delta_pct
+    disposition: lift_to_attributes
+    attribute_name: reroute_cost_delta_pct
+  - key: capacity_constraint
+    disposition: lift_to_attributes
+    attribute_name: capacity_constraint
+  - key: integration_type
+    disposition: lift_to_attributes
+    attribute_name: integration_type
+  - key: at_facility
+    disposition: drop_after_migration
+    note: "Replaced by siteTransforms[] on the /site fragment (no longer a per-edge qualifier)."
+  - key: transport_via
+    disposition: lift_to_attributes
+    attribute_name: route_fragment_id
+    note: "Migrate-cli expands array form into one supplies-leg attribute per leg."
+  - key: route_mode
+    disposition: lift_to_attributes
+    attribute_name: mode
+  - key: geo_refs
+    disposition: lift_to_attributes
+    attribute_name: geo_refs
+  - key: flow_refs
+    disposition: lift_to_attributes
+    attribute_name: flow_refs
+  - key: alternate_flow_refs
+    disposition: lift_to_attributes
+    attribute_name: alternate_flow_refs
+  - key: zone_refs
+    disposition: lift_to_attributes
+    attribute_name: zone_refs
+  - key: affected_zone_refs
+    disposition: lift_to_attributes
+    attribute_name: affected_zone_refs
+  - key: spatial_semantics
+    disposition: lift_to_attributes
+    attribute_name: spatial_semantics
+  - key: binding_confidence
+    disposition: lift_to_attributes
+    attribute_name: binding_confidence
+  - key: path_stress_score
+    disposition: lift_to_attributes
+    attribute_name: path_stress_score
+  - key: path_fragility
+    disposition: lift_to_attributes
+    attribute_name: path_fragility
+  - key: path_rerouteability
+    disposition: lift_to_attributes
+    attribute_name: path_rerouteability
+  - key: path_zone_pressure
+    disposition: lift_to_attributes
+    attribute_name: path_zone_pressure
+  - key: path_affected_pressure
+    disposition: lift_to_attributes
+    attribute_name: path_affected_pressure
+  - key: recovery_latency_hours
+    disposition: lift_to_attributes
+    attribute_name: recovery_latency_hours
+  - key: assurance_type
+    disposition: lift_to_attributes
+    attribute_name: assurance_type
+    note: "Becomes the required closed-enum attribute on `assures` edges."
+  - key: edgeModality
+    disposition: lift_to_attributes
+    attribute_name: edge_modality
+
+# -----------------------------------------------------------------------------
+# RouteGeometryProfile (backend/internal/horizon/models/route_geometry_profile.go)
+# -----------------------------------------------------------------------------
+# Geometry currently lives in a side collection; migration lifts it onto
+# /route fragments under attributes.geometry. The legacy collection itself
+# is retained read-only until pathquery fully replaces materialized reads
+# (followup), then dropped.
+route_geometry_profile:
+  - field: ID
+    disposition: keep_typed
+    attribute_name: id
+  - field: TenantID
+    disposition: keep_typed
+    attribute_name: tenant_id
+  - field: ProfileKey
+    disposition: keep_typed
+    attribute_name: profile_key
+  - field: RouteVariantKey
+    disposition: keep_typed
+    attribute_name: route_variant_key
+  - field: OrderedRefs
+    disposition: keep_typed
+    attribute_name: ordered_refs
+  - field: FlowRefs
+    disposition: keep_typed
+    attribute_name: flow_refs
+  - field: Coordinates
+    used_by_fe: [map]
+    used_by_backend: [supply-chain-overlay, propagation]
+    disposition: lift_to_attributes
+    attribute_name: geometry
+    note: "Lifted to /route fragment attributes.geometry by migrate-cli."
+  - field: EncodedPolyline
+    used_by_fe: [map]
+    used_by_backend: []
+    disposition: lift_to_attributes
+    attribute_name: encoded_polyline
+  - field: Source
+    disposition: keep_typed
+    attribute_name: source
+  - field: Accuracy
+    disposition: keep_typed
+    attribute_name: accuracy
+  - field: Notes
+    disposition: keep_typed
+    attribute_name: notes
+  - field: CreatedAt
+    disposition: keep_typed
+    attribute_name: created_at
+  - field: UpdatedAt
+    disposition: keep_typed
+    attribute_name: updated_at
+
+# -----------------------------------------------------------------------------
+# MaterializedArtifact (backend/internal/horizon/models/materialized_artifact.go)
+# -----------------------------------------------------------------------------
+# Materialized artifacts are NOT first-class graph fragments — they are derived
+# overlays. The migration rewrites payloads in place (siteTransform descriptors,
+# /route geometry refs) but keeps the document shape stable. Disposition here
+# applies to what migrate-cli keeps vs strips inside payloads.
+materialized_artifact:
+  - field: ID
+    disposition: keep_typed
+    attribute_name: id
+  - field: TenantID
+    disposition: keep_typed
+    attribute_name: tenant_id
+  - field: ProjectID
+    disposition: keep_typed
+    attribute_name: project_id
+  - field: LensID
+    disposition: keep_typed
+    attribute_name: lens_id
+  - field: Kind
+    disposition: keep_typed
+    attribute_name: kind
+    note: "MaterializedKind enum is preserved as-is for now. Deprecation tracked separately."
+  - field: CanonicalKey
+    disposition: keep_typed
+    attribute_name: canonical_key
+  - field: MetricObservationIDs
+    disposition: keep_typed
+    attribute_name: metric_observation_ids
+  - field: EvidenceFactIDs
+    disposition: keep_typed
+    attribute_name: evidence_fact_ids
+  - field: Payload
+    disposition: keep_typed
+    attribute_name: payload
+    note: "Migrate-cli rewrites payload contents in place; field stays."
+  - field: Status
+    disposition: keep_typed
+    attribute_name: status
+  - field: PathStatus
+    disposition: keep_typed
+    attribute_name: path_status
+  - field: DisplayName
+    disposition: keep_typed
+    attribute_name: display_name
+  - field: Labels
+    disposition: keep_typed
+    attribute_name: labels
+  - field: NodeRefs
+    disposition: keep_typed
+    attribute_name: node_refs
+  - field: GeoRefs
+    disposition: keep_typed
+    attribute_name: geo_refs
+  - field: FlowRefs
+    disposition: keep_typed
+    attribute_name: flow_refs
+  - field: ZoneRefs
+    disposition: keep_typed
+    attribute_name: zone_refs
+  - field: AffectedZoneRefs
+    disposition: keep_typed
+    attribute_name: affected_zone_refs
+  - field: AnchorSupplier
+    disposition: keep_typed
+    attribute_name: anchor_supplier
+  - field: AnchorCustomer
+    disposition: keep_typed
+    attribute_name: anchor_customer
+  - field: ProductAxis
+    disposition: keep_typed
+    attribute_name: product_axis
+
+# -----------------------------------------------------------------------------
+# HorizonMonitorFragmentData (backend/internal/horizon/models/worldmonitor_fragment.go)
+# -----------------------------------------------------------------------------
+# Imported typed payload from Horizon Monitor; preserved structured for the
+# importer pipeline. Coordinates / Route / Polygon mirror to attributes.geometry
+# on the parent fragment for FE map rendering.
+horizon_monitor_fragment_data:
+  - field: ObjectKind
+    disposition: keep_typed
+    attribute_name: object_kind
+  - field: SourceObjectID
+    disposition: keep_typed
+    attribute_name: source_object_id
+  - field: Coordinates
+    disposition: keep_typed
+    attribute_name: coordinates
+    note: "Mirrors to fragment-level attributes.coordinates via ensureCoordinatesMirroring."
+  - field: Route
+    disposition: keep_typed
+    attribute_name: route
+  - field: Polygon
+    disposition: keep_typed
+    attribute_name: polygon
+  - field: LandingPoints
+    disposition: keep_typed
+    attribute_name: landing_points
+  - field: Countries
+    disposition: keep_typed
+    attribute_name: countries
+  - field: Parties
+    disposition: keep_typed
+    attribute_name: parties
+  - field: Keywords
+    disposition: keep_typed
+    attribute_name: keywords
+  - field: AKA
+    disposition: keep_typed
+    attribute_name: aka
+  - field: Sponsor
+    disposition: keep_typed
+    attribute_name: sponsor
+  - field: FacilityType
+    disposition: keep_typed
+    attribute_name: facility_type
+  - field: MarketType
+    disposition: keep_typed
+    attribute_name: market_type
+  - field: PipelineType
+    disposition: keep_typed
+    attribute_name: pipeline_type
+  - field: PortType
+    disposition: keep_typed
+    attribute_name: port_type
+  - field: Mineral
+    disposition: keep_typed
+    attribute_name: mineral
+  - field: Capacity
+    disposition: keep_typed
+    attribute_name: capacity
+  - field: CapacityTbps
+    disposition: keep_typed
+    attribute_name: capacity_tbps
+  - field: Operator
+    disposition: keep_typed
+    attribute_name: operator
+  - field: Status
+    disposition: keep_typed
+    attribute_name: status
+  - field: Significance
+    disposition: keep_typed
+    attribute_name: significance
+  - field: ThreatCategory
+    disposition: keep_typed
+    attribute_name: threat_category
+  - field: ThreatLevel
+    disposition: keep_typed
+    attribute_name: threat_level
+  - field: ClassifierScore
+    disposition: keep_typed
+    attribute_name: classifier_score

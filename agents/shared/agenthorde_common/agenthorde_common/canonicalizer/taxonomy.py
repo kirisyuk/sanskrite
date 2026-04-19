@@ -26,6 +26,21 @@ from __future__ import annotations
 from typing import FrozenSet, Literal
 
 # First path segment (without leading slash) — must match README enum.
+#
+# 14 classes total = 12 structural + 2 decision-layer.
+#
+# Structural layer (describes the world):
+#   org, person, geo, site, product, vessel_class, route, market, regime,
+#   project, evidence, community.
+#
+# Decision layer (describes actor decisions on top of the world):
+#   decision  — lifecycle-bearing strategic decision (regulatory ruling,
+#               sanctions designation, judicial interpretation, commercial
+#               strategic, standards decision, coalition position, legislative).
+#               Subtype = `DecisionSubtype` (closed enum).
+#   mechanism — reusable, jurisdiction-free control instrument (regulatory,
+#               economic, technological, contractual, political).
+#               Subtype = `MechanismCategory` (closed enum).
 FragmentClass = Literal[
     "org",
     "person",
@@ -33,12 +48,15 @@ FragmentClass = Literal[
     "site",
     "product",
     "vessel_class",
+    "mobile_asset",
     "route",
     "market",
     "regime",
     "project",
     "evidence",
     "community",
+    "decision",
+    "mechanism",
 ]
 
 # Incoterms 2020 — optional attribute on `supplies` / `charters` edges indicating
@@ -232,6 +250,30 @@ FRAGMENT_CLASSES: FrozenSet[str] = frozenset(
         "site",
         "product",
         "vessel_class",
+        "mobile_asset",
+        "route",
+        "market",
+        "regime",
+        "project",
+        "evidence",
+        "community",
+        "decision",
+        "mechanism",
+    )
+)
+
+
+# Structural vs decision layer split. Used by codegen for FE coloring + filters
+# and by docs to keep the two planes visually distinct.
+STRUCTURAL_FRAGMENT_CLASSES: FrozenSet[str] = frozenset(
+    (
+        "org",
+        "person",
+        "geo",
+        "site",
+        "product",
+        "vessel_class",
+        "mobile_asset",
         "route",
         "market",
         "regime",
@@ -240,6 +282,63 @@ FRAGMENT_CLASSES: FrozenSet[str] = frozenset(
         "community",
     )
 )
+
+DECISION_LAYER_FRAGMENT_CLASSES: FrozenSet[str] = frozenset(("decision", "mechanism"))
+
+
+# /mobile_asset/* subtypes. Mobile assets are individual movable units (a
+# specific vessel, aircraft, locomotive, drilling rig) — distinct from
+# /vessel_class which is a *class* (LR2, VLCC, etc.). The split avoids
+# collapsing fleet-wide capability statements with per-asset positions and
+# ownership. See docs/taxonomy/migration_map.yaml (TRACK -> mobile_asset).
+MOBILE_ASSET_KINDS: FrozenSet[str] = frozenset(
+    (
+        "vessel",        # individual ship (IMO-identified)
+        "aircraft",      # individual aircraft (tail-number)
+        "locomotive",    # individual rail unit
+        "rig",           # offshore drilling rig / FPSO
+        "satellite",     # individual satellite
+        "vehicle",       # individual road vehicle (truck, etc.)
+        "asset",         # generic fallback when subtype is unknown
+    )
+)
+
+
+def normalize_mobile_asset_kind(raw: str | None) -> str:
+    """Map free-form mobile-asset kind to a canonical `MobileAssetKind`.
+
+    Returns ``"asset"`` when the kind is missing or unrecognized so writers
+    never block on subtype detection.
+    """
+    if not raw:
+        return "asset"
+    s = str(raw).strip().lower().replace(" ", "_").replace("-", "_")
+    if s in MOBILE_ASSET_KINDS:
+        return s
+    aliases: dict[str, str] = {
+        "ship": "vessel",
+        "boat": "vessel",
+        "tanker": "vessel",
+        "vlcc": "vessel",
+        "lng_carrier": "vessel",
+        "container_ship": "vessel",
+        "plane": "aircraft",
+        "airplane": "aircraft",
+        "jet": "aircraft",
+        "helicopter": "aircraft",
+        "uav": "aircraft",
+        "drone": "aircraft",
+        "train": "locomotive",
+        "loco": "locomotive",
+        "drilling_rig": "rig",
+        "fpso": "rig",
+        "platform": "rig",
+        "spacecraft": "satellite",
+        "sat": "satellite",
+        "truck": "vehicle",
+        "car": "vehicle",
+    }
+    return aliases.get(s, "asset")
 
 
 # Community subtype enum, mirrored from
@@ -476,6 +575,303 @@ def normalize_evidence_subtype(raw: str | None) -> str:
     return aliases.get(s, "other")
 
 
+# -----------------------------------------------------------------------------
+# Decision-layer enums (closed)
+# -----------------------------------------------------------------------------
+#
+# `MechanismCategory`: subtype slot for /mechanism/{category}/{slug}. Categories
+# describe HOW a control instrument applies leverage, irrespective of which
+# specific decision adopted it.
+#
+# `DecisionSubtype`: subtype attribute for /decision/* fragments. Subtypes
+# describe WHAT KIND of strategic decision is being tracked.
+#
+# `InfluenceKind`: required attribute on every `influences` edge. Disambiguates
+# the channel through which informal power is exerted (vs `gatekeeps`, which
+# always means formal authority).
+#
+# `AssuranceType`: required attribute on every `assures` edge. Distinguishes
+# the form of compliance verification (audit vs certification vs inspection
+# vs attestation).
+# -----------------------------------------------------------------------------
+
+MECHANISM_CATEGORIES: FrozenSet[str] = frozenset(
+    (
+        "regulatory",
+        "economic",
+        "technological",
+        "contractual",
+        "political",
+    )
+)
+
+
+def normalize_mechanism_category(raw: str | None) -> str:
+    """Map free-form LLM mechanism category to a canonical slot-2 path segment.
+
+    Returns ``"regulatory"`` as the catch-all when the category is missing or
+    cannot be mapped (mirrors the existing `normalize_*` pattern in this file).
+    """
+    if not raw:
+        return "regulatory"
+    s = str(raw).strip().lower().replace(" ", "_").replace("-", "_")
+    if s in MECHANISM_CATEGORIES:
+        return s
+    aliases: dict[str, str] = {
+        "regulation": "regulatory",
+        "rule": "regulatory",
+        "law": "regulatory",
+        "statute": "regulatory",
+        "license": "regulatory",
+        "permit": "regulatory",
+        "tariff": "economic",
+        "subsidy": "economic",
+        "tax": "economic",
+        "duty": "economic",
+        "quota": "economic",
+        "incentive": "economic",
+        "sanction": "economic",
+        "embargo": "economic",
+        "export_control": "regulatory",
+        "import_control": "regulatory",
+        "tech": "technological",
+        "technology": "technological",
+        "standard": "technological",
+        "interoperability": "technological",
+        "contract": "contractual",
+        "contractual_obligation": "contractual",
+        "msa": "contractual",
+        "service_agreement": "contractual",
+        "diplomatic": "political",
+        "treaty": "political",
+        "coalition": "political",
+        "alliance": "political",
+    }
+    return aliases.get(s, "regulatory")
+
+
+DECISION_SUBTYPES: FrozenSet[str] = frozenset(
+    (
+        "regulatory_ruling",
+        "sanctions_designation",
+        "judicial_interpretation",
+        "commercial_strategic",
+        "standards_decision",
+        "coalition_position",
+        "legislative",
+    )
+)
+
+
+def normalize_decision_subtype(raw: str | None) -> str:
+    """Map free-form LLM decision subtype to canonical `DecisionSubtype`.
+
+    Returns ``"regulatory_ruling"`` when missing/unmapped — the most common
+    flavor and a safe default for downstream filters.
+    """
+    if not raw:
+        return "regulatory_ruling"
+    s = str(raw).strip().lower().replace(" ", "_").replace("-", "_")
+    if s in DECISION_SUBTYPES:
+        return s
+    aliases: dict[str, str] = {
+        "ruling": "regulatory_ruling",
+        "regulation_decision": "regulatory_ruling",
+        "regulatory": "regulatory_ruling",
+        "license_grant": "regulatory_ruling",
+        "permit_decision": "regulatory_ruling",
+        "designation": "sanctions_designation",
+        "sanction": "sanctions_designation",
+        "sanctions": "sanctions_designation",
+        "ofac_designation": "sanctions_designation",
+        "entity_listing": "sanctions_designation",
+        "delisting": "sanctions_designation",
+        "court_ruling": "judicial_interpretation",
+        "judicial": "judicial_interpretation",
+        "case_law": "judicial_interpretation",
+        "precedent": "judicial_interpretation",
+        "court_decision": "judicial_interpretation",
+        "board_decision": "commercial_strategic",
+        "commercial": "commercial_strategic",
+        "investment_decision": "commercial_strategic",
+        "ma_decision": "commercial_strategic",
+        "strategic": "commercial_strategic",
+        "standard": "standards_decision",
+        "standards": "standards_decision",
+        "spec": "standards_decision",
+        "specification": "standards_decision",
+        "coalition": "coalition_position",
+        "alliance_position": "coalition_position",
+        "joint_statement": "coalition_position",
+        "law": "legislative",
+        "bill": "legislative",
+        "statute": "legislative",
+        "act": "legislative",
+        "directive": "legislative",
+    }
+    return aliases.get(s, "regulatory_ruling")
+
+
+INFLUENCE_KINDS: FrozenSet[str] = frozenset(
+    (
+        "lobbying",
+        "advisory",
+        "technical_dependency",
+        "market_power",
+        "coalition_member",
+        "judicial_precedent",
+        "informal_channel",
+    )
+)
+
+
+def normalize_influence_kind(raw: str | None) -> str:
+    """Map free-form influence-kind label to canonical `InfluenceKind`.
+
+    Returns ``"informal_channel"`` as the catch-all so unmapped values still
+    cleanly carry the "informal" semantic instead of getting silently dropped.
+    """
+    if not raw:
+        return "informal_channel"
+    s = str(raw).strip().lower().replace(" ", "_").replace("-", "_")
+    if s in INFLUENCE_KINDS:
+        return s
+    aliases: dict[str, str] = {
+        "lobby": "lobbying",
+        "lobbyist": "lobbying",
+        "advocacy": "lobbying",
+        "consulting": "advisory",
+        "advisor": "advisory",
+        "expert_panel": "advisory",
+        "think_tank": "advisory",
+        "tech_dependency": "technical_dependency",
+        "supply_dependency": "technical_dependency",
+        "vendor_lock_in": "technical_dependency",
+        "monopoly_position": "market_power",
+        "market_share": "market_power",
+        "duopoly": "market_power",
+        "coalition": "coalition_member",
+        "alliance_member": "coalition_member",
+        "industry_association": "coalition_member",
+        "case_law_influence": "judicial_precedent",
+        "precedent": "judicial_precedent",
+        "informal": "informal_channel",
+        "back_channel": "informal_channel",
+        "personal_relationship": "informal_channel",
+    }
+    return aliases.get(s, "informal_channel")
+
+
+ASSURANCE_TYPES: FrozenSet[str] = frozenset(
+    (
+        "audit",
+        "certification",
+        "regulatory_inspection",
+        "attestation",
+    )
+)
+
+
+def normalize_assurance_type(raw: str | None) -> str:
+    """Map free-form assurance-type label to canonical `AssuranceType`.
+
+    Returns ``"audit"`` when missing — the most common flavor and the
+    historical default of the legacy `AUDITED_BY` relation.
+    """
+    if not raw:
+        return "audit"
+    s = str(raw).strip().lower().replace(" ", "_").replace("-", "_")
+    if s in ASSURANCE_TYPES:
+        return s
+    aliases: dict[str, str] = {
+        "audited_by": "audit",
+        "external_audit": "audit",
+        "internal_audit": "audit",
+        "financial_audit": "audit",
+        "iso_certification": "certification",
+        "iso": "certification",
+        "certified_by": "certification",
+        "cert": "certification",
+        "third_party_certification": "certification",
+        "regulatory": "regulatory_inspection",
+        "inspection": "regulatory_inspection",
+        "regulator_inspection": "regulatory_inspection",
+        "soc": "attestation",
+        "soc1": "attestation",
+        "soc2": "attestation",
+        "isae": "attestation",
+        "attest": "attestation",
+        "attested": "attestation",
+    }
+    return aliases.get(s, "audit")
+
+
+# Closed enum for `disrupts` edge attribute. Distinguishes the qualitative
+# nature of the disruption so FE filters and downstream analytics can reason
+# about it without parsing prose.
+DISRUPTION_KINDS: FrozenSet[str] = frozenset(
+    (
+        "armed_conflict",      # active warfare zone
+        "natural_disaster",    # typhoon, earthquake, flood, wildfire
+        "blockade",            # naval / land blockade
+        "labor_action",        # strike / lockout
+        "infrastructure_failure",  # outage, dam burst, power loss
+        "civil_unrest",        # protests, riots, instability
+        "epidemic",            # public-health emergency
+        "regulatory_freeze",   # emergency regulatory closure
+        "cyber_incident",      # confirmed cyber attack
+        "other",               # catch-all when not classifiable
+    )
+)
+
+
+def normalize_disruption_kind(raw: str | None) -> str:
+    """Map free-form disruption-kind label to canonical `DisruptionKind`.
+
+    Returns ``"other"`` when missing or unrecognized so writers never block
+    on classification.
+    """
+    if not raw:
+        return "other"
+    s = str(raw).strip().lower().replace(" ", "_").replace("-", "_")
+    if s in DISRUPTION_KINDS:
+        return s
+    aliases: dict[str, str] = {
+        "war": "armed_conflict",
+        "warzone": "armed_conflict",
+        "war_zone": "armed_conflict",
+        "conflict": "armed_conflict",
+        "hostilities": "armed_conflict",
+        "typhoon": "natural_disaster",
+        "hurricane": "natural_disaster",
+        "earthquake": "natural_disaster",
+        "flood": "natural_disaster",
+        "wildfire": "natural_disaster",
+        "fire": "natural_disaster",
+        "storm": "natural_disaster",
+        "naval_blockade": "blockade",
+        "embargo_zone": "blockade",
+        "strike": "labor_action",
+        "lockout": "labor_action",
+        "industrial_action": "labor_action",
+        "outage": "infrastructure_failure",
+        "blackout": "infrastructure_failure",
+        "grid_failure": "infrastructure_failure",
+        "protest": "civil_unrest",
+        "riot": "civil_unrest",
+        "unrest": "civil_unrest",
+        "coup": "civil_unrest",
+        "pandemic": "epidemic",
+        "outbreak": "epidemic",
+        "quarantine": "epidemic",
+        "lockdown": "epidemic",
+        "ransomware": "cyber_incident",
+        "hack": "cyber_incident",
+        "breach": "cyber_incident",
+    }
+    return aliases.get(s, "other")
+
+
 Layer = Literal["structural", "contractual", "flow"]
 
 LayerSection = Literal[
@@ -486,6 +882,14 @@ LayerSection = Literal[
     "catalog",
     "evidence_meta",
     "corporate_events",
+    # Decision layer (decisions, mechanisms, formal gatekeeping, informal influence).
+    "decision_layer",
+    # Assurance layer (auditors, certifiers, inspectors verifying compliance).
+    "assurance",
+    # Membership layer (formal/informal participation in orgs and communities).
+    "membership",
+    # Disruption layer (geographic / event zones impairing actors and assets).
+    "disruption",
 ]
 
 # All relation names allowed by the canonicalizer (README + plan extras).
@@ -531,6 +935,21 @@ RelationType = Literal[
     "supported_by",
     "contradicts",
     "under_hypothesis",
+    # §6 decision layer (decisions, mechanisms, formal gatekeeping, informal
+    # influence). All snake_case; closed enums for required attributes
+    # (`influence_kind` on `influences`).
+    "gatekeeps",       # org -> decision (formal authority)
+    "wields",          # org -> mechanism (operates a control instrument)
+    "enacted_via",     # decision -> mechanism (chosen instrument)
+    "imposes",         # mechanism -> {org,site,route,product,regime,community}
+    "influences",      # org -> {decision,org,mechanism} (informal sway)
+    # §7 assurance layer (auditors, certifiers, inspectors verifying compliance).
+    "assures",         # org -> {org,site} (with `assurance_type` attribute)
+    # §8 membership (person/org joining an org or community; supersedes the
+    # legacy MEMBER_OF). Asymmetric: source is the member, target is the body.
+    "member_of",       # {person,org} -> {org,community}
+    # §9 disruption (geographic zones / event zones impairing other entities).
+    "disrupts",        # {geo,evidence} -> {site,route,org,vessel_class,mobile_asset,community}
 ]
 
 RELATION_NAMES: FrozenSet[str] = frozenset(
@@ -570,6 +989,18 @@ RELATION_NAMES: FrozenSet[str] = frozenset(
         "supported_by",
         "contradicts",
         "under_hypothesis",
+        # decision layer
+        "gatekeeps",
+        "wields",
+        "enacted_via",
+        "imposes",
+        "influences",
+        # assurance layer
+        "assures",
+        # membership
+        "member_of",
+        # disruption
+        "disrupts",
     )
 )
 
@@ -615,6 +1046,24 @@ RELATION_ALLOWED_LAYERS: dict[str, FrozenSet[str]] = {
     "supported_by": frozenset(("structural",)),
     "contradicts": frozenset(("structural",)),
     "under_hypothesis": frozenset(("structural",)),
+    # Decision layer: structural for the formal map (who gatekeeps what,
+    # which mechanism enacts which decision), flow for time-bound informal
+    # influence campaigns (e.g. lobbying activity around a pending ruling).
+    "gatekeeps": frozenset(("structural",)),
+    "wields": frozenset(("structural",)),
+    "enacted_via": frozenset(("structural",)),
+    "imposes": frozenset(("structural", "flow")),
+    "influences": frozenset(("structural", "flow")),
+    # Assurance layer: structural — assurer/assuree relationship typically holds
+    # for a multi-period engagement; specific report instances are observations,
+    # not separate edges.
+    "assures": frozenset(("structural",)),
+    # Membership: structural for the standing membership; flow optionally for
+    # time-bound memberships (e.g. a board appointment with start/end).
+    "member_of": frozenset(("structural", "flow")),
+    # Disruption: structural for persistent zones (war zone, sanctioned region);
+    # flow for time-bound disruption events (typhoon strike, blockade window).
+    "disrupts": frozenset(("structural", "flow")),
 }
 
 RELATION_LAYER_SECTION: dict[str, LayerSection] = {
@@ -653,6 +1102,14 @@ RELATION_LAYER_SECTION: dict[str, LayerSection] = {
     "supported_by": "evidence_meta",
     "contradicts": "evidence_meta",
     "under_hypothesis": "evidence_meta",
+    "gatekeeps": "decision_layer",
+    "wields": "decision_layer",
+    "enacted_via": "decision_layer",
+    "imposes": "decision_layer",
+    "influences": "decision_layer",
+    "assures": "assurance",
+    "member_of": "membership",
+    "disrupts": "disruption",
 }
 
 
@@ -857,6 +1314,64 @@ RELATION_ENDPOINT_KINDS: dict[str, dict[tuple[str, str], str]] = {
     # §7 evidence meta — not emitted into the graph (see EvidenceArchive).
     # Left intentionally empty: any such edge, if ever produced, becomes
     # unspecified → warning, not an error.
+    # §8 decision layer
+    "gatekeeps": {
+        # Formal authority only. Informal sway uses `influences` instead.
+        ("org", "decision"): "decision_owner",
+    },
+    "wields": {
+        ("org", "mechanism"): "mechanism_user",
+    },
+    "enacted_via": {
+        ("decision", "mechanism"): "mechanism_choice",
+    },
+    "imposes": {
+        ("mechanism", "org"): "imposes_on_org",
+        ("mechanism", "site"): "imposes_on_site",
+        ("mechanism", "route"): "imposes_on_route",
+        ("mechanism", "product"): "imposes_on_product",
+        ("mechanism", "regime"): "imposes_on_regime",
+        ("mechanism", "community"): "imposes_on_community",
+        ("mechanism", "vessel_class"): "imposes_on_vessel_class",
+        ("mechanism", "market"): "imposes_on_market",
+    },
+    "influences": {
+        # `attributes.influence_kind` (closed enum InfluenceKind) is required.
+        ("org", "decision"): "informal_decision_sway",
+        ("org", "org"): "informal_org_sway",
+        ("org", "mechanism"): "informal_mechanism_sway",
+        ("community", "decision"): "community_decision_sway",
+        ("community", "org"): "community_org_sway",
+        ("person", "decision"): "personal_decision_sway",
+        ("person", "org"): "personal_org_sway",
+    },
+    # §9 assurance layer
+    "assures": {
+        # `attributes.assurance_type` (closed enum AssuranceType) is required.
+        ("org", "org"): "assurer_to_assuree_org",
+        ("org", "site"): "assurer_to_assuree_site",
+    },
+    # §10 membership
+    "member_of": {
+        ("person", "org"): "person_member_of_org",
+        ("person", "community"): "person_member_of_community",
+        ("org", "org"): "org_member_of_alliance",
+        ("org", "community"): "org_member_of_industry_body",
+    },
+    # §11 disruption (optional `attributes.disruption_kind` recommended).
+    "disrupts": {
+        ("geo", "site"): "zone_disrupts_site",
+        ("geo", "route"): "zone_disrupts_route",
+        ("geo", "org"): "zone_disrupts_org",
+        ("geo", "vessel_class"): "zone_disrupts_vessel_class",
+        ("geo", "mobile_asset"): "zone_disrupts_mobile_asset",
+        ("geo", "community"): "zone_disrupts_community",
+        ("evidence", "site"): "event_disrupts_site",
+        ("evidence", "route"): "event_disrupts_route",
+        ("evidence", "org"): "event_disrupts_org",
+        ("evidence", "vessel_class"): "event_disrupts_vessel_class",
+        ("evidence", "mobile_asset"): "event_disrupts_mobile_asset",
+    },
 }
 
 
@@ -1058,6 +1573,61 @@ RELATION_ENDPOINT_BLACKLIST: dict[str, frozenset[tuple[str, str]]] = {
     "merged_into": frozenset(),
     "spun_out": frozenset(),
     "divested_to": frozenset(),
+    # Decision layer: target must be `decision`/`mechanism` for some relations;
+    # source must be `org`/`mechanism`. Procedural checks below cover the
+    # type-discipline; explicit table here stays narrow.
+    "gatekeeps": frozenset(
+        (
+            ("person", "decision"),
+            ("decision", "org"),
+            ("mechanism", "decision"),
+        )
+    ),
+    "wields": frozenset(
+        (
+            ("mechanism", "org"),
+            ("decision", "mechanism"),
+            ("person", "mechanism"),
+        )
+    ),
+    "enacted_via": frozenset(
+        (
+            ("mechanism", "decision"),
+            ("org", "mechanism"),
+            ("decision", "decision"),
+        )
+    ),
+    "imposes": frozenset(
+        (
+            ("org", "org"),
+            ("decision", "org"),
+            ("decision", "site"),
+            ("mechanism", "decision"),
+            ("mechanism", "person"),
+            ("mechanism", "evidence"),
+            ("mechanism", "mechanism"),
+        )
+    ),
+    "influences": frozenset(
+        (
+            ("decision", "decision"),
+            ("mechanism", "decision"),
+            ("decision", "org"),
+            ("decision", "mechanism"),
+            ("evidence", "decision"),
+            ("evidence", "org"),
+        )
+    ),
+    # Assurance: source must be org (the assurer); target restricted to
+    # org/site (cannot assure a route/product/regime/decision/etc).
+    "assures": frozenset(),  # handled procedurally
+    # Membership: source must be person/org; target must be org/community.
+    "member_of": frozenset(),  # handled procedurally
+    # Disruption: source must be geo/evidence; target must be a structural
+    # endpoint that can be impaired (site/route/org/vessel_class/mobile_asset/
+    # community). Decisions / mechanisms / regimes are not "disrupted" — they
+    # *are* the disruption-modeling primitives.
+    "disrupts": frozenset(),  # handled procedurally
 }
 
 
@@ -1104,6 +1674,54 @@ def is_forbidden_endpoint_pair(
             return True
     if relation == "publishes_benchmark":
         if from_class != "org" or to_class != "market":
+            return True
+    # Decision layer procedural rules.
+    if relation == "gatekeeps":
+        # Formal authority only; source must be org, target must be decision.
+        if from_class != "org" or to_class != "decision":
+            return True
+    if relation == "wields":
+        if from_class != "org" or to_class != "mechanism":
+            return True
+    if relation == "enacted_via":
+        if from_class != "decision" or to_class != "mechanism":
+            return True
+    if relation == "imposes":
+        # Mechanism is the source; target is anything in the structural layer
+        # except evidence (provenance, not a thing-in-the-world).
+        if from_class != "mechanism":
+            return True
+        if to_class in ("evidence", "decision", "mechanism"):
+            return True
+    if relation == "influences":
+        # Source is an actor (org/community/person); target is decision/org/mechanism.
+        if from_class not in ("org", "community", "person"):
+            return True
+        if to_class not in ("decision", "org", "mechanism"):
+            return True
+    if relation == "assures":
+        # Assurer is always an org; assuree is org or site.
+        if from_class != "org" or to_class not in ("org", "site"):
+            return True
+    if relation == "member_of":
+        # Source must be person or org; target must be org or community.
+        if from_class not in ("person", "org"):
+            return True
+        if to_class not in ("org", "community"):
+            return True
+    if relation == "disrupts":
+        # Source is a zone (geo) or a disruptive event (evidence); target is
+        # an impairable structural endpoint.
+        if from_class not in ("geo", "evidence"):
+            return True
+        if to_class not in (
+            "site",
+            "route",
+            "org",
+            "vessel_class",
+            "mobile_asset",
+            "community",
+        ):
             return True
     bl = RELATION_ENDPOINT_BLACKLIST.get(relation, frozenset())
     return (from_class, to_class) in bl
@@ -1228,6 +1846,48 @@ def _legacy_relation_whitelist(relation: str, from_class: str, to_class: str) ->
         "supported_by": [],
         "contradicts": [("evidence", "evidence")],
         "under_hypothesis": [],
+        "gatekeeps": [("org", "decision")],
+        "wields": [("org", "mechanism")],
+        "enacted_via": [("decision", "mechanism")],
+        "imposes": [
+            ("mechanism", "org"),
+            ("mechanism", "site"),
+            ("mechanism", "route"),
+            ("mechanism", "product"),
+            ("mechanism", "regime"),
+            ("mechanism", "community"),
+            ("mechanism", "vessel_class"),
+            ("mechanism", "market"),
+        ],
+        "influences": [
+            ("org", "decision"),
+            ("org", "org"),
+            ("org", "mechanism"),
+            ("community", "decision"),
+            ("community", "org"),
+            ("person", "decision"),
+            ("person", "org"),
+        ],
+        "assures": [("org", "org"), ("org", "site")],
+        "member_of": [
+            ("person", "org"),
+            ("person", "community"),
+            ("org", "org"),
+            ("org", "community"),
+        ],
+        "disrupts": [
+            ("geo", "site"),
+            ("geo", "route"),
+            ("geo", "org"),
+            ("geo", "vessel_class"),
+            ("geo", "mobile_asset"),
+            ("geo", "community"),
+            ("evidence", "site"),
+            ("evidence", "route"),
+            ("evidence", "org"),
+            ("evidence", "vessel_class"),
+            ("evidence", "mobile_asset"),
+        ],
     }
     if r in ("subject_to", "exposes_to"):
         return b == "regime" and a in FRAGMENT_CLASSES
@@ -1355,3 +2015,506 @@ def canonicalize_llm_synonym(
     if key in _FLAT_RELATION_SYNONYMS:
         return _FLAT_RELATION_SYNONYMS[key], False, f"synonym:{key}->{_FLAT_RELATION_SYNONYMS[key]}"
     return None, False, None
+
+
+# -----------------------------------------------------------------------------
+# Formal attribute spec
+# -----------------------------------------------------------------------------
+#
+# Single source of truth for every named attribute the system reads/writes on
+# fragments and edges. Codegen (``scripts/export_taxonomy.py``) turns this into
+# ``AttributeName.*`` constants in Go and TS, plus typed getter helpers on the
+# frontend so views never reach into ``attributes`` blobs with raw strings.
+#
+# Each entry:
+#   - ``name``       : canonical snake_case key (used in attributes / qualifiers).
+#   - ``carrier``    : one of "fragment" | "edge".
+#   - ``applies_to`` : list of fragment classes (carrier=fragment) OR list of
+#                      relation names (carrier=edge). ``["*"]`` means universal.
+#   - ``type``       : "string" | "number" | "bool" | "geo_point" | "geo_polyline"
+#                      | "string_array" | "object" | "enum:<EnumName>".
+#   - ``required``   : whether the attribute is mandatory when the carrier is
+#                      written (only enforced for closed-enum attributes today;
+#                      others are advisory).
+#   - ``description``: short human-readable note.
+#
+# Conventions:
+#   - Identifiers, geometry and other compound objects keep ``object`` and have
+#     their inner shape documented in description; we don't over-spec sub-shapes
+#     here to avoid premature lock-in for FE consumers.
+#   - When a typed Go field on ``HorizonFragment`` is the runtime representation,
+#     it MUST share the same canonical name as listed here (codegen enforces).
+# -----------------------------------------------------------------------------
+
+ATTRIBUTE_SPEC: tuple[dict[str, object], ...] = (
+    # --- Universal fragment attributes (geo / lifecycle / catalog facets) ---
+    {
+        "name": "schema_version",
+        "carrier": "fragment",
+        "applies_to": ["*"],
+        "type": "string",
+        "required": False,
+        "description": "Stamped by migrate-cli (and on every write going forward) to track which canonical-control-plane revision produced the document. Format: '<major>.<minor>', e.g. '2.0'.",
+    },
+    {
+        "name": "coordinates",
+        "carrier": "fragment",
+        "applies_to": ["site", "geo", "route"],
+        "type": "geo_point",
+        "required": False,
+        "description": "Lat/lng pair: {'lat': float, 'lng': float}. For /route this is a representative point; full polyline lives in `geometry`.",
+    },
+    {
+        "name": "geometry",
+        "carrier": "fragment",
+        "applies_to": ["route", "geo", "site"],
+        "type": "geo_polyline",
+        "required": False,
+        "description": "GeoJSON-like polyline / polygon for routes (corridor curve), regions (boundary), and large sites (footprint).",
+    },
+    {
+        "name": "geo_slug",
+        "carrier": "fragment",
+        "applies_to": ["site", "geo", "org", "person", "community", "market", "regime", "project", "decision"],
+        "type": "string",
+        "required": False,
+        "description": "Denormalized iso2 / region slug from the canonical path's geo segment, cached for fast filtering on the FE.",
+    },
+    {
+        "name": "geo_feature_type",
+        "carrier": "fragment",
+        "applies_to": ["geo", "site"],
+        "type": "string",
+        "required": False,
+        "description": "GeoNames feature class (P=populated place, S=spot/structure, T=mountain, etc.) when known.",
+    },
+    {
+        "name": "radius_km",
+        "carrier": "fragment",
+        "applies_to": ["geo", "site"],
+        "type": "number",
+        "required": False,
+        "description": "Effective radius in kilometers for circular zone rendering on the map.",
+    },
+    {
+        "name": "lifecycle_stage",
+        "carrier": "fragment",
+        "applies_to": ["org", "site", "project", "product", "decision"],
+        "type": "string",
+        "required": False,
+        "description": "Free-form lifecycle marker (e.g. 'planned', 'operational', 'decommissioned', 'pending', 'expired'). Decision lifecycle uses the more specific `status` attribute.",
+    },
+    {
+        "name": "market_segments",
+        "carrier": "fragment",
+        "applies_to": ["org", "site", "product", "market"],
+        "type": "string_array",
+        "required": False,
+        "description": "List of market-segment slugs the fragment participates in.",
+    },
+    {
+        "name": "industry_paths",
+        "carrier": "fragment",
+        "applies_to": ["org", "site", "product"],
+        "type": "string_array",
+        "required": False,
+        "description": "Canonical industry-taxonomy paths (e.g. /industry/chemicals/specialty).",
+    },
+    {
+        "name": "sphere_paths",
+        "carrier": "fragment",
+        "applies_to": ["org", "site", "product", "decision", "mechanism"],
+        "type": "string_array",
+        "required": False,
+        "description": "Canonical sphere paths (L1/L2/L3 fractal taxonomy slugs). Replaces the now-folded /sphere/* fragments.",
+    },
+    {
+        "name": "domain_slug",
+        "carrier": "fragment",
+        "applies_to": ["decision", "mechanism", "org", "project"],
+        "type": "string",
+        "required": False,
+        "description": "Domain slug lifted from the now-folded /domain/* fragments; identifies which strategic domain a decision/mechanism belongs to.",
+    },
+    {
+        "name": "discovered_in_domain",
+        "carrier": "fragment",
+        "applies_to": ["decision", "mechanism"],
+        "type": "string",
+        "required": False,
+        "description": "Provenance attribute: which /domain/* fragment first surfaced this decision/mechanism. Lifted from the legacy SURFACES edge.",
+    },
+    {
+        "name": "identifiers",
+        "carrier": "fragment",
+        "applies_to": ["org", "site", "person", "vessel_class", "regime"],
+        "type": "object",
+        "required": False,
+        "description": "Map of external IDs: lei, isin, imo, mmso, wikidata_qid, gleif_id, etc.",
+    },
+    {
+        "name": "name_history",
+        "carrier": "fragment",
+        "applies_to": ["org", "site", "person"],
+        "type": "object",
+        "required": False,
+        "description": "Historical names with valid_from/valid_to ranges.",
+    },
+    {
+        "name": "alternative_names",
+        "carrier": "fragment",
+        "applies_to": ["*"],
+        "type": "string_array",
+        "required": False,
+        "description": "Known aliases / surface-form variants beyond the primary `surface_forms` list.",
+    },
+    {
+        "name": "org_size",
+        "carrier": "fragment",
+        "applies_to": ["org"],
+        "type": "string",
+        "required": False,
+        "description": "Coarse org size bucket (micro / small / mid / large / mega).",
+    },
+    {
+        "name": "gov_type",
+        "carrier": "fragment",
+        "applies_to": ["org"],
+        "type": "string",
+        "required": False,
+        "description": "For org.gov subtype: ministry / agency / regulator / soe / parliament / court / etc.",
+    },
+    {
+        "name": "parent_path",
+        "carrier": "fragment",
+        "applies_to": ["org", "site", "product", "geo"],
+        "type": "string",
+        "required": False,
+        "description": "Canonical path of the parent fragment (org parent, site operator, product family parent, geo container).",
+    },
+    {
+        "name": "community_subtype",
+        "carrier": "fragment",
+        "applies_to": ["community"],
+        "type": "string",
+        "required": False,
+        "description": "Closed enum (see COMMUNITY_SUBTYPES).",
+    },
+    # --- /route attributes ---
+    {
+        "name": "mode",
+        "carrier": "fragment",
+        "applies_to": ["route"],
+        "type": "string",
+        "required": False,
+        "description": "Transport mode of the corridor: sea / rail / pipeline / road / multimodal / air.",
+    },
+    {
+        "name": "length_km",
+        "carrier": "fragment",
+        "applies_to": ["route"],
+        "type": "number",
+        "required": False,
+        "description": "Approximate corridor length in kilometers.",
+    },
+    {
+        "name": "vessel_class_refs",
+        "carrier": "fragment",
+        "applies_to": ["route"],
+        "type": "string_array",
+        "required": False,
+        "description": "List of /vessel_class/* canonical paths the corridor supports.",
+    },
+    # --- /decision lifecycle attributes ---
+    {
+        "name": "status",
+        "carrier": "fragment",
+        "applies_to": ["decision"],
+        "type": "string",
+        "required": False,
+        "description": "Decision lifecycle state: pending / decided / expired / withdrawn / superseded.",
+    },
+    {
+        "name": "deadline",
+        "carrier": "fragment",
+        "applies_to": ["decision"],
+        "type": "string",
+        "required": False,
+        "description": "ISO 8601 deadline / expected-decision date.",
+    },
+    {
+        "name": "outcome",
+        "carrier": "fragment",
+        "applies_to": ["decision"],
+        "type": "string",
+        "required": False,
+        "description": "Free-form description of the decided outcome (populated when status=decided).",
+    },
+    # --- supplies edge attributes ---
+    {
+        "name": "product_fragment_id",
+        "carrier": "edge",
+        "applies_to": ["supplies"],
+        "type": "string",
+        "required": True,
+        "description": "Required fragment id of the /product cargo being supplied. Validated by validate_graph.",
+    },
+    {
+        "name": "kind",
+        "carrier": "edge",
+        "applies_to": ["supplies", "leg_connects", "transships_at", "passes_through", "alternate_to", "produces", "operates", "charters", "regulates", "constrained_by", "requires_capability", "subject_to", "exposes_to", "mitigated_by", "priced_under", "benchmarked_to", "publishes_benchmark", "subsidiary_of", "beneficially_owns", "controls_via", "holds_board_seat", "joint_venture_with", "listed_on", "incorporated_in", "managed_by", "invested_in", "acquired_stake_from", "asset_contribution", "merged_into", "spun_out", "divested_to", "gatekeeps", "wields", "enacted_via", "imposes", "influences", "assures", "member_of", "disrupts"],
+        "type": "string",
+        "required": False,
+        "description": "Endpoint-projection kind label stamped from RELATION_ENDPOINT_KINDS at edge build time. Universal across recognized relations.",
+    },
+    {
+        "name": "route_fragment_id",
+        "carrier": "edge",
+        "applies_to": ["supplies", "leg_connects", "passes_through", "transships_at"],
+        "type": "string",
+        "required": False,
+        "description": "Reference to the /route corridor this leg traverses; the route holds the geometry and mode.",
+    },
+    {
+        "name": "vessel_class_fragment_id",
+        "carrier": "edge",
+        "applies_to": ["supplies", "charters", "passes_through"],
+        "type": "string",
+        "required": False,
+        "description": "Reference to the /vessel_class used on the leg / charter.",
+    },
+    {
+        "name": "route_overlay_key",
+        "carrier": "edge",
+        "applies_to": ["supplies", "leg_connects"],
+        "type": "string",
+        "required": False,
+        "description": "Stable key grouping multiple supplies projections onto the same physical corridor for map overlay rendering.",
+    },
+    {
+        "name": "incoterm",
+        "carrier": "edge",
+        "applies_to": ["supplies", "charters"],
+        "type": "string",
+        "required": False,
+        "description": "Optional ICC Incoterms 2020 code (closed enum INCOTERMS_2020). Validated by validate_graph.",
+    },
+    # --- supplies-edge gating: hard vs soft decision binding ---
+    {
+        "name": "gated_by_decision_fragment_id",
+        "carrier": "edge",
+        "applies_to": ["supplies", "subject_to"],
+        "type": "string",
+        "required": False,
+        "description": "Hard gating: if the referenced /decision goes against the actor, this flow is blocked (e.g. denied license, sanctions designation).",
+    },
+    {
+        "name": "influenced_by_decision_fragment_id",
+        "carrier": "edge",
+        "applies_to": ["supplies", "subject_to"],
+        "type": "string",
+        "required": False,
+        "description": "Soft shaping: the referenced /decision changes the cost/terms/timing of this flow without blocking it (compliance overhead, reinterpreted requirements, etc.).",
+    },
+    # --- decision-layer edge attributes (closed enums) ---
+    {
+        "name": "influence_kind",
+        "carrier": "edge",
+        "applies_to": ["influences"],
+        "type": "enum:InfluenceKind",
+        "required": True,
+        "description": "Required closed enum (see INFLUENCE_KINDS / normalize_influence_kind). Disambiguates the channel through which informal power is exerted.",
+    },
+    {
+        "name": "evidence_refs",
+        "carrier": "edge",
+        "applies_to": ["influences", "imposes", "gatekeeps", "enacted_via", "wields", "assures"],
+        "type": "string_array",
+        "required": False,
+        "description": "Optional list of evidence-archive source ids supporting the relation (kept on the edge for fast UI hover-cards; canonical claim refs live in source_claim_ids).",
+    },
+    # --- assurance-layer edge attributes ---
+    {
+        "name": "assurance_type",
+        "carrier": "edge",
+        "applies_to": ["assures"],
+        "type": "enum:AssuranceType",
+        "required": True,
+        "description": "Required closed enum (see ASSURANCE_TYPES / normalize_assurance_type). Distinguishes audit / certification / regulatory_inspection / attestation.",
+    },
+    {
+        "name": "period_start",
+        "carrier": "edge",
+        "applies_to": ["assures"],
+        "type": "string",
+        "required": False,
+        "description": "ISO 8601 start of the assurance period.",
+    },
+    {
+        "name": "period_end",
+        "carrier": "edge",
+        "applies_to": ["assures"],
+        "type": "string",
+        "required": False,
+        "description": "ISO 8601 end of the assurance period.",
+    },
+    {
+        "name": "report_url",
+        "carrier": "edge",
+        "applies_to": ["assures"],
+        "type": "string",
+        "required": False,
+        "description": "URL of the published assurance report (when public).",
+    },
+    # --- /mobile_asset attributes ---
+    {
+        "name": "mobile_asset_kind",
+        "carrier": "fragment",
+        "applies_to": ["mobile_asset"],
+        "type": "enum:MobileAssetKind",
+        "required": True,
+        "description": "Closed enum (see MOBILE_ASSET_KINDS / normalize_mobile_asset_kind). Distinguishes vessel / aircraft / locomotive / rig / satellite / vehicle / asset.",
+    },
+    {
+        "name": "vessel_class_path",
+        "carrier": "fragment",
+        "applies_to": ["mobile_asset"],
+        "type": "string",
+        "required": False,
+        "description": "Canonical /vessel_class/* path describing this individual asset's class (LR2, VLCC, A380, etc.).",
+    },
+    {
+        "name": "operator_org_path",
+        "carrier": "fragment",
+        "applies_to": ["mobile_asset"],
+        "type": "string",
+        "required": False,
+        "description": "Canonical path of the org currently operating the asset (operator/charterer/airline/carrier).",
+    },
+    {
+        "name": "owner_org_path",
+        "carrier": "fragment",
+        "applies_to": ["mobile_asset"],
+        "type": "string",
+        "required": False,
+        "description": "Canonical path of the org that owns the asset (often differs from operator).",
+    },
+    {
+        "name": "flag_geo_path",
+        "carrier": "fragment",
+        "applies_to": ["mobile_asset"],
+        "type": "string",
+        "required": False,
+        "description": "Canonical /geo/* path of the flag-of-registration jurisdiction (vessels) or registration country (aircraft).",
+    },
+    {
+        "name": "last_known_position",
+        "carrier": "fragment",
+        "applies_to": ["mobile_asset"],
+        "type": "geo_point",
+        "required": False,
+        "description": "Most recent reported lat/lng of the mobile asset (AIS / ADS-B / proprietary tracker).",
+    },
+    {
+        "name": "last_position_observed_at",
+        "carrier": "fragment",
+        "applies_to": ["mobile_asset"],
+        "type": "string",
+        "required": False,
+        "description": "ISO 8601 timestamp of the last reported position.",
+    },
+    # --- member_of edge attributes ---
+    {
+        "name": "membership_role",
+        "carrier": "edge",
+        "applies_to": ["member_of"],
+        "type": "string",
+        "required": False,
+        "description": "Free-form role of the member within the body (chair / member / observer / treasurer / etc.). Intentionally not a closed enum yet — domain too broad.",
+    },
+    {
+        "name": "membership_status",
+        "carrier": "edge",
+        "applies_to": ["member_of"],
+        "type": "string",
+        "required": False,
+        "description": "Lifecycle of the membership: active / suspended / former / pending. Drives historical filters in FE.",
+    },
+    {
+        "name": "joined_at",
+        "carrier": "edge",
+        "applies_to": ["member_of"],
+        "type": "string",
+        "required": False,
+        "description": "ISO 8601 date the membership began.",
+    },
+    {
+        "name": "left_at",
+        "carrier": "edge",
+        "applies_to": ["member_of"],
+        "type": "string",
+        "required": False,
+        "description": "ISO 8601 date the membership ended (only set when membership_status != active).",
+    },
+    # --- disrupts edge attributes ---
+    {
+        "name": "disruption_kind",
+        "carrier": "edge",
+        "applies_to": ["disrupts"],
+        "type": "enum:DisruptionKind",
+        "required": True,
+        "description": "Required closed enum (see DISRUPTION_KINDS / normalize_disruption_kind). Names the qualitative nature of the disruption.",
+    },
+    {
+        "name": "severity",
+        "carrier": "edge",
+        "applies_to": ["disrupts"],
+        "type": "string",
+        "required": False,
+        "description": "Coarse severity bucket: low / medium / high / critical. Used by FE for color-coding affected-asset overlays.",
+    },
+    {
+        "name": "valid_from",
+        "carrier": "edge",
+        "applies_to": ["disrupts", "member_of", "subject_to", "supplies"],
+        "type": "string",
+        "required": False,
+        "description": "ISO 8601 start of the time-bound effect (if any). Universal time-bound qualifier; declared once with multi-relation applies_to so codegen emits a single helper.",
+    },
+    {
+        "name": "valid_to",
+        "carrier": "edge",
+        "applies_to": ["disrupts", "member_of", "subject_to", "supplies"],
+        "type": "string",
+        "required": False,
+        "description": "ISO 8601 end of the time-bound effect (if any).",
+    },
+)
+
+
+# Programmatic indexes for fast lookup by codegen / validators.
+ATTRIBUTE_NAMES: FrozenSet[str] = frozenset(str(spec["name"]) for spec in ATTRIBUTE_SPEC)
+
+
+def attribute_spec_for(name: str) -> dict[str, object] | None:
+    """Return the ATTRIBUTE_SPEC entry for ``name`` (or None if unknown)."""
+    for spec in ATTRIBUTE_SPEC:
+        if spec.get("name") == name:
+            return dict(spec)
+    return None
+
+
+# Closed-enum subtype catalog. Used by codegen to emit Go/TS enum constants
+# alongside the FragmentClass / RelationType lists. Keep ordering stable —
+# generators rely on it for diff-friendly output.
+SUBTYPE_ENUMS: dict[str, FrozenSet[str]] = {
+    "CommunitySubtype": COMMUNITY_SUBTYPES,
+    "ProductFamily": PRODUCT_FAMILIES,
+    "EvidenceSubtype": EVIDENCE_SUBTYPES,
+    "MechanismCategory": MECHANISM_CATEGORIES,
+    "DecisionSubtype": DECISION_SUBTYPES,
+    "InfluenceKind": INFLUENCE_KINDS,
+    "AssuranceType": ASSURANCE_TYPES,
+    "MobileAssetKind": MOBILE_ASSET_KINDS,
+    "DisruptionKind": DISRUPTION_KINDS,
+}

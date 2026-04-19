@@ -5,4 +5,5 @@ toolchain go1.25.1
 use (
 	./backend
 	./backend/internal/tools/schemagen
+	./backend/internal/tools/taxonomygen
 )

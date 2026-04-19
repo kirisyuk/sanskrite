@@ -1,0 +1,2339 @@
+{
+  "schema_version": "2.0",
+  "fragment_classes": {
+    "all": [
+      "community",
+      "decision",
+      "evidence",
+      "geo",
+      "market",
+      "mechanism",
+      "mobile_asset",
+      "org",
+      "person",
+      "product",
+      "project",
+      "regime",
+      "route",
+      "site",
+      "vessel_class"
+    ],
+    "structural": [
+      "community",
+      "evidence",
+      "geo",
+      "market",
+      "mobile_asset",
+      "org",
+      "person",
+      "product",
+      "project",
+      "regime",
+      "route",
+      "site",
+      "vessel_class"
+    ],
+    "decision_layer": [
+      "decision",
+      "mechanism"
+    ]
+  },
+  "subtype_enums": {
+    "AssuranceType": {
+      "description": "Closed enum, required `assurance_type` attribute on `assures` edges.",
+      "values": [
+        "attestation",
+        "audit",
+        "certification",
+        "regulatory_inspection"
+      ]
+    },
+    "CommunitySubtype": {
+      "description": "Closed enum, slot 3 of /community/{geo}/{subtype}/{slug}.",
+      "values": [
+        "activist",
+        "criminal",
+        "dynasty",
+        "ethnic",
+        "industry-association",
+        "interest",
+        "key-community",
+        "professional",
+        "religious",
+        "representatives",
+        "trade",
+        "tribe"
+      ]
+    },
+    "DecisionSubtype": {
+      "description": "Closed enum, attribute on /decision fragments (no path slot).",
+      "values": [
+        "coalition_position",
+        "commercial_strategic",
+        "judicial_interpretation",
+        "legislative",
+        "regulatory_ruling",
+        "sanctions_designation",
+        "standards_decision"
+      ]
+    },
+    "DisruptionKind": {
+      "description": "",
+      "values": [
+        "armed_conflict",
+        "blockade",
+        "civil_unrest",
+        "cyber_incident",
+        "epidemic",
+        "infrastructure_failure",
+        "labor_action",
+        "natural_disaster",
+        "other",
+        "regulatory_freeze"
+      ]
+    },
+    "EvidenceSubtype": {
+      "description": "Closed enum, prefix of slot 3 of /evidence/{iso2}/{subtype}-{slug}.",
+      "values": [
+        "dataset",
+        "entity",
+        "filing",
+        "other",
+        "press_release",
+        "quote",
+        "report",
+        "statement"
+      ]
+    },
+    "InfluenceKind": {
+      "description": "Closed enum, required `influence_kind` attribute on `influences` edges.",
+      "values": [
+        "advisory",
+        "coalition_member",
+        "informal_channel",
+        "judicial_precedent",
+        "lobbying",
+        "market_power",
+        "technical_dependency"
+      ]
+    },
+    "MechanismCategory": {
+      "description": "Closed enum, slot 2 of /mechanism/{category}/{slug}.",
+      "values": [
+        "contractual",
+        "economic",
+        "political",
+        "regulatory",
+        "technological"
+      ]
+    },
+    "MobileAssetKind": {
+      "description": "",
+      "values": [
+        "aircraft",
+        "asset",
+        "locomotive",
+        "rig",
+        "satellite",
+        "vehicle",
+        "vessel"
+      ]
+    },
+    "ProductFamily": {
+      "description": "Closed enum, slot 2 of /product/{family}/{slug}.",
+      "values": [
+        "agriculture",
+        "battery",
+        "bulk_dry",
+        "bulk_liquid",
+        "chemical",
+        "chip",
+        "component",
+        "container",
+        "energy",
+        "equipment",
+        "fertilizer",
+        "general",
+        "grain",
+        "hydrocarbon",
+        "ore",
+        "pharmaceutical",
+        "refined_metal",
+        "textile",
+        "vehicle"
+      ]
+    }
+  },
+  "relations": {
+    "names": [
+      "acquired_stake_from",
+      "alternate_to",
+      "asserted_by",
+      "asset_contribution",
+      "assures",
+      "benchmarked_to",
+      "beneficially_owns",
+      "charters",
+      "constrained_by",
+      "contradicts",
+      "controls_via",
+      "disrupts",
+      "divested_to",
+      "enacted_via",
+      "exposes_to",
+      "gatekeeps",
+      "holds_board_seat",
+      "imposes",
+      "incorporated_in",
+      "influences",
+      "invested_in",
+      "joint_venture_with",
+      "leg_connects",
+      "listed_on",
+      "managed_by",
+      "member_of",
+      "merged_into",
+      "mitigated_by",
+      "operates",
+      "passes_through",
+      "priced_under",
+      "produces",
+      "publishes_benchmark",
+      "regulates",
+      "requires_capability",
+      "spun_out",
+      "subject_to",
+      "subsidiary_of",
+      "supplies",
+      "supported_by",
+      "transships_at",
+      "under_hypothesis",
+      "wields"
+    ],
+    "allowed_layers": {
+      "acquired_stake_from": [
+        "flow"
+      ],
+      "alternate_to": [
+        "flow",
+        "structural"
+      ],
+      "asserted_by": [
+        "structural"
+      ],
+      "asset_contribution": [
+        "flow"
+      ],
+      "assures": [
+        "structural"
+      ],
+      "benchmarked_to": [
+        "contractual"
+      ],
+      "beneficially_owns": [
+        "structural"
+      ],
+      "charters": [
+        "contractual",
+        "flow"
+      ],
+      "constrained_by": [
+        "structural"
+      ],
+      "contradicts": [
+        "structural"
+      ],
+      "controls_via": [
+        "structural"
+      ],
+      "disrupts": [
+        "flow",
+        "structural"
+      ],
+      "divested_to": [
+        "flow"
+      ],
+      "enacted_via": [
+        "structural"
+      ],
+      "exposes_to": [
+        "structural"
+      ],
+      "gatekeeps": [
+        "structural"
+      ],
+      "holds_board_seat": [
+        "structural"
+      ],
+      "imposes": [
+        "flow",
+        "structural"
+      ],
+      "incorporated_in": [
+        "structural"
+      ],
+      "influences": [
+        "flow",
+        "structural"
+      ],
+      "invested_in": [
+        "flow"
+      ],
+      "joint_venture_with": [
+        "structural"
+      ],
+      "leg_connects": [
+        "flow",
+        "structural"
+      ],
+      "listed_on": [
+        "structural"
+      ],
+      "managed_by": [
+        "structural"
+      ],
+      "member_of": [
+        "flow",
+        "structural"
+      ],
+      "merged_into": [
+        "flow"
+      ],
+      "mitigated_by": [
+        "structural"
+      ],
+      "operates": [
+        "structural"
+      ],
+      "passes_through": [
+        "flow",
+        "structural"
+      ],
+      "priced_under": [
+        "contractual",
+        "flow"
+      ],
+      "produces": [
+        "structural"
+      ],
+      "publishes_benchmark": [
+        "structural"
+      ],
+      "regulates": [
+        "structural"
+      ],
+      "requires_capability": [
+        "structural"
+      ],
+      "spun_out": [
+        "flow"
+      ],
+      "subject_to": [
+        "flow",
+        "structural"
+      ],
+      "subsidiary_of": [
+        "structural"
+      ],
+      "supplies": [
+        "contractual",
+        "flow",
+        "structural"
+      ],
+      "supported_by": [
+        "structural"
+      ],
+      "transships_at": [
+        "flow",
+        "structural"
+      ],
+      "under_hypothesis": [
+        "structural"
+      ],
+      "wields": [
+        "structural"
+      ]
+    },
+    "layer_sections": {
+      "acquired_stake_from": "corporate_events",
+      "alternate_to": "flow_topology",
+      "asserted_by": "evidence_meta",
+      "asset_contribution": "corporate_events",
+      "assures": "assurance",
+      "benchmarked_to": "regimes_risks",
+      "beneficially_owns": "ownership",
+      "charters": "actors_ops",
+      "constrained_by": "regimes_risks",
+      "contradicts": "evidence_meta",
+      "controls_via": "ownership",
+      "disrupts": "disruption",
+      "divested_to": "corporate_events",
+      "enacted_via": "decision_layer",
+      "exposes_to": "regimes_risks",
+      "gatekeeps": "decision_layer",
+      "holds_board_seat": "ownership",
+      "imposes": "decision_layer",
+      "incorporated_in": "ownership",
+      "influences": "decision_layer",
+      "invested_in": "corporate_events",
+      "joint_venture_with": "ownership",
+      "leg_connects": "flow_topology",
+      "listed_on": "ownership",
+      "managed_by": "ownership",
+      "member_of": "membership",
+      "merged_into": "corporate_events",
+      "mitigated_by": "regimes_risks",
+      "operates": "actors_ops",
+      "passes_through": "flow_topology",
+      "priced_under": "regimes_risks",
+      "produces": "catalog",
+      "publishes_benchmark": "regimes_risks",
+      "regulates": "actors_ops",
+      "requires_capability": "regimes_risks",
+      "spun_out": "corporate_events",
+      "subject_to": "regimes_risks",
+      "subsidiary_of": "ownership",
+      "supplies": "flow_topology",
+      "supported_by": "evidence_meta",
+      "transships_at": "flow_topology",
+      "under_hypothesis": "evidence_meta",
+      "wields": "decision_layer"
+    },
+    "endpoint_kinds": {
+      "acquired_stake_from": [
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "secondary_stake_acquisition"
+        }
+      ],
+      "alternate_to": [
+        {
+          "from": "route",
+          "to": "route",
+          "kind": "route_alt"
+        },
+        {
+          "from": "site",
+          "to": "site",
+          "kind": "site_alt"
+        },
+        {
+          "from": "vessel_class",
+          "to": "vessel_class",
+          "kind": "fleet_alt"
+        }
+      ],
+      "asset_contribution": [
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "asset_in_kind"
+        }
+      ],
+      "assures": [
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "assurer_to_assuree_org"
+        },
+        {
+          "from": "org",
+          "to": "site",
+          "kind": "assurer_to_assuree_site"
+        }
+      ],
+      "benchmarked_to": [
+        {
+          "from": "product",
+          "to": "market",
+          "kind": "product_benchmark"
+        },
+        {
+          "from": "route",
+          "to": "market",
+          "kind": "route_benchmark"
+        },
+        {
+          "from": "site",
+          "to": "market",
+          "kind": "site_benchmark"
+        }
+      ],
+      "beneficially_owns": [
+        {
+          "from": "community",
+          "to": "org",
+          "kind": "community_collective_stake"
+        },
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "institutional_stake"
+        },
+        {
+          "from": "person",
+          "to": "org",
+          "kind": "ubo_stake"
+        }
+      ],
+      "charters": [
+        {
+          "from": "org",
+          "to": "vessel_class",
+          "kind": "fleet_charter"
+        }
+      ],
+      "constrained_by": [
+        {
+          "from": "route",
+          "to": "geo",
+          "kind": "route_over_region"
+        },
+        {
+          "from": "route",
+          "to": "route",
+          "kind": "route_over_corridor"
+        },
+        {
+          "from": "site",
+          "to": "geo",
+          "kind": "site_geo_rule"
+        },
+        {
+          "from": "site",
+          "to": "route",
+          "kind": "site_over_corridor"
+        },
+        {
+          "from": "vessel_class",
+          "to": "geo",
+          "kind": "class_geo_rule"
+        },
+        {
+          "from": "vessel_class",
+          "to": "route",
+          "kind": "class_over_route_draft"
+        },
+        {
+          "from": "vessel_class",
+          "to": "site",
+          "kind": "class_over_site_draft"
+        }
+      ],
+      "controls_via": [
+        {
+          "from": "community",
+          "to": "org",
+          "kind": "community_controls_org"
+        },
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "org_controls_org"
+        },
+        {
+          "from": "person",
+          "to": "org",
+          "kind": "person_controls_org"
+        }
+      ],
+      "disrupts": [
+        {
+          "from": "evidence",
+          "to": "mobile_asset",
+          "kind": "event_disrupts_mobile_asset"
+        },
+        {
+          "from": "evidence",
+          "to": "org",
+          "kind": "event_disrupts_org"
+        },
+        {
+          "from": "evidence",
+          "to": "route",
+          "kind": "event_disrupts_route"
+        },
+        {
+          "from": "evidence",
+          "to": "site",
+          "kind": "event_disrupts_site"
+        },
+        {
+          "from": "evidence",
+          "to": "vessel_class",
+          "kind": "event_disrupts_vessel_class"
+        },
+        {
+          "from": "geo",
+          "to": "community",
+          "kind": "zone_disrupts_community"
+        },
+        {
+          "from": "geo",
+          "to": "mobile_asset",
+          "kind": "zone_disrupts_mobile_asset"
+        },
+        {
+          "from": "geo",
+          "to": "org",
+          "kind": "zone_disrupts_org"
+        },
+        {
+          "from": "geo",
+          "to": "route",
+          "kind": "zone_disrupts_route"
+        },
+        {
+          "from": "geo",
+          "to": "site",
+          "kind": "zone_disrupts_site"
+        },
+        {
+          "from": "geo",
+          "to": "vessel_class",
+          "kind": "zone_disrupts_vessel_class"
+        }
+      ],
+      "divested_to": [
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "divestiture"
+        }
+      ],
+      "enacted_via": [
+        {
+          "from": "decision",
+          "to": "mechanism",
+          "kind": "mechanism_choice"
+        }
+      ],
+      "exposes_to": [
+        {
+          "from": "community",
+          "to": "regime",
+          "kind": "community_exposed"
+        },
+        {
+          "from": "geo",
+          "to": "regime",
+          "kind": "region_exposed"
+        },
+        {
+          "from": "market",
+          "to": "regime",
+          "kind": "market_exposed"
+        },
+        {
+          "from": "org",
+          "to": "regime",
+          "kind": "org_exposed"
+        },
+        {
+          "from": "person",
+          "to": "regime",
+          "kind": "person_exposed"
+        },
+        {
+          "from": "product",
+          "to": "regime",
+          "kind": "product_exposed"
+        },
+        {
+          "from": "route",
+          "to": "regime",
+          "kind": "route_exposed"
+        },
+        {
+          "from": "site",
+          "to": "regime",
+          "kind": "site_exposed"
+        },
+        {
+          "from": "vessel_class",
+          "to": "regime",
+          "kind": "class_exposed"
+        }
+      ],
+      "gatekeeps": [
+        {
+          "from": "org",
+          "to": "decision",
+          "kind": "decision_owner"
+        }
+      ],
+      "holds_board_seat": [
+        {
+          "from": "community",
+          "to": "org",
+          "kind": "community_board_presence"
+        },
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "nominee_org"
+        },
+        {
+          "from": "person",
+          "to": "org",
+          "kind": "director"
+        }
+      ],
+      "imposes": [
+        {
+          "from": "mechanism",
+          "to": "community",
+          "kind": "imposes_on_community"
+        },
+        {
+          "from": "mechanism",
+          "to": "market",
+          "kind": "imposes_on_market"
+        },
+        {
+          "from": "mechanism",
+          "to": "org",
+          "kind": "imposes_on_org"
+        },
+        {
+          "from": "mechanism",
+          "to": "product",
+          "kind": "imposes_on_product"
+        },
+        {
+          "from": "mechanism",
+          "to": "regime",
+          "kind": "imposes_on_regime"
+        },
+        {
+          "from": "mechanism",
+          "to": "route",
+          "kind": "imposes_on_route"
+        },
+        {
+          "from": "mechanism",
+          "to": "site",
+          "kind": "imposes_on_site"
+        },
+        {
+          "from": "mechanism",
+          "to": "vessel_class",
+          "kind": "imposes_on_vessel_class"
+        }
+      ],
+      "incorporated_in": [
+        {
+          "from": "org",
+          "to": "geo",
+          "kind": "incorporated"
+        }
+      ],
+      "influences": [
+        {
+          "from": "community",
+          "to": "decision",
+          "kind": "community_decision_sway"
+        },
+        {
+          "from": "community",
+          "to": "org",
+          "kind": "community_org_sway"
+        },
+        {
+          "from": "org",
+          "to": "decision",
+          "kind": "informal_decision_sway"
+        },
+        {
+          "from": "org",
+          "to": "mechanism",
+          "kind": "informal_mechanism_sway"
+        },
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "informal_org_sway"
+        },
+        {
+          "from": "person",
+          "to": "decision",
+          "kind": "personal_decision_sway"
+        },
+        {
+          "from": "person",
+          "to": "org",
+          "kind": "personal_org_sway"
+        }
+      ],
+      "invested_in": [
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "equity_investment"
+        }
+      ],
+      "joint_venture_with": [
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "jv"
+        }
+      ],
+      "leg_connects": [
+        {
+          "from": "route",
+          "to": "geo",
+          "kind": "route_to_region"
+        },
+        {
+          "from": "route",
+          "to": "site",
+          "kind": "route_to_site"
+        },
+        {
+          "from": "site",
+          "to": "geo",
+          "kind": "site_to_region"
+        },
+        {
+          "from": "site",
+          "to": "route",
+          "kind": "site_to_route"
+        },
+        {
+          "from": "site",
+          "to": "site",
+          "kind": "site_to_site"
+        }
+      ],
+      "listed_on": [
+        {
+          "from": "org",
+          "to": "market",
+          "kind": "listed"
+        }
+      ],
+      "managed_by": [
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "management_contract"
+        }
+      ],
+      "member_of": [
+        {
+          "from": "org",
+          "to": "community",
+          "kind": "org_member_of_industry_body"
+        },
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "org_member_of_alliance"
+        },
+        {
+          "from": "person",
+          "to": "community",
+          "kind": "person_member_of_community"
+        },
+        {
+          "from": "person",
+          "to": "org",
+          "kind": "person_member_of_org"
+        }
+      ],
+      "merged_into": [
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "merger"
+        }
+      ],
+      "mitigated_by": [
+        {
+          "from": "regime",
+          "to": "org",
+          "kind": "regime_mitigated_by_org"
+        },
+        {
+          "from": "regime",
+          "to": "regime",
+          "kind": "regime_chain"
+        },
+        {
+          "from": "regime",
+          "to": "route",
+          "kind": "regime_mitigated_by_route"
+        }
+      ],
+      "operates": [
+        {
+          "from": "org",
+          "to": "site",
+          "kind": "site_operator"
+        }
+      ],
+      "passes_through": [
+        {
+          "from": "route",
+          "to": "geo",
+          "kind": "route_over_region"
+        },
+        {
+          "from": "route",
+          "to": "route",
+          "kind": "route_over_corridor"
+        },
+        {
+          "from": "route",
+          "to": "site",
+          "kind": "route_over_site"
+        },
+        {
+          "from": "site",
+          "to": "route",
+          "kind": "chokepoint_on_corridor"
+        },
+        {
+          "from": "vessel_class",
+          "to": "geo",
+          "kind": "class_over_region"
+        },
+        {
+          "from": "vessel_class",
+          "to": "route",
+          "kind": "class_over_corridor"
+        },
+        {
+          "from": "vessel_class",
+          "to": "site",
+          "kind": "class_over_site"
+        }
+      ],
+      "priced_under": [
+        {
+          "from": "product",
+          "to": "market",
+          "kind": "product_benchmark"
+        },
+        {
+          "from": "product",
+          "to": "regime",
+          "kind": "product_incoterm"
+        },
+        {
+          "from": "route",
+          "to": "market",
+          "kind": "route_benchmark"
+        },
+        {
+          "from": "route",
+          "to": "regime",
+          "kind": "route_incoterm"
+        },
+        {
+          "from": "site",
+          "to": "market",
+          "kind": "site_benchmark"
+        },
+        {
+          "from": "site",
+          "to": "regime",
+          "kind": "site_incoterm"
+        }
+      ],
+      "produces": [
+        {
+          "from": "org",
+          "to": "product",
+          "kind": "org_produces_product_line"
+        }
+      ],
+      "publishes_benchmark": [
+        {
+          "from": "org",
+          "to": "market",
+          "kind": "price_reference_publisher"
+        }
+      ],
+      "regulates": [
+        {
+          "from": "org",
+          "to": "geo",
+          "kind": "regulates_region"
+        },
+        {
+          "from": "org",
+          "to": "market",
+          "kind": "regulates_market"
+        },
+        {
+          "from": "org",
+          "to": "route",
+          "kind": "regulates_corridor"
+        },
+        {
+          "from": "org",
+          "to": "site",
+          "kind": "regulates_site"
+        }
+      ],
+      "requires_capability": [
+        {
+          "from": "product",
+          "to": "site",
+          "kind": "product_needs_capability"
+        }
+      ],
+      "spun_out": [
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "spinoff"
+        }
+      ],
+      "subject_to": [
+        {
+          "from": "community",
+          "to": "regime",
+          "kind": "community_subject_to"
+        },
+        {
+          "from": "geo",
+          "to": "regime",
+          "kind": "region_subject_to"
+        },
+        {
+          "from": "market",
+          "to": "regime",
+          "kind": "market_subject_to"
+        },
+        {
+          "from": "org",
+          "to": "regime",
+          "kind": "org_subject_to"
+        },
+        {
+          "from": "person",
+          "to": "regime",
+          "kind": "person_subject_to"
+        },
+        {
+          "from": "product",
+          "to": "regime",
+          "kind": "product_subject_to"
+        },
+        {
+          "from": "route",
+          "to": "regime",
+          "kind": "route_subject_to"
+        },
+        {
+          "from": "site",
+          "to": "regime",
+          "kind": "site_subject_to"
+        },
+        {
+          "from": "vessel_class",
+          "to": "regime",
+          "kind": "class_subject_to"
+        }
+      ],
+      "subsidiary_of": [
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "subsidiary"
+        }
+      ],
+      "supplies": [
+        {
+          "from": "geo",
+          "to": "geo",
+          "kind": "trade_flow"
+        },
+        {
+          "from": "geo",
+          "to": "market",
+          "kind": "region_to_market"
+        },
+        {
+          "from": "org",
+          "to": "geo",
+          "kind": "actor_to_region"
+        },
+        {
+          "from": "org",
+          "to": "market",
+          "kind": "actor_to_market"
+        },
+        {
+          "from": "org",
+          "to": "org",
+          "kind": "commercial"
+        },
+        {
+          "from": "org",
+          "to": "route",
+          "kind": "actor_via_corridor"
+        },
+        {
+          "from": "org",
+          "to": "site",
+          "kind": "seller_to_destination"
+        },
+        {
+          "from": "site",
+          "to": "geo",
+          "kind": "site_to_region"
+        },
+        {
+          "from": "site",
+          "to": "market",
+          "kind": "site_to_market"
+        },
+        {
+          "from": "site",
+          "to": "site",
+          "kind": "physical_leg"
+        }
+      ],
+      "transships_at": [
+        {
+          "from": "org",
+          "to": "site",
+          "kind": "carrier_hub"
+        },
+        {
+          "from": "route",
+          "to": "geo",
+          "kind": "route_region"
+        },
+        {
+          "from": "route",
+          "to": "site",
+          "kind": "route_hub"
+        },
+        {
+          "from": "site",
+          "to": "site",
+          "kind": "hub_cascade"
+        }
+      ],
+      "wields": [
+        {
+          "from": "org",
+          "to": "mechanism",
+          "kind": "mechanism_user"
+        }
+      ]
+    },
+    "endpoint_blacklist": {
+      "acquired_stake_from": [
+        {
+          "from": "org",
+          "to": "person"
+        },
+        {
+          "from": "person",
+          "to": "org"
+        }
+      ],
+      "alternate_to": [
+        {
+          "from": "route",
+          "to": "org"
+        },
+        {
+          "from": "route",
+          "to": "site"
+        },
+        {
+          "from": "route",
+          "to": "vessel_class"
+        },
+        {
+          "from": "site",
+          "to": "org"
+        },
+        {
+          "from": "site",
+          "to": "route"
+        },
+        {
+          "from": "vessel_class",
+          "to": "route"
+        }
+      ],
+      "asset_contribution": [],
+      "assures": [],
+      "benchmarked_to": [],
+      "beneficially_owns": [
+        {
+          "from": "org",
+          "to": "person"
+        },
+        {
+          "from": "person",
+          "to": "person"
+        }
+      ],
+      "charters": [
+        {
+          "from": "person",
+          "to": "vessel_class"
+        },
+        {
+          "from": "site",
+          "to": "vessel_class"
+        },
+        {
+          "from": "vessel_class",
+          "to": "org"
+        }
+      ],
+      "constrained_by": [
+        {
+          "from": "org",
+          "to": "geo"
+        },
+        {
+          "from": "org",
+          "to": "route"
+        },
+        {
+          "from": "org",
+          "to": "site"
+        },
+        {
+          "from": "person",
+          "to": "geo"
+        },
+        {
+          "from": "product",
+          "to": "geo"
+        }
+      ],
+      "controls_via": [
+        {
+          "from": "org",
+          "to": "person"
+        },
+        {
+          "from": "person",
+          "to": "person"
+        }
+      ],
+      "disrupts": [],
+      "divested_to": [],
+      "enacted_via": [
+        {
+          "from": "decision",
+          "to": "decision"
+        },
+        {
+          "from": "mechanism",
+          "to": "decision"
+        },
+        {
+          "from": "org",
+          "to": "mechanism"
+        }
+      ],
+      "exposes_to": [],
+      "gatekeeps": [
+        {
+          "from": "decision",
+          "to": "org"
+        },
+        {
+          "from": "mechanism",
+          "to": "decision"
+        },
+        {
+          "from": "person",
+          "to": "decision"
+        }
+      ],
+      "holds_board_seat": [
+        {
+          "from": "org",
+          "to": "person"
+        },
+        {
+          "from": "person",
+          "to": "person"
+        }
+      ],
+      "imposes": [
+        {
+          "from": "decision",
+          "to": "org"
+        },
+        {
+          "from": "decision",
+          "to": "site"
+        },
+        {
+          "from": "mechanism",
+          "to": "decision"
+        },
+        {
+          "from": "mechanism",
+          "to": "evidence"
+        },
+        {
+          "from": "mechanism",
+          "to": "mechanism"
+        },
+        {
+          "from": "mechanism",
+          "to": "person"
+        },
+        {
+          "from": "org",
+          "to": "org"
+        }
+      ],
+      "incorporated_in": [
+        {
+          "from": "geo",
+          "to": "org"
+        },
+        {
+          "from": "person",
+          "to": "geo"
+        }
+      ],
+      "influences": [
+        {
+          "from": "decision",
+          "to": "decision"
+        },
+        {
+          "from": "decision",
+          "to": "mechanism"
+        },
+        {
+          "from": "decision",
+          "to": "org"
+        },
+        {
+          "from": "evidence",
+          "to": "decision"
+        },
+        {
+          "from": "evidence",
+          "to": "org"
+        },
+        {
+          "from": "mechanism",
+          "to": "decision"
+        }
+      ],
+      "invested_in": [
+        {
+          "from": "org",
+          "to": "person"
+        },
+        {
+          "from": "person",
+          "to": "org"
+        }
+      ],
+      "joint_venture_with": [
+        {
+          "from": "org",
+          "to": "person"
+        },
+        {
+          "from": "person",
+          "to": "org"
+        },
+        {
+          "from": "person",
+          "to": "person"
+        }
+      ],
+      "leg_connects": [
+        {
+          "from": "org",
+          "to": "org"
+        },
+        {
+          "from": "org",
+          "to": "site"
+        },
+        {
+          "from": "person",
+          "to": "person"
+        },
+        {
+          "from": "product",
+          "to": "product"
+        },
+        {
+          "from": "regime",
+          "to": "regime"
+        },
+        {
+          "from": "site",
+          "to": "org"
+        }
+      ],
+      "listed_on": [
+        {
+          "from": "market",
+          "to": "org"
+        },
+        {
+          "from": "person",
+          "to": "market"
+        }
+      ],
+      "managed_by": [
+        {
+          "from": "org",
+          "to": "person"
+        },
+        {
+          "from": "person",
+          "to": "org"
+        }
+      ],
+      "member_of": [],
+      "merged_into": [],
+      "mitigated_by": [],
+      "operates": [
+        {
+          "from": "org",
+          "to": "org"
+        },
+        {
+          "from": "person",
+          "to": "site"
+        },
+        {
+          "from": "site",
+          "to": "org"
+        }
+      ],
+      "passes_through": [
+        {
+          "from": "org",
+          "to": "geo"
+        },
+        {
+          "from": "org",
+          "to": "site"
+        },
+        {
+          "from": "person",
+          "to": "site"
+        },
+        {
+          "from": "product",
+          "to": "site"
+        }
+      ],
+      "priced_under": [],
+      "produces": [
+        {
+          "from": "person",
+          "to": "product"
+        },
+        {
+          "from": "product",
+          "to": "org"
+        },
+        {
+          "from": "site",
+          "to": "product"
+        }
+      ],
+      "publishes_benchmark": [],
+      "regulates": [
+        {
+          "from": "geo",
+          "to": "org"
+        },
+        {
+          "from": "person",
+          "to": "org"
+        },
+        {
+          "from": "route",
+          "to": "org"
+        },
+        {
+          "from": "site",
+          "to": "org"
+        }
+      ],
+      "requires_capability": [
+        {
+          "from": "org",
+          "to": "site"
+        },
+        {
+          "from": "person",
+          "to": "site"
+        },
+        {
+          "from": "site",
+          "to": "product"
+        }
+      ],
+      "spun_out": [],
+      "subject_to": [],
+      "subsidiary_of": [
+        {
+          "from": "org",
+          "to": "person"
+        },
+        {
+          "from": "person",
+          "to": "org"
+        },
+        {
+          "from": "person",
+          "to": "person"
+        }
+      ],
+      "supplies": [
+        {
+          "from": "evidence",
+          "to": "evidence"
+        },
+        {
+          "from": "person",
+          "to": "person"
+        },
+        {
+          "from": "person",
+          "to": "product"
+        },
+        {
+          "from": "person",
+          "to": "vessel_class"
+        },
+        {
+          "from": "product",
+          "to": "person"
+        },
+        {
+          "from": "product",
+          "to": "product"
+        },
+        {
+          "from": "regime",
+          "to": "regime"
+        },
+        {
+          "from": "vessel_class",
+          "to": "person"
+        }
+      ],
+      "transships_at": [
+        {
+          "from": "person",
+          "to": "site"
+        },
+        {
+          "from": "product",
+          "to": "site"
+        },
+        {
+          "from": "regime",
+          "to": "site"
+        },
+        {
+          "from": "vessel_class",
+          "to": "vessel_class"
+        }
+      ],
+      "wields": [
+        {
+          "from": "decision",
+          "to": "mechanism"
+        },
+        {
+          "from": "mechanism",
+          "to": "org"
+        },
+        {
+          "from": "person",
+          "to": "mechanism"
+        }
+      ]
+    }
+  },
+  "incoterms": [
+    "CFR",
+    "CIF",
+    "CIP",
+    "CPT",
+    "DAP",
+    "DDP",
+    "DPU",
+    "EXW",
+    "FAS",
+    "FCA",
+    "FOB"
+  ],
+  "sanctions_regimes": {
+    "BIS_EAR_ENTITY_LIST": {
+      "canonical_path": "/regime/us/bis-ear-entity-list",
+      "label": "BIS EAR Entity List",
+      "jurisdiction_iso2": "us",
+      "aliases": [
+        "entity list",
+        "bis entity list",
+        "ear entity list",
+        "us entity list",
+        "bis ear entity list"
+      ]
+    },
+    "BIS_FDPR": {
+      "canonical_path": "/regime/us/bis-fdpr",
+      "label": "BIS Foreign Direct Product Rule",
+      "jurisdiction_iso2": "us",
+      "aliases": [
+        "fdpr",
+        "foreign direct product rule",
+        "bis fdpr",
+        "foreign direct product"
+      ]
+    },
+    "CHIPS_ACT_GUARDRAILS": {
+      "canonical_path": "/regime/us/chips-act-guardrails",
+      "label": "CHIPS Act guardrails",
+      "jurisdiction_iso2": "us",
+      "aliases": [
+        "chips act guardrails",
+        "chips act",
+        "chips and science act",
+        "chips act subsidy guardrails"
+      ]
+    },
+    "EU_DUAL_USE": {
+      "canonical_path": "/regime/eu/dual-use",
+      "label": "EU dual-use export controls",
+      "jurisdiction_iso2": "eu",
+      "aliases": [
+        "eu dual use",
+        "eu dual-use",
+        "eu dual-use regulation",
+        "regulation 2021/821"
+      ]
+    },
+    "EU_RUSSIA_OIL_CAP": {
+      "canonical_path": "/regime/eu/russia-oil-price-cap",
+      "label": "EU Russia oil price cap",
+      "jurisdiction_iso2": "eu",
+      "aliases": [
+        "eu price cap",
+        "eu oil cap",
+        "eu russia oil cap",
+        "eu oil price cap"
+      ]
+    },
+    "G7_OIL_PRICE_CAP": {
+      "canonical_path": "/regime/int/g7-oil-price-cap",
+      "label": "G7 oil price cap",
+      "jurisdiction_iso2": "int",
+      "aliases": [
+        "g7 price cap",
+        "g7 oil price cap",
+        "russian oil price cap",
+        "price cap coalition",
+        "oil price cap"
+      ]
+    },
+    "OFAC_SDN": {
+      "canonical_path": "/regime/us/ofac-sdn",
+      "label": "OFAC SDN List",
+      "jurisdiction_iso2": "us",
+      "aliases": [
+        "ofac sdn",
+        "ofac",
+        "specially designated nationals",
+        "sdn list",
+        "ofac designations"
+      ]
+    },
+    "OFAC_SSI": {
+      "canonical_path": "/regime/us/ofac-ssi",
+      "label": "OFAC Sectoral Sanctions Identifications",
+      "jurisdiction_iso2": "us",
+      "aliases": [
+        "ofac ssi",
+        "sectoral sanctions",
+        "ssi list",
+        "sectoral sanctions identifications"
+      ]
+    },
+    "UK_OFSI": {
+      "canonical_path": "/regime/uk/ofsi",
+      "label": "UK OFSI financial sanctions",
+      "jurisdiction_iso2": "uk",
+      "aliases": [
+        "uk ofsi",
+        "ofsi",
+        "uk financial sanctions"
+      ]
+    },
+    "UN_DPRK": {
+      "canonical_path": "/regime/un/dprk-sanctions",
+      "label": "UN DPRK sanctions",
+      "jurisdiction_iso2": "int",
+      "aliases": [
+        "un dprk",
+        "un north korea sanctions",
+        "un dprk sanctions",
+        "1718 sanctions"
+      ]
+    }
+  },
+  "attribute_spec": [
+    {
+      "name": "schema_version",
+      "carrier": "fragment",
+      "applies_to": [
+        "*"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Stamped by migrate-cli (and on every write going forward) to track which canonical-control-plane revision produced the document. Format: '<major>.<minor>', e.g. '2.0'."
+    },
+    {
+      "name": "coordinates",
+      "carrier": "fragment",
+      "applies_to": [
+        "site",
+        "geo",
+        "route"
+      ],
+      "type": "geo_point",
+      "required": false,
+      "description": "Lat/lng pair: {'lat': float, 'lng': float}. For /route this is a representative point; full polyline lives in `geometry`."
+    },
+    {
+      "name": "geometry",
+      "carrier": "fragment",
+      "applies_to": [
+        "route",
+        "geo",
+        "site"
+      ],
+      "type": "geo_polyline",
+      "required": false,
+      "description": "GeoJSON-like polyline / polygon for routes (corridor curve), regions (boundary), and large sites (footprint)."
+    },
+    {
+      "name": "geo_slug",
+      "carrier": "fragment",
+      "applies_to": [
+        "site",
+        "geo",
+        "org",
+        "person",
+        "community",
+        "market",
+        "regime",
+        "project",
+        "decision"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Denormalized iso2 / region slug from the canonical path's geo segment, cached for fast filtering on the FE."
+    },
+    {
+      "name": "geo_feature_type",
+      "carrier": "fragment",
+      "applies_to": [
+        "geo",
+        "site"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "GeoNames feature class (P=populated place, S=spot/structure, T=mountain, etc.) when known."
+    },
+    {
+      "name": "radius_km",
+      "carrier": "fragment",
+      "applies_to": [
+        "geo",
+        "site"
+      ],
+      "type": "number",
+      "required": false,
+      "description": "Effective radius in kilometers for circular zone rendering on the map."
+    },
+    {
+      "name": "lifecycle_stage",
+      "carrier": "fragment",
+      "applies_to": [
+        "org",
+        "site",
+        "project",
+        "product",
+        "decision"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Free-form lifecycle marker (e.g. 'planned', 'operational', 'decommissioned', 'pending', 'expired'). Decision lifecycle uses the more specific `status` attribute."
+    },
+    {
+      "name": "market_segments",
+      "carrier": "fragment",
+      "applies_to": [
+        "org",
+        "site",
+        "product",
+        "market"
+      ],
+      "type": "string_array",
+      "required": false,
+      "description": "List of market-segment slugs the fragment participates in."
+    },
+    {
+      "name": "industry_paths",
+      "carrier": "fragment",
+      "applies_to": [
+        "org",
+        "site",
+        "product"
+      ],
+      "type": "string_array",
+      "required": false,
+      "description": "Canonical industry-taxonomy paths (e.g. /industry/chemicals/specialty)."
+    },
+    {
+      "name": "sphere_paths",
+      "carrier": "fragment",
+      "applies_to": [
+        "org",
+        "site",
+        "product",
+        "decision",
+        "mechanism"
+      ],
+      "type": "string_array",
+      "required": false,
+      "description": "Canonical sphere paths (L1/L2/L3 fractal taxonomy slugs). Replaces the now-folded /sphere/* fragments."
+    },
+    {
+      "name": "domain_slug",
+      "carrier": "fragment",
+      "applies_to": [
+        "decision",
+        "mechanism",
+        "org",
+        "project"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Domain slug lifted from the now-folded /domain/* fragments; identifies which strategic domain a decision/mechanism belongs to."
+    },
+    {
+      "name": "discovered_in_domain",
+      "carrier": "fragment",
+      "applies_to": [
+        "decision",
+        "mechanism"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Provenance attribute: which /domain/* fragment first surfaced this decision/mechanism. Lifted from the legacy SURFACES edge."
+    },
+    {
+      "name": "identifiers",
+      "carrier": "fragment",
+      "applies_to": [
+        "org",
+        "site",
+        "person",
+        "vessel_class",
+        "regime"
+      ],
+      "type": "object",
+      "required": false,
+      "description": "Map of external IDs: lei, isin, imo, mmso, wikidata_qid, gleif_id, etc."
+    },
+    {
+      "name": "name_history",
+      "carrier": "fragment",
+      "applies_to": [
+        "org",
+        "site",
+        "person"
+      ],
+      "type": "object",
+      "required": false,
+      "description": "Historical names with valid_from/valid_to ranges."
+    },
+    {
+      "name": "alternative_names",
+      "carrier": "fragment",
+      "applies_to": [
+        "*"
+      ],
+      "type": "string_array",
+      "required": false,
+      "description": "Known aliases / surface-form variants beyond the primary `surface_forms` list."
+    },
+    {
+      "name": "org_size",
+      "carrier": "fragment",
+      "applies_to": [
+        "org"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Coarse org size bucket (micro / small / mid / large / mega)."
+    },
+    {
+      "name": "gov_type",
+      "carrier": "fragment",
+      "applies_to": [
+        "org"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "For org.gov subtype: ministry / agency / regulator / soe / parliament / court / etc."
+    },
+    {
+      "name": "parent_path",
+      "carrier": "fragment",
+      "applies_to": [
+        "org",
+        "site",
+        "product",
+        "geo"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Canonical path of the parent fragment (org parent, site operator, product family parent, geo container)."
+    },
+    {
+      "name": "community_subtype",
+      "carrier": "fragment",
+      "applies_to": [
+        "community"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Closed enum (see COMMUNITY_SUBTYPES)."
+    },
+    {
+      "name": "mode",
+      "carrier": "fragment",
+      "applies_to": [
+        "route"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Transport mode of the corridor: sea / rail / pipeline / road / multimodal / air."
+    },
+    {
+      "name": "length_km",
+      "carrier": "fragment",
+      "applies_to": [
+        "route"
+      ],
+      "type": "number",
+      "required": false,
+      "description": "Approximate corridor length in kilometers."
+    },
+    {
+      "name": "vessel_class_refs",
+      "carrier": "fragment",
+      "applies_to": [
+        "route"
+      ],
+      "type": "string_array",
+      "required": false,
+      "description": "List of /vessel_class/* canonical paths the corridor supports."
+    },
+    {
+      "name": "status",
+      "carrier": "fragment",
+      "applies_to": [
+        "decision"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Decision lifecycle state: pending / decided / expired / withdrawn / superseded."
+    },
+    {
+      "name": "deadline",
+      "carrier": "fragment",
+      "applies_to": [
+        "decision"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "ISO 8601 deadline / expected-decision date."
+    },
+    {
+      "name": "outcome",
+      "carrier": "fragment",
+      "applies_to": [
+        "decision"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Free-form description of the decided outcome (populated when status=decided)."
+    },
+    {
+      "name": "product_fragment_id",
+      "carrier": "edge",
+      "applies_to": [
+        "supplies"
+      ],
+      "type": "string",
+      "required": true,
+      "description": "Required fragment id of the /product cargo being supplied. Validated by validate_graph."
+    },
+    {
+      "name": "kind",
+      "carrier": "edge",
+      "applies_to": [
+        "supplies",
+        "leg_connects",
+        "transships_at",
+        "passes_through",
+        "alternate_to",
+        "produces",
+        "operates",
+        "charters",
+        "regulates",
+        "constrained_by",
+        "requires_capability",
+        "subject_to",
+        "exposes_to",
+        "mitigated_by",
+        "priced_under",
+        "benchmarked_to",
+        "publishes_benchmark",
+        "subsidiary_of",
+        "beneficially_owns",
+        "controls_via",
+        "holds_board_seat",
+        "joint_venture_with",
+        "listed_on",
+        "incorporated_in",
+        "managed_by",
+        "invested_in",
+        "acquired_stake_from",
+        "asset_contribution",
+        "merged_into",
+        "spun_out",
+        "divested_to",
+        "gatekeeps",
+        "wields",
+        "enacted_via",
+        "imposes",
+        "influences",
+        "assures",
+        "member_of",
+        "disrupts"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Endpoint-projection kind label stamped from RELATION_ENDPOINT_KINDS at edge build time. Universal across recognized relations."
+    },
+    {
+      "name": "route_fragment_id",
+      "carrier": "edge",
+      "applies_to": [
+        "supplies",
+        "leg_connects",
+        "passes_through",
+        "transships_at"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Reference to the /route corridor this leg traverses; the route holds the geometry and mode."
+    },
+    {
+      "name": "vessel_class_fragment_id",
+      "carrier": "edge",
+      "applies_to": [
+        "supplies",
+        "charters",
+        "passes_through"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Reference to the /vessel_class used on the leg / charter."
+    },
+    {
+      "name": "route_overlay_key",
+      "carrier": "edge",
+      "applies_to": [
+        "supplies",
+        "leg_connects"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Stable key grouping multiple supplies projections onto the same physical corridor for map overlay rendering."
+    },
+    {
+      "name": "incoterm",
+      "carrier": "edge",
+      "applies_to": [
+        "supplies",
+        "charters"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Optional ICC Incoterms 2020 code (closed enum INCOTERMS_2020). Validated by validate_graph."
+    },
+    {
+      "name": "gated_by_decision_fragment_id",
+      "carrier": "edge",
+      "applies_to": [
+        "supplies",
+        "subject_to"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Hard gating: if the referenced /decision goes against the actor, this flow is blocked (e.g. denied license, sanctions designation)."
+    },
+    {
+      "name": "influenced_by_decision_fragment_id",
+      "carrier": "edge",
+      "applies_to": [
+        "supplies",
+        "subject_to"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Soft shaping: the referenced /decision changes the cost/terms/timing of this flow without blocking it (compliance overhead, reinterpreted requirements, etc.)."
+    },
+    {
+      "name": "influence_kind",
+      "carrier": "edge",
+      "applies_to": [
+        "influences"
+      ],
+      "type": "enum:InfluenceKind",
+      "required": true,
+      "description": "Required closed enum (see INFLUENCE_KINDS / normalize_influence_kind). Disambiguates the channel through which informal power is exerted."
+    },
+    {
+      "name": "evidence_refs",
+      "carrier": "edge",
+      "applies_to": [
+        "influences",
+        "imposes",
+        "gatekeeps",
+        "enacted_via",
+        "wields",
+        "assures"
+      ],
+      "type": "string_array",
+      "required": false,
+      "description": "Optional list of evidence-archive source ids supporting the relation (kept on the edge for fast UI hover-cards; canonical claim refs live in source_claim_ids)."
+    },
+    {
+      "name": "assurance_type",
+      "carrier": "edge",
+      "applies_to": [
+        "assures"
+      ],
+      "type": "enum:AssuranceType",
+      "required": true,
+      "description": "Required closed enum (see ASSURANCE_TYPES / normalize_assurance_type). Distinguishes audit / certification / regulatory_inspection / attestation."
+    },
+    {
+      "name": "period_start",
+      "carrier": "edge",
+      "applies_to": [
+        "assures"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "ISO 8601 start of the assurance period."
+    },
+    {
+      "name": "period_end",
+      "carrier": "edge",
+      "applies_to": [
+        "assures"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "ISO 8601 end of the assurance period."
+    },
+    {
+      "name": "report_url",
+      "carrier": "edge",
+      "applies_to": [
+        "assures"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "URL of the published assurance report (when public)."
+    },
+    {
+      "name": "mobile_asset_kind",
+      "carrier": "fragment",
+      "applies_to": [
+        "mobile_asset"
+      ],
+      "type": "enum:MobileAssetKind",
+      "required": true,
+      "description": "Closed enum (see MOBILE_ASSET_KINDS / normalize_mobile_asset_kind). Distinguishes vessel / aircraft / locomotive / rig / satellite / vehicle / asset."
+    },
+    {
+      "name": "vessel_class_path",
+      "carrier": "fragment",
+      "applies_to": [
+        "mobile_asset"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Canonical /vessel_class/* path describing this individual asset's class (LR2, VLCC, A380, etc.)."
+    },
+    {
+      "name": "operator_org_path",
+      "carrier": "fragment",
+      "applies_to": [
+        "mobile_asset"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Canonical path of the org currently operating the asset (operator/charterer/airline/carrier)."
+    },
+    {
+      "name": "owner_org_path",
+      "carrier": "fragment",
+      "applies_to": [
+        "mobile_asset"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Canonical path of the org that owns the asset (often differs from operator)."
+    },
+    {
+      "name": "flag_geo_path",
+      "carrier": "fragment",
+      "applies_to": [
+        "mobile_asset"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Canonical /geo/* path of the flag-of-registration jurisdiction (vessels) or registration country (aircraft)."
+    },
+    {
+      "name": "last_known_position",
+      "carrier": "fragment",
+      "applies_to": [
+        "mobile_asset"
+      ],
+      "type": "geo_point",
+      "required": false,
+      "description": "Most recent reported lat/lng of the mobile asset (AIS / ADS-B / proprietary tracker)."
+    },
+    {
+      "name": "last_position_observed_at",
+      "carrier": "fragment",
+      "applies_to": [
+        "mobile_asset"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "ISO 8601 timestamp of the last reported position."
+    },
+    {
+      "name": "membership_role",
+      "carrier": "edge",
+      "applies_to": [
+        "member_of"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Free-form role of the member within the body (chair / member / observer / treasurer / etc.). Intentionally not a closed enum yet — domain too broad."
+    },
+    {
+      "name": "membership_status",
+      "carrier": "edge",
+      "applies_to": [
+        "member_of"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Lifecycle of the membership: active / suspended / former / pending. Drives historical filters in FE."
+    },
+    {
+      "name": "joined_at",
+      "carrier": "edge",
+      "applies_to": [
+        "member_of"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "ISO 8601 date the membership began."
+    },
+    {
+      "name": "left_at",
+      "carrier": "edge",
+      "applies_to": [
+        "member_of"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "ISO 8601 date the membership ended (only set when membership_status != active)."
+    },
+    {
+      "name": "disruption_kind",
+      "carrier": "edge",
+      "applies_to": [
+        "disrupts"
+      ],
+      "type": "enum:DisruptionKind",
+      "required": true,
+      "description": "Required closed enum (see DISRUPTION_KINDS / normalize_disruption_kind). Names the qualitative nature of the disruption."
+    },
+    {
+      "name": "severity",
+      "carrier": "edge",
+      "applies_to": [
+        "disrupts"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "Coarse severity bucket: low / medium / high / critical. Used by FE for color-coding affected-asset overlays."
+    },
+    {
+      "name": "valid_from",
+      "carrier": "edge",
+      "applies_to": [
+        "disrupts",
+        "member_of",
+        "subject_to",
+        "supplies"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "ISO 8601 start of the time-bound effect (if any). Universal time-bound qualifier; declared once with multi-relation applies_to so codegen emits a single helper."
+    },
+    {
+      "name": "valid_to",
+      "carrier": "edge",
+      "applies_to": [
+        "disrupts",
+        "member_of",
+        "subject_to",
+        "supplies"
+      ],
+      "type": "string",
+      "required": false,
+      "description": "ISO 8601 end of the time-bound effect (if any)."
+    }
+  ]
+}
