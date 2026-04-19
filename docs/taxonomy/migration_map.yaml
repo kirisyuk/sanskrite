@@ -578,3 +578,24 @@ materialized_kind_map:
     notes: "Replace ADMINISTERS/MANAGES chains with operates / managed_by chains."
   ECOSYSTEM_MAP:
     disposition: rewrite_payload
+
+# -----------------------------------------------------------------------------
+# Firestore collections (CriticalChain legacy → AH targets for migrate-cli P10)
+# -----------------------------------------------------------------------------
+collections_map:
+  criticalchain_nodes:
+    disposition: project_then_delete
+    target_collections: [horizon_fragments]
+    notes: "NodeDocument (material|facility) becomes AH fragments per REMAINING_WORK_SPEC §3.3; originals deleted after successful migrate."
+  criticalchain_edges:
+    disposition: project_then_delete
+    target_collections: [dependency_edges]
+    notes: "ProcessingStep|Route documents become supplies/produces/leg_connects edges; originals deleted after migrate."
+  criticalchain_conflict_zones:
+    disposition: project_then_delete
+    target_collections: [horizon_fragments, dependency_edges]
+    notes: "ConflictZone → geo/affected_zone + disrupts edges to affected sites/routes."
+  criticalchain_sanctions:
+    disposition: project_then_delete
+    target_collections: [horizon_fragments, dependency_edges]
+    notes: "SanctionRecord → evidence/sanction + subject_to/assurance_of per issuer routing in P10 criticalchain_migrator."
