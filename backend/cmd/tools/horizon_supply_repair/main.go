@@ -19,6 +19,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 const toolName = "tool:horizon_supply_repair"
@@ -339,7 +340,7 @@ func main() {
 			}
 			rows = append(rows, searchRow{
 				ID:            strings.TrimSpace(result.ID),
-				Type:          string(result.Type),
+				Type:          string(result.Class),
 				CanonicalPath: normalizePath(result.CanonicalPath),
 				Label:         firstNonEmpty(result.Labels["en"], result.Identifiers["legalName"], result.Identifiers["shortName"]),
 			})
@@ -414,10 +415,10 @@ func (r *runner) collectEvidence(limit, pageSize int) (map[string]*supplyEvidenc
 	if err := r.scanSupplyLinkFragments(out, limit, pageSize); err != nil {
 		return nil, fmt.Errorf("scan supply links: %w", err)
 	}
-	if err := r.scanActorEdges(out, models.DependencyTypeSuppliesTo, limit, pageSize); err != nil {
+	if err := r.scanActorEdges(out, ah.RelationNameSupplies, limit, pageSize); err != nil {
 		return nil, fmt.Errorf("scan actor supplies edges: %w", err)
 	}
-	if err := r.scanActorEdges(out, models.DependencyTypeDependsOn, limit, pageSize); err != nil {
+	if err := r.scanActorEdges(out, ah.RelationName("depends_on"), limit, pageSize); err != nil {
 		return nil, fmt.Errorf("scan actor depends edges: %w", err)
 	}
 	if err := r.scanArtifacts(out, limit, pageSize); err != nil {
@@ -459,11 +460,11 @@ func (r *runner) resolveFocusRefs(seed []string, expandOwnedFacilities bool) ([]
 		if err != nil || frag == nil || strings.TrimSpace(frag.ID) == "" {
 			continue
 		}
-		for _, edgeType := range []models.DependencyType{
-			models.DependencyTypeOwns,
-			models.DependencyTypeControls,
-			models.DependencyTypeManages,
-			models.DependencyTypeAdministers,
+		for _, edgeType := range []ah.RelationName{
+			ah.RelationNameBeneficiallyOwns,
+			ah.RelationNameControlsVia,
+			ah.RelationName("manages"),
+			ah.RelationName("administers"),
 		} {
 			edges, err := r.edgesRepo.ListBySource(r.ctx, r.tenantID, frag.ID, &edgeType, 200)
 			if err != nil {
@@ -490,7 +491,8 @@ func (r *runner) resolveFocusRefs(seed []string, expandOwnedFacilities bool) ([]
 func (r *runner) scanSupplyLinkFragments(out map[string]*supplyEvidence, limit, pageSize int) error {
 	base := r.db.Collection("horizon_fragments").
 		Where("tenantId", "==", r.tenantID).
-		Where("type", "==", string(models.FragmentTypeSupplyLink)).
+		Where("class", "==", string(models.ClassSubtypeSupplyLink.Class)).
+		Where("subtype", "==", models.ClassSubtypeSupplyLink.Subtype).
 		OrderBy(firestore.DocumentID, firestore.Asc)
 	if pageSize <= 0 {
 		pageSize = 400
@@ -539,7 +541,7 @@ func (r *runner) scanSupplyLinkFragments(out map[string]*supplyEvidence, limit, 
 	return nil
 }
 
-func (r *runner) scanActorEdges(out map[string]*supplyEvidence, edgeType models.DependencyType, limit, pageSize int) error {
+func (r *runner) scanActorEdges(out map[string]*supplyEvidence, edgeType ah.RelationName, limit, pageSize int) error {
 	base := r.db.Collection("horizon_dependency_edges").
 		Where("tenantId", "==", r.tenantID).
 		Where("type", "==", string(edgeType)).
@@ -591,7 +593,7 @@ func (r *runner) scanActorEdges(out map[string]*supplyEvidence, edgeType models.
 				SupplierRef:      srcPath,
 				ProductRef:       productRef,
 				CustomerRef:      dstPath,
-				TransportViaRefs: qualifierStringSlice(edge.Qualifiers, models.QualifierTransportVia),
+				TransportViaRefs: qualifierStringSlice(edge.Qualifiers, "transport_via"),
 				Confidence:       edge.Properties.Criticality,
 				Metrics:          cloneMetrics(edge.Metrics),
 			}
@@ -685,7 +687,8 @@ func (r *runner) scanSupplyLinksByField(out map[string]*supplyEvidence, refs []s
 	for _, chunk := range chunks {
 		docs, err := r.db.Collection("horizon_fragments").
 			Where("tenantId", "==", r.tenantID).
-			Where("type", "==", string(models.FragmentTypeSupplyLink)).
+			Where("class", "==", string(models.ClassSubtypeSupplyLink.Class)).
+			Where("subtype", "==", models.ClassSubtypeSupplyLink.Subtype).
 			Where(field, "in", chunk).
 			Limit(maxRows).
 			Documents(r.ctx).
@@ -695,7 +698,7 @@ func (r *runner) scanSupplyLinksByField(out map[string]*supplyEvidence, refs []s
 			if fallbackLimit < 200 {
 				fallbackLimit = 200
 			}
-			frags, listErr := r.fragmentsRepo.ListByTypeAndTenant(r.ctx, r.tenantID, models.FragmentTypeSupplyLink, fallbackLimit)
+			frags, listErr := r.fragmentsRepo.ListByClassSubtypeAndTenant(r.ctx, r.tenantID, models.ClassSubtypeSupplyLink.Class, models.ClassSubtypeSupplyLink.Subtype, fallbackLimit)
 			if listErr != nil {
 				return err
 			}
@@ -764,9 +767,9 @@ func (r *runner) scanFocusedActorEdges(out map[string]*supplyEvidence, refs []st
 		if err != nil || frag == nil || strings.TrimSpace(frag.ID) == "" {
 			continue
 		}
-		for _, edgeType := range []models.DependencyType{
-			models.DependencyTypeSuppliesTo,
-			models.DependencyTypeDependsOn,
+		for _, edgeType := range []ah.RelationName{
+			ah.RelationNameSupplies,
+			ah.RelationName("depends_on"),
 		} {
 			srcEdges, err := r.edgesRepo.ListBySource(r.ctx, r.tenantID, frag.ID, &edgeType, focusedEdgeLimit(limit))
 			if err == nil {
@@ -795,7 +798,7 @@ func (r *runner) addActorEdgeEvidence(out map[string]*supplyEvidence, edge *mode
 	}
 	edgeID := strings.TrimSpace(edge.ID)
 	if edgeID == "" {
-		edgeID = fmt.Sprintf("%s|%s|%s", edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+		edgeID = fmt.Sprintf("%s|%s|%s", edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 	}
 	if _, seen := seenEdgeIDs[edgeID]; seen {
 		return false
@@ -819,11 +822,11 @@ func (r *runner) addActorEdgeEvidence(out map[string]*supplyEvidence, edge *mode
 		SupplierRef:      srcPath,
 		ProductRef:       productRef,
 		CustomerRef:      dstPath,
-		TransportViaRefs: qualifierStringSlice(edge.Qualifiers, models.QualifierTransportVia),
+		TransportViaRefs: qualifierStringSlice(edge.Qualifiers, "transport_via"),
 		Confidence:       edge.Properties.Criticality,
 		Metrics:          cloneMetrics(edge.Metrics),
 	}
-	r.addEvidence(out, ev, "actor_edge_"+string(edge.Type), edgeID, false, false, true)
+	r.addEvidence(out, ev, "actor_edge_"+string(edge.Relation), edgeID, false, false, true)
 	return true
 }
 
@@ -1029,13 +1032,13 @@ func (r *runner) auditEvidence(evidence map[string]*supplyEvidence, sampleLimit 
 			summary.MissingEndpoints++
 		}
 
-		hasProduces := supplierFrag != nil && productFrag != nil && r.edgeExists(supplierFrag.ID, productFrag.ID, models.DependencyTypeProduces)
+		hasProduces := supplierFrag != nil && productFrag != nil && r.edgeExists(supplierFrag.ID, productFrag.ID, ah.RelationNameProduces)
 		if !hasProduces {
 			summary.MissingProduces++
 			appendSample(summary, sampleLimit, "missing PRODUCES", ev)
 		}
 
-		hasProductSupply := productFrag != nil && customerFrag != nil && r.edgeExists(productFrag.ID, customerFrag.ID, models.DependencyTypeSuppliesTo)
+		hasProductSupply := productFrag != nil && customerFrag != nil && r.edgeExists(productFrag.ID, customerFrag.ID, ah.RelationNameSupplies)
 		if !hasProductSupply {
 			summary.MissingProductSupply++
 			appendSample(summary, sampleLimit, "missing PRODUCT->ACTOR SUPPLIES_TO", ev)
@@ -1283,7 +1286,7 @@ func (r *runner) queryFacility(facility, owner string, evidence map[string]*supp
 	}
 
 	productSet := map[string]struct{}{}
-	producesType := models.DependencyTypeProduces
+	producesType := ah.RelationNameProduces
 	outEdges, err := r.edgesRepo.ListBySource(r.ctx, r.tenantID, facFrag.ID, &producesType, 200)
 	if err == nil {
 		for _, edge := range outEdges {
@@ -1312,11 +1315,11 @@ func (r *runner) queryFacility(facility, owner string, evidence map[string]*supp
 		}
 	}
 
-	ownerTypes := []models.DependencyType{
-		models.DependencyTypeOwns,
-		models.DependencyTypeControls,
-		models.DependencyTypeOperatesIn,
-		models.DependencyTypeAdministers,
+	ownerTypes := []ah.RelationName{
+		ah.RelationNameBeneficiallyOwns,
+		ah.RelationNameControlsVia,
+		ah.RelationName("operates_in"),
+		ah.RelationName("administers"),
 	}
 	for _, edgeType := range ownerTypes {
 		edges, err := r.edgesRepo.ListByTarget(r.ctx, r.tenantID, facFrag.ID, &edgeType, 50)
@@ -1703,16 +1706,16 @@ func (r *runner) ensureProducesEdge(supplierFrag, productFrag *models.HorizonFra
 	if supplierFrag == nil || productFrag == nil {
 		return false, nil
 	}
-	if r.edgeExists(supplierFrag.ID, productFrag.ID, models.DependencyTypeProduces) {
+	if r.edgeExists(supplierFrag.ID, productFrag.ID, ah.RelationNameProduces) {
 		return false, nil
 	}
 	if !applyWrites {
 		return true, nil
 	}
-	edge := newDerivedEdge(supplierFrag.ID, productFrag.ID, models.DependencyTypeProduces, ev, supplierFrag.CanonicalPath, productFrag.CanonicalPath)
+	edge := newDerivedEdge(supplierFrag.ID, productFrag.ID, ah.RelationNameProduces, ev, supplierFrag.CanonicalPath, productFrag.CanonicalPath)
 	_, err := r.edgesRepo.Create(r.ctx, edge)
 	if err == nil {
-		r.edgeExistsCache[r.edgeExistsKey(supplierFrag.ID, productFrag.ID, models.DependencyTypeProduces)] = true
+		r.edgeExistsCache[r.edgeExistsKey(supplierFrag.ID, productFrag.ID, ah.RelationNameProduces)] = true
 	}
 	return err == nil, err
 }
@@ -1721,18 +1724,18 @@ func (r *runner) ensureProductSuppliesEdge(productFrag, customerFrag *models.Hor
 	if productFrag == nil || customerFrag == nil {
 		return false, nil
 	}
-	if r.edgeExists(productFrag.ID, customerFrag.ID, models.DependencyTypeSuppliesTo) {
+	if r.edgeExists(productFrag.ID, customerFrag.ID, ah.RelationNameSupplies) {
 		return false, nil
 	}
 	if !applyWrites {
 		return true, nil
 	}
-	edge := newDerivedEdge(productFrag.ID, customerFrag.ID, models.DependencyTypeSuppliesTo, ev, productFrag.CanonicalPath, customerFrag.CanonicalPath)
+	edge := newDerivedEdge(productFrag.ID, customerFrag.ID, ah.RelationNameSupplies, ev, productFrag.CanonicalPath, customerFrag.CanonicalPath)
 	edge.Qualifiers["productRef"] = ev.ProductRef
 	edge.Qualifiers["product_ref"] = ev.ProductRef
 	_, err := r.edgesRepo.Create(r.ctx, edge)
 	if err == nil {
-		r.edgeExistsCache[r.edgeExistsKey(productFrag.ID, customerFrag.ID, models.DependencyTypeSuppliesTo)] = true
+		r.edgeExistsCache[r.edgeExistsKey(productFrag.ID, customerFrag.ID, ah.RelationNameSupplies)] = true
 	}
 	return err == nil, err
 }
@@ -1744,7 +1747,7 @@ func (r *runner) ensureActorSuppliesEdge(supplierFrag, customerFrag *models.Hori
 	if strings.TrimSpace(supplierFrag.ID) == strings.TrimSpace(customerFrag.ID) {
 		return false, nil
 	}
-	edges, err := r.edgesRepo.ListBySourceTargetAndType(r.ctx, r.tenantID, supplierFrag.ID, customerFrag.ID, models.DependencyTypeSuppliesTo, 20)
+	edges, err := r.edgesRepo.ListBySourceTargetAndType(r.ctx, r.tenantID, supplierFrag.ID, customerFrag.ID, ah.RelationNameSupplies, 20)
 	if err != nil {
 		return false, err
 	}
@@ -1759,7 +1762,7 @@ func (r *runner) ensureActorSuppliesEdge(supplierFrag, customerFrag *models.Hori
 	if !applyWrites {
 		return true, nil
 	}
-	edge := newDerivedEdge(supplierFrag.ID, customerFrag.ID, models.DependencyTypeSuppliesTo, ev, supplierFrag.CanonicalPath, customerFrag.CanonicalPath)
+	edge := newDerivedEdge(supplierFrag.ID, customerFrag.ID, ah.RelationNameSupplies, ev, supplierFrag.CanonicalPath, customerFrag.CanonicalPath)
 	edge.Qualifiers["productRef"] = ev.ProductRef
 	edge.Qualifiers["product_ref"] = ev.ProductRef
 	_, err = r.edgesRepo.Create(r.ctx, edge)
@@ -1830,7 +1833,8 @@ func (r *runner) ensureSupplyLink(ev *supplyEvidence, applyWrites bool) (created
 	now := time.Now().UTC()
 	frag := &models.HorizonFragment{
 		TenantID:         r.tenantID,
-		Type:             models.FragmentTypeSupplyLink,
+		Class:            models.ClassSubtypeSupplyLink.Class,
+		Subtype:          models.ClassSubtypeSupplyLink.Subtype,
 		CanonicalPath:    canonicalPath,
 		SupplierRef:      &supplierRef,
 		ProductRef:       &productRef,
@@ -1892,7 +1896,7 @@ func (r *runner) ensureArtifact(ev *supplyEvidence, applyWrites bool) (bool, err
 	return err == nil, err
 }
 
-func newDerivedEdge(sourceID, targetID string, edgeType models.DependencyType, ev *supplyEvidence, sourcePath, targetPath string) *models.DependencyEdge {
+func newDerivedEdge(sourceID, targetID string, edgeType ah.RelationName, ev *supplyEvidence, sourcePath, targetPath string) *models.DependencyEdge {
 	now := time.Now().UTC()
 	qualifiers := map[string]interface{}{
 		"fromSupplyChain":     true,
@@ -1901,10 +1905,9 @@ func newDerivedEdge(sourceID, targetID string, edgeType models.DependencyType, e
 		"sourceCanonicalPath": normalizePath(sourcePath),
 		"targetCanonicalPath": normalizePath(targetPath),
 		"reason":              "repaired_from_supply_evidence",
-		"facet":               string(models.FacetSupply),
 	}
 	if len(ev.TransportViaRefs) > 0 {
-		qualifiers[models.QualifierTransportVia] = append([]string(nil), ev.TransportViaRefs...)
+		qualifiers["transport_via"] = append([]string(nil), ev.TransportViaRefs...)
 	}
 	if len(ev.SourceIDs) > 0 {
 		qualifiers["repairSourceIds"] = append([]string(nil), ev.SourceIDs...)
@@ -1913,7 +1916,7 @@ func newDerivedEdge(sourceID, targetID string, edgeType models.DependencyType, e
 		TenantID:         "global",
 		SourceFragmentID: strings.TrimSpace(sourceID),
 		TargetFragmentID: strings.TrimSpace(targetID),
-		Type:             edgeType,
+		Relation:         edgeType,
 		Properties: models.EdgeProperties{
 			Criticality:   clamp01(ev.Confidence),
 			Amplification: 1.0,
@@ -1950,10 +1953,10 @@ func applyRepairQualifiers(q map[string]interface{}, ev *supplyEvidence) bool {
 		changed = true
 	}
 	if len(ev.TransportViaRefs) > 0 {
-		current := qualifierStringSlice(q, models.QualifierTransportVia)
+		current := qualifierStringSlice(q, "transport_via")
 		merged := mergeStrings(current, ev.TransportViaRefs)
 		if !equalStrings(current, merged) {
-			q[models.QualifierTransportVia] = merged
+			q["transport_via"] = merged
 			changed = true
 		}
 	}
@@ -1998,7 +2001,7 @@ func (r *runner) getFragmentByPath(path string) (*models.HorizonFragment, error)
 	return frag, nil
 }
 
-func (r *runner) edgeExists(sourceID, targetID string, edgeType models.DependencyType) bool {
+func (r *runner) edgeExists(sourceID, targetID string, edgeType ah.RelationName) bool {
 	key := r.edgeExistsKey(sourceID, targetID, edgeType)
 	if exists, ok := r.edgeExistsCache[key]; ok {
 		return exists
@@ -2009,7 +2012,7 @@ func (r *runner) edgeExists(sourceID, targetID string, edgeType models.Dependenc
 	return exists
 }
 
-func (r *runner) edgeExistsKey(sourceID, targetID string, edgeType models.DependencyType) string {
+func (r *runner) edgeExistsKey(sourceID, targetID string, edgeType ah.RelationName) string {
 	return strings.TrimSpace(sourceID) + "|" + strings.TrimSpace(targetID) + "|" + string(edgeType)
 }
 
@@ -2023,14 +2026,17 @@ func (r *runner) getOrCreateFragmentByPath(path string, createMissing, applyWrit
 		return frag, err
 	}
 	if !applyWrites {
-		return &models.HorizonFragment{CanonicalPath: path, Type: scout.InferFragmentTypeFromCanonicalPath(path), ID: "dry-run:" + path}, nil
+		cs := scout.InferClassSubtypeFromCanonicalPath(path)
+		return &models.HorizonFragment{CanonicalPath: path, Class: cs.Class, Subtype: cs.Subtype, ID: "dry-run:" + path}, nil
 	}
 	now := time.Now().UTC()
 	label := humanizePath(path)
+	cs := scout.InferClassSubtypeFromCanonicalPath(path)
 	frag = &models.HorizonFragment{
 		TenantID:      "global",
 		CanonicalPath: path,
-		Type:          scout.InferFragmentTypeFromCanonicalPath(path),
+		Class:         cs.Class,
+		Subtype:       cs.Subtype,
 		Labels:        map[string]string{"en": label},
 		Status:        "active",
 		State:         map[string]models.MetricValue{},
@@ -2046,10 +2052,10 @@ func (r *runner) getOrCreateFragmentByPath(path string, createMissing, applyWrit
 			SourceIDs: []string{"create_missing_fragment"},
 		},
 	}
-	switch frag.Type {
-	case models.FragmentTypeProduct:
+	switch frag.Class {
+	case ah.FragmentClassProduct:
 		frag.EntityPath = "/Product"
-	case models.FragmentTypeFacility:
+	case ah.FragmentClassSite:
 		frag.EntityPath = "/Organization/Facility"
 	default:
 		frag.EntityPath = "/Organization"

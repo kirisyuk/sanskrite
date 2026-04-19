@@ -98,6 +98,7 @@ import (
 	horizonwatchruntime "github.com/igorkirisyuk/sanskrite/internal/horizon/watchruntime"
 	criticalchainhttp "github.com/igorkirisyuk/sanskrite/internal/http/criticalchain"
 	horizonhttp "github.com/igorkirisyuk/sanskrite/internal/http/horizon"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // tavilyClientAdapterForAgents адаптирует httphandlers.TavilyClient к agents.TavilySearchClient интерфейсу
@@ -176,7 +177,7 @@ func (a *fragmentLookupForNewsCanvas) GetByCanonicalPath(ctx context.Context, pa
 			}
 		}
 	}
-	return &discovery.FragmentInfo{CanonicalPath: f.CanonicalPath, Label: label, Type: string(f.Type)}, nil
+	return &discovery.FragmentInfo{CanonicalPath: f.CanonicalPath, Label: label, Type: string(f.Class)}, nil
 }
 
 // enforcementRedirectRecorder adapts CanonicalPathResolver to RedirectRecorder for enforcement path fixes.
@@ -184,7 +185,7 @@ type enforcementRedirectRecorder struct {
 	r *horizonscout.CanonicalPathResolver
 }
 
-func (e *enforcementRedirectRecorder) RecordRedirect(ctx context.Context, fromPath, toPath string, fragmentType horizonmodels.FragmentType, reason string) {
+func (e *enforcementRedirectRecorder) RecordRedirect(ctx context.Context, fromPath, toPath string, fragmentType ah.FragmentClass, reason string) {
 	if e != nil && e.r != nil {
 		e.r.RecordDeterministicRedirect(ctx, fromPath, toPath, fragmentType, reason)
 	}
@@ -226,15 +227,15 @@ func buildGraphEnrichFragmentContext(ctx context.Context, tenantID string, frag 
 		}
 		if edge.Qualifiers != nil {
 			routeHints = append(routeHints,
-				qualifierStringValues(edge.Qualifiers[horizonmodels.QualifierTransportVia])...)
+				qualifierStringValues(edge.Qualifiers["transport_via"])...)
 			routeHints = append(routeHints,
-				qualifierStringValues(edge.Qualifiers[horizonmodels.QualifierFlowRefs])...)
+				qualifierStringValues(edge.Qualifiers["flow_refs"])...)
 			zoneHints = append(zoneHints,
-				qualifierStringValues(edge.Qualifiers[horizonmodels.QualifierZoneRefs])...)
+				qualifierStringValues(edge.Qualifiers["zone_refs"])...)
 			zoneHints = append(zoneHints,
-				qualifierStringValues(edge.Qualifiers[horizonmodels.QualifierAffectedZoneRefs])...)
+				qualifierStringValues(edge.Qualifiers["affected_zone_refs"])...)
 		}
-		pathHints = append(pathHints, string(edge.Type), string(edge.GetFacet()))
+		pathHints = append(pathHints, string(edge.Relation))
 	}
 	for _, edge := range outgoing {
 		collectEdge(edge)

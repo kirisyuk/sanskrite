@@ -21,6 +21,7 @@ import (
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type sample struct {
@@ -303,7 +304,7 @@ func loadTargets(
 				out = append(out, item)
 			}
 		}
-		if items, err := fragmentsRepo.FindByLabel(ctx, "en", labelFilter, h.FragmentType("")); err == nil {
+		if items, err := fragmentsRepo.FindByLabel(ctx, "en", labelFilter, ah.FragmentClass("")); err == nil {
 			add(items)
 		}
 		for _, key := range []string{"legalName", "shortName"} {
@@ -364,7 +365,7 @@ func recordResult(
 		return
 	}
 	*appliedCandidates = *appliedCandidates + 1
-	byType[string(original.Type)]++
+	byType[string(original.Class)]++
 	if iso := strings.ToLower(strings.TrimSpace(resolvedISO2)); iso != "" {
 		byResolved[iso]++
 	}
@@ -380,7 +381,7 @@ func recordResult(
 	if len(*samples) < sampleN {
 		*samples = append(*samples, sample{
 			Path:          original.CanonicalPath,
-			Type:          string(original.Type),
+			Type:          string(original.Class),
 			Label:         fragmentLabel(original),
 			Place:         fragmentPlace(original),
 			CurrentISO2:   currentISO2,
@@ -424,7 +425,7 @@ func processFragment(
 	if frag == nil {
 		return
 	}
-	if frag.Type != h.FragmentTypeFacility && frag.Type != h.FragmentTypeOrganization {
+	if frag.Class != ah.FragmentClassSite && frag.Class != ah.FragmentClassOrg {
 		return
 	}
 	*scanned = *scanned + 1
@@ -447,9 +448,9 @@ func processFragment(
 		}
 		*countryMismatchPrefiltered = *countryMismatchPrefiltered + 1
 		if mismatchSamples != nil && len(*mismatchSamples) < sampleN && frag.Coordinates != nil {
-			*mismatchSamples = append(*mismatchSamples, mismatchSample{
-				Path:         strings.TrimSpace(frag.CanonicalPath),
-				Type:         string(frag.Type),
+		*mismatchSamples = append(*mismatchSamples, mismatchSample{
+			Path:         strings.TrimSpace(frag.CanonicalPath),
+			Type:         string(frag.Class),
 				Label:        fragmentLabel(frag),
 				ExpectedISO2: expectedISO2,
 				ActualISO2:   actualISO2,
@@ -463,11 +464,11 @@ func processFragment(
 
 	currentISO2 := extractCurrentISO2(frag)
 	clone := cloneFragment(frag)
-	switch frag.Type {
-	case h.FragmentTypeFacility:
+	switch frag.Class {
+	case ah.FragmentClassSite:
 		res, _ := scout.RevalidateFacilityGeo(ctx, clone, geoClient)
 		recordResult(ctx, fragmentsRepo, apply, frag, clone, currentISO2, res.Applied, res.ChangedCoordinates, res.ResolvedISO2, res.Query, res.FormattedAddress, res.Provider, appliedCandidates, isoConflicts, coordRepairs, persisted, byType, byResolved, byProvider, samples, sampleN)
-	case h.FragmentTypeOrganization:
+	case ah.FragmentClassOrg:
 		res, _ := scout.RevalidateOrgGeo(ctx, clone, geoClient)
 		recordResult(ctx, fragmentsRepo, apply, frag, clone, currentISO2, res.Applied, res.ChangedCoordinates, res.ResolvedISO2, res.Query, res.FormattedAddress, res.Provider, appliedCandidates, isoConflicts, coordRepairs, persisted, byType, byResolved, byProvider, samples, sampleN)
 	}
@@ -500,10 +501,10 @@ func expectedISO2ForPrefilter(fragment *h.HorizonFragment) string {
 		return ""
 	}
 	cp := strings.TrimSpace(fragment.CanonicalPath)
-	switch fragment.Type {
-	case h.FragmentTypeFacility:
+	switch fragment.Class {
+	case ah.FragmentClassSite:
 		return strings.ToUpper(strings.TrimSpace(scoutFacilityPathISO2(cp)))
-	case h.FragmentTypeOrganization:
+	case ah.FragmentClassOrg:
 		return strings.ToUpper(strings.TrimSpace(scoutOrgPathISO2(cp)))
 	default:
 		return ""

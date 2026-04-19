@@ -31,6 +31,7 @@ import (
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 var (
@@ -443,7 +444,7 @@ func scan(
 			atomic.AddInt64(&st.Processed, 1)
 
 			// Run resolver
-			result, err := resolver.Resolve(ctx, frag.CanonicalPath, hmodels.FragmentTypeGeoRegion)
+			result, err := resolver.Resolve(ctx, frag.CanonicalPath, ah.FragmentClassGeo)
 			row := Row{
 				FragmentID: frag.ID,
 				OldPath:    frag.CanonicalPath,
@@ -835,14 +836,14 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *hrepo.D
 		if strings.TrimSpace(edge.ID) == "" {
 			edge.ID = d.Ref.ID
 		}
-		ns, nt, _, _ := scout.NormalizeSymmetricEdge(newID, edge.TargetFragmentID, edge.Type)
+		ns, nt, _, _ := scout.NormalizeSymmetricEdge(newID, edge.TargetFragmentID, edge.Relation)
 		if scout.IsSelfLoop(ns, nt) {
 			if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
 				deleted++
 			}
 			continue
 		}
-		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenant, ns, nt, edge.Type)
+		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenant, ns, nt, edge.Relation)
 		if err == nil && existing != nil {
 			if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
 				deleted++
@@ -869,14 +870,14 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *hrepo.D
 		if strings.TrimSpace(edge.ID) == "" {
 			edge.ID = d.Ref.ID
 		}
-		ns, nt, _, _ := scout.NormalizeSymmetricEdge(edge.SourceFragmentID, newID, edge.Type)
+		ns, nt, _, _ := scout.NormalizeSymmetricEdge(edge.SourceFragmentID, newID, edge.Relation)
 		if scout.IsSelfLoop(ns, nt) {
 			if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
 				deleted++
 			}
 			continue
 		}
-		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenant, ns, nt, edge.Type)
+		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenant, ns, nt, edge.Relation)
 		if err == nil && existing != nil {
 			if err := edgesRepo.Delete(ctx, edge.ID); err == nil {
 				deleted++

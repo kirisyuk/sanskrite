@@ -13,8 +13,8 @@ import (
 	"cloud.google.com/go/firestore"
 
 	"github.com/igorkirisyuk/sanskrite/internal/geonames"
-	hmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -90,14 +90,14 @@ func main() {
 
 	tests := []struct {
 		in   string
-		typ  hmodels.FragmentType
+		typ  ah.FragmentClass
 		note string
 	}{
-		{in: "/loc/uae", typ: hmodels.FragmentTypeGeoRegion, note: "country alias -> country-level canonical"},
-		{in: "/loc/abu-dhabi", typ: hmodels.FragmentTypeGeoRegion, note: "loose city -> city-level canonical (if unambiguous)"},
-		{in: "/loc/ae/abu-dhabi", typ: hmodels.FragmentTypeGeoRegion, note: "fix city/admin within AE"},
-		{in: "/loc/us/springfield", typ: hmodels.FragmentTypeGeoRegion, note: "ambiguous city in-country should stay conservative"},
-		{in: "/loc/springfield", typ: hmodels.FragmentTypeGeoRegion, note: "ambiguous city global should stay conservative"},
+		{in: "/loc/uae", typ: ah.FragmentClassGeo, note: "country alias -> country-level canonical"},
+		{in: "/loc/abu-dhabi", typ: ah.FragmentClassGeo, note: "loose city -> city-level canonical (if unambiguous)"},
+		{in: "/loc/ae/abu-dhabi", typ: ah.FragmentClassGeo, note: "fix city/admin within AE"},
+		{in: "/loc/us/springfield", typ: ah.FragmentClassGeo, note: "ambiguous city in-country should stay conservative"},
+		{in: "/loc/springfield", typ: ah.FragmentClassGeo, note: "ambiguous city global should stay conservative"},
 	}
 
 	start := time.Now()

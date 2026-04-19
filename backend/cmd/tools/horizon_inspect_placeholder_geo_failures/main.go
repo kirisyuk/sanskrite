@@ -15,6 +15,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	h "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -62,9 +63,9 @@ func main() {
 			}
 			continue
 		}
-		r := row{Type: string(frag.Type), Path: cp, Label: first(strings.TrimSpace(frag.Labels["en"]), strings.TrimSpace(frag.Identifiers["legalName"]), strings.TrimSpace(frag.Identifiers["shortName"])), Place: place(&frag), Why: string(cls)}
-		switch frag.Type {
-		case h.FragmentTypeFacility:
+		r := row{Type: string(frag.Class), Path: cp, Label: first(strings.TrimSpace(frag.Labels["en"]), strings.TrimSpace(frag.Identifiers["legalName"]), strings.TrimSpace(frag.Identifiers["shortName"])), Place: place(&frag), Why: string(cls)}
+		switch frag.Class {
+		case ah.FragmentClassSite:
 			if geo != nil {
 				c := clone(&frag)
 				res, _ := scout.RevalidateFacilityGeo(ctx, c, geo)
@@ -72,7 +73,7 @@ func main() {
 				r.Resolved = strings.TrimSpace(res.ResolvedISO2)
 				r.Formatted = strings.TrimSpace(res.FormattedAddress)
 			}
-		case h.FragmentTypeOrganization:
+		case ah.FragmentClassOrg:
 			if geo != nil {
 				c := clone(&frag)
 				res, _ := scout.RevalidateOrgGeo(ctx, c, geo)

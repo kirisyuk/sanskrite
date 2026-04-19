@@ -20,6 +20,7 @@ import (
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 var (
@@ -121,7 +122,7 @@ func main() {
 		}
 		for _, doc := range docs {
 			frag, err := fragmentsRepo.Get(ctx, doc.Ref.ID)
-			if err != nil || frag == nil || strings.TrimSpace(frag.TenantID) != "global" || frag.Type != models.FragmentTypeFacility {
+			if err != nil || frag == nil || strings.TrimSpace(frag.TenantID) != "global" || frag.Class != ah.FragmentClassSite {
 				continue
 			}
 			lastPath = strings.TrimSpace(frag.CanonicalPath)

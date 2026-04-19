@@ -12,6 +12,7 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/gcp"
 	h "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type sample struct {
@@ -69,23 +70,23 @@ func main() {
 		if iso2 == "" {
 			continue
 		}
-		switch {
-		case frag.Type == h.FragmentTypeFacility && strings.HasPrefix(path, "/fac/na/"):
-			facKnownIsoNa++
-		case frag.Type == h.FragmentTypeOrganization && strings.HasPrefix(path, "/org/na/"):
-			orgKnownIsoNa++
-		case strings.HasPrefix(path, "/gov/na/"):
-			govKnownIsoNa++
-		default:
-			continue
-		}
-		inc(typeDebt, string(frag.Type))
-		inc(isoDebt, iso2)
-		inc(sourceDebt, source)
-		if len(samples) < *sampleN {
-			samples = append(samples, sample{
-				Path:   path,
-				Type:   string(frag.Type),
+	switch {
+	case frag.Class == ah.FragmentClassSite && strings.HasPrefix(path, "/fac/na/"):
+		facKnownIsoNa++
+	case frag.Class == ah.FragmentClassOrg && strings.HasPrefix(path, "/org/na/"):
+		orgKnownIsoNa++
+	case strings.HasPrefix(path, "/gov/na/"):
+		govKnownIsoNa++
+	default:
+		continue
+	}
+	inc(typeDebt, string(frag.Class))
+	inc(isoDebt, iso2)
+	inc(sourceDebt, source)
+	if len(samples) < *sampleN {
+		samples = append(samples, sample{
+			Path:   path,
+			Type:   string(frag.Class),
 				ISO2:   iso2,
 				Label:  firstNonEmpty(strings.TrimSpace(frag.Labels["en"]), strings.TrimSpace(frag.Identifiers["legalName"]), strings.TrimSpace(frag.Identifiers["shortName"])),
 				Source: source,

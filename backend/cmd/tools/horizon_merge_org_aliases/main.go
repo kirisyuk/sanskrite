@@ -21,6 +21,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/merge"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // Merge organization alias fragments (e.g., /org/ford-motor-company -> /org/ford) using shortName,
@@ -601,7 +602,7 @@ func cloneOrgToPreferred(src *horizonmodels.HorizonFragment, preferredPath, lega
 	dst.ID = ""
 	dst.TenantID = "global"
 	dst.CanonicalPath = preferredPath
-	dst.Type = horizonmodels.FragmentTypeOrganization
+	dst.Class = ah.FragmentClassOrg
 	dst.Governance.Owner = "SYSTEM"
 	if dst.Governance.Status == "" {
 		dst.Governance.Status = string(horizonmodels.FragmentStatusActive)
@@ -778,7 +779,7 @@ func migrateEdgesByQuery(ctx context.Context, q firestore.Query, edgesRepo *hori
 			deletedDup++
 			continue
 		}
-		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, edge.TenantID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, edge.TenantID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 		if err == nil && existing != nil && existing.ID != "" && existing.ID != origID {
 			if err := edgesRepo.Delete(ctx, origID); err != nil {
 				return updated, deletedDup, err

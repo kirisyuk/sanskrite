@@ -19,6 +19,7 @@ import (
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 var (
@@ -125,7 +126,7 @@ func main() {
 			if err != nil || frag == nil {
 				continue
 			}
-			if strings.TrimSpace(frag.TenantID) != "global" || frag.Type != "FACILITY" {
+			if strings.TrimSpace(frag.TenantID) != "global" || frag.Class != ah.FragmentClassSite {
 				continue
 			}
 			lastPath = strings.TrimSpace(frag.CanonicalPath)
@@ -244,7 +245,7 @@ func mergeFacilityPathTwins(
 		if dup == nil || strings.TrimSpace(dup.ID) == "" || strings.TrimSpace(dup.ID) == primaryID {
 			continue
 		}
-		if strings.TrimSpace(dup.TenantID) != "global" || dup.Type != "FACILITY" {
+		if strings.TrimSpace(dup.TenantID) != "global" || dup.Class != ah.FragmentClassSite {
 			continue
 		}
 		candidate := cloneFragment(dup)

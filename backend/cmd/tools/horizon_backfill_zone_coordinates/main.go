@@ -17,6 +17,7 @@ import (
 	httphandlers "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func main() {
@@ -55,14 +56,14 @@ func main() {
 	service := horizonsignallanding.NewService(nil, nil, nil, nil, nil, fragmentsRepo).
 		WithGeocodingClient(geocoder)
 
-	items, err := fragmentsRepo.ListByTypeAndTenant(ctx, strings.TrimSpace(*tenantID), horizonmodels.FragmentTypeAffectedZone, *limit)
+	items, err := fragmentsRepo.ListByClassSubtypeAndTenant(ctx, strings.TrimSpace(*tenantID), ah.FragmentClassGeo, "affected_zone", *limit)
 	if err != nil {
 		log.Fatalf("list affected zones: %v", err)
 	}
 
 	var scanned, missing, updated int
 	for _, frag := range items {
-		if frag == nil || frag.Type != horizonmodels.FragmentTypeAffectedZone {
+		if frag == nil || frag.Class != ah.FragmentClassGeo || frag.Subtype != "affected_zone" {
 			continue
 		}
 		scanned++

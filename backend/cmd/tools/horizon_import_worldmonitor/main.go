@@ -24,6 +24,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/models"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type horizonMonitorExport struct {
@@ -517,7 +518,8 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 		cp := taxonomy.JoinPath("event", "hotspot-"+v.Name)
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
 			CanonicalPath: cp,
-			Type:          hmodels.FragmentTypeEvent,
+			Class:         ah.FragmentClassEvidence,
+			Subtype:       string(ah.EvidenceSubtypeEntity),
 			Label:         v.Name,
 			Description:   v.Description,
 			SourceID:      v.ID,
@@ -550,7 +552,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 		cp := taxonomy.OrgCanonicalPath("int", v.Name)
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
 			CanonicalPath: cp,
-			Type:          hmodels.FragmentTypeOrganization,
+			Class:         ah.FragmentClassOrg,
 			Label:         v.Name,
 			Description:   strings.TrimSpace(v.AKA),
 			SourceID:      v.ID,
@@ -587,7 +589,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 		cp := taxonomy.GeoCanonicalPath("global", "na", "conflict-"+v.Name)
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
 			CanonicalPath: cp,
-			Type:          hmodels.FragmentTypeGeoRegion,
+			Class:         ah.FragmentClassGeo,
 			Label:         v.Name,
 			Description:   v.Description,
 			SourceID:      v.ID,
@@ -617,7 +619,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 	for _, v := range p.Waterways {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
 			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, "", v.Lat, v.Lon),
-			Type:          hmodels.FragmentTypeFacility,
+			Class:         ah.FragmentClassSite,
 			Label:         v.Name,
 			Description:   v.Description,
 			SourceID:      v.ID,
@@ -644,7 +646,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 	for _, v := range p.MilitaryBases {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
 			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, v.Country, v.Lat, v.Lon),
-			Type:          hmodels.FragmentTypeFacility,
+			Class:         ah.FragmentClassSite,
 			Label:         v.Name,
 			Description:   strings.TrimSpace(v.Status),
 			SourceID:      v.ID,
@@ -682,7 +684,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 		}
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
 			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, country, lat, lon),
-			Type:          hmodels.FragmentTypeFacility,
+			Class:         ah.FragmentClassSite,
 			Label:         v.Name,
 			SourceID:      v.ID,
 			Tags:          []string{"horizon-monitor", "undersea-cable"},
@@ -716,7 +718,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 	for _, v := range p.NuclearFacilities {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
 			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, v.Operator, v.Lat, v.Lon),
-			Type:          hmodels.FragmentTypeFacility,
+			Class:         ah.FragmentClassSite,
 			Label:         v.Name,
 			SourceID:      v.ID,
 			Tags:          []string{"horizon-monitor", "nuclear-facility"},
@@ -753,7 +755,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 		}
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
 			CanonicalPath: taxonomy.MarketCanonicalPath(geo, v.Name),
-			Type:          hmodels.FragmentTypeMarket,
+			Class:         ah.FragmentClassMarket,
 			Label:         v.Name,
 			SourceID:      v.ID,
 			Tags:          []string{"horizon-monitor", "economic-center"},
@@ -783,7 +785,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 	for _, v := range p.Spaceports {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
 			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, v.Country, v.Lat, v.Lon),
-			Type:          hmodels.FragmentTypeFacility,
+			Class:         ah.FragmentClassSite,
 			Label:         v.Name,
 			SourceID:      v.ID,
 			Tags:          []string{"horizon-monitor", "spaceport"},
@@ -820,7 +822,8 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 		cp := taxonomy.JoinPath("deposit", mineral, v.Name)
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
 			CanonicalPath: cp,
-			Type:          hmodels.FragmentTypeDeposit,
+			Class:         ah.FragmentClassSite,
+			Subtype:       "deposit",
 			Label:         v.Name,
 			Description:   v.Significance,
 			SourceID:      v.ID,
@@ -861,7 +864,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 		}
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
 			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, country, lat, lon),
-			Type:          hmodels.FragmentTypeFacility,
+			Class:         ah.FragmentClassSite,
 			Label:         v.Name,
 			Description:   v.Capacity,
 			SourceID:      v.ID,
@@ -901,7 +904,7 @@ func (i *importer) importStaticObjects(ctx context.Context, p *horizonMonitorExp
 	for _, v := range p.Ports {
 		id, err := i.upsertFragment(ctx, buildFragmentSpec{
 			CanonicalPath: i.resolvedFacilityCanonicalPath(v.Name, v.Country, v.Lat, v.Lon),
-			Type:          hmodels.FragmentTypeFacility,
+			Class:         ah.FragmentClassSite,
 			Label:         v.Name,
 			Description:   v.Note,
 			SourceID:      v.ID,
@@ -1818,7 +1821,8 @@ func (i *importer) ensureSourceProjectLink(ctx context.Context, sourceID string)
 
 type buildFragmentSpec struct {
 	CanonicalPath  string
-	Type           hmodels.FragmentType
+	Class          ah.FragmentClass
+	Subtype        string
 	Label          string
 	Description    string
 	SourceID       string
@@ -1859,7 +1863,8 @@ func (i *importer) upsertFragment(ctx context.Context, spec buildFragmentSpec) (
 	incoming := &hmodels.HorizonFragment{
 		TenantID:      "global",
 		CanonicalPath: cp,
-		Type:          spec.Type,
+		Class:         spec.Class,
+		Subtype:       spec.Subtype,
 		Labels: map[string]string{
 			"en": strings.TrimSpace(spec.Label),
 		},
@@ -1934,7 +1939,7 @@ func (i *importer) upsertFragment(ctx context.Context, spec buildFragmentSpec) (
 			if candidate == nil {
 				continue
 			}
-			if candidate.Type == spec.Type {
+			if candidate.Class == spec.Class && candidate.Subtype == spec.Subtype {
 				byID = candidate
 				break
 			}
@@ -2061,7 +2066,7 @@ func (i *importer) ensureGeoLink(ctx context.Context, fragmentID, country string
 	geoLabel := i.geoLabelFromPath(geoPath)
 	geoID, err := i.upsertFragment(ctx, buildFragmentSpec{
 		CanonicalPath: geoPath,
-		Type:          hmodels.FragmentTypeGeoRegion,
+		Class:         ah.FragmentClassGeo,
 		Label:         geoLabel,
 		SourceID:      "",
 		Tags:          []string{"geo"},
@@ -2084,14 +2089,14 @@ func (i *importer) ensureGeoLink(ctx context.Context, fragmentID, country string
 		i.stats.GeoLinksCreated++
 		return nil
 	}
-	if err := i.ensureEdge(ctx, fragmentID, geoID, hmodels.DependencyTypeLocatedIn, reason); err != nil {
+	if err := i.ensureEdge(ctx, fragmentID, geoID, ah.RelationName("located_in"), reason); err != nil {
 		return err
 	}
 	i.stats.GeoLinksCreated++
 	return nil
 }
 
-func (i *importer) ensureEdge(ctx context.Context, sourceID, targetID string, depType hmodels.DependencyType, reason string) error {
+func (i *importer) ensureEdge(ctx context.Context, sourceID, targetID string, depType ah.RelationName, reason string) error {
 	if !i.apply {
 		i.stats.EdgesCreated++
 		return nil
@@ -2111,7 +2116,7 @@ func (i *importer) ensureEdge(ctx context.Context, sourceID, targetID string, de
 		TenantID:         "global",
 		SourceFragmentID: sourceID,
 		TargetFragmentID: targetID,
-		Type:             depType,
+		Relation:         depType,
 		Properties: hmodels.EdgeProperties{
 			Criticality:   0.45,
 			Amplification: 1.0,

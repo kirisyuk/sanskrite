@@ -27,6 +27,7 @@ import (
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"github.com/igorkirisyuk/sanskrite/internal/wikidata"
 )
 
@@ -286,13 +287,13 @@ func main() {
 
 			// Filter by type
 			if len(typeFilter) > 0 {
-				if _, ok := typeFilter[frag.Type]; !ok {
+				if _, ok := typeFilter[frag.Class]; !ok {
 					continue
 				}
 			} else {
 				// Default: geo-relevant types only
-				if _, ok := henrich.GeoRelevantTypes[frag.Type]; !ok {
-					if frag.Type != hmodels.FragmentTypeGeoRegion {
+				if _, ok := henrich.GeoRelevantTypes[frag.Class]; !ok {
+					if frag.Class != ah.FragmentClassGeo {
 						continue
 					}
 				}
@@ -321,7 +322,7 @@ func main() {
 
 			// External KB IDs (Wikidata): attach missing QID for ORG, then enrich coordinates from P625 when available.
 			if !hmodels.HasRealGeoCoordinates(frag.Coordinates) && wikidataClient != nil {
-				if *resolveWikidataQID && frag.Type == hmodels.FragmentTypeOrganization {
+				if *resolveWikidataQID && frag.Class == ah.FragmentClassOrg {
 					_, _, attached, err := henrich.ResolveAndAttachWikidataQIDIfMissing(ctx, wikidataClient, &frag, henrich.QIDResolveOptions{
 						Enabled:       true,
 						MinScore:      *wikidataScoreMin,
@@ -382,7 +383,7 @@ func main() {
 
 			// Facility-only pipeline: parent-aware address candidates.
 			if !hmodels.HasRealGeoCoordinates(frag.Coordinates) && *enableFacilityPipe &&
-				frag.Type == hmodels.FragmentTypeFacility && geocodingClient != nil {
+				frag.Class == ah.FragmentClassSite && geocodingClient != nil {
 				candidates := henrich.BuildFacilityAddressCandidates(&frag, parentOrg)
 				applied, attempted, err := geocodeWithCandidates(ctx, geocodingClient, &frag, candidates, &st)
 				if err != nil {
@@ -431,7 +432,7 @@ func main() {
 					continue
 				}
 				atomic.AddInt64(&st.Applied, 1)
-				if frag.Type == hmodels.FragmentTypeOrganization && hmodels.HasRealGeoCoordinates(frag.Coordinates) {
+				if frag.Class == ah.FragmentClassOrg && hmodels.HasRealGeoCoordinates(frag.Coordinates) {
 					upsertOrgGeoIndex(orgIndex, &frag)
 				}
 			}
@@ -504,14 +505,18 @@ func main() {
 	}
 }
 
-func parseTypesFilter(s string) map[hmodels.FragmentType]struct{} {
-	out := map[hmodels.FragmentType]struct{}{}
+func parseTypesFilter(s string) map[ah.FragmentClass]struct{} {
+	out := map[ah.FragmentClass]struct{}{}
 	for _, t := range strings.Split(s, ",") {
 		t = strings.TrimSpace(strings.ToUpper(t))
 		if t == "" {
 			continue
 		}
-		out[hmodels.FragmentType(t)] = struct{}{}
+		if alias, ok := hmodels.LookupLegacyFragmentType(t); ok && alias.Class != "" {
+			out[alias.Class] = struct{}{}
+			continue
+		}
+		out[ah.FragmentClass(strings.ToLower(t))] = struct{}{}
 	}
 	return out
 }
@@ -705,7 +710,7 @@ func buildOrgGeoIndex(ctx context.Context, db *firestore.Client, tenant string) 
 	q := db.Collection("horizon_fragments").
 		Where("tenantId", "==", tenant).
 		Where("governance.status", "==", string(hmodels.FragmentStatusActive)).
-		Where("type", "==", string(hmodels.FragmentTypeOrganization)).
+		Where("class", "==", string(ah.FragmentClassOrg)).
 		OrderBy(firestore.DocumentID, firestore.Asc).
 		Limit(2000)
 
@@ -744,7 +749,7 @@ func upsertOrgGeoIndex(idx *orgGeoIndex, frag *hmodels.HorizonFragment) {
 	if idx == nil || frag == nil {
 		return
 	}
-	if frag.Type != hmodels.FragmentTypeOrganization {
+	if frag.Class != ah.FragmentClassOrg {
 		return
 	}
 	cp := strings.TrimSpace(frag.CanonicalPath)

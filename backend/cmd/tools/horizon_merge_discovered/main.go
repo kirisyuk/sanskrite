@@ -158,7 +158,7 @@ func main() {
 	)
 
 	for i, d := range discovered {
-		log.Printf("---- [%d/%d] discovered fragment: id=%s canonical=%s type=%s ----", i+1, len(discovered), d.ID, d.CanonicalPath, d.Type)
+		log.Printf("---- [%d/%d] discovered fragment: id=%s canonical=%s class=%s subtype=%s ----", i+1, len(discovered), d.ID, d.CanonicalPath, d.Class, d.Subtype)
 
 		targetCP, targetType, err := chooseCanonicalPath(ctx, vertexSearchClient, execAI, d)
 		if err != nil {
@@ -449,7 +449,8 @@ func buildCanonicalizeMigrationPrompt(discovered *horizonmodels.HorizonFragment,
 	discJSON, _ := json.MarshalIndent(map[string]interface{}{
 		"id":            discovered.ID,
 		"canonicalPath": discovered.CanonicalPath,
-		"type":          string(discovered.Type),
+		"class":         string(discovered.Class),
+		"subtype":       discovered.Subtype,
 		"labels":        discovered.Labels,
 		"description":   discovered.Description,
 	}, "", "  ")
@@ -517,10 +518,16 @@ func cloneFragmentForCanonical(src *horizonmodels.HorizonFragment, canonicalPath
 		dst.Governance.Status = string(horizonmodels.FragmentStatusActive)
 	}
 	if strings.TrimSpace(targetType) != "" {
-		dst.Type = horizonmodels.FragmentType(strings.TrimSpace(strings.ToUpper(targetType)))
+		if alias, ok := horizonmodels.LookupLegacyFragmentType(targetType); ok {
+			dst.Class = alias.Class
+			if alias.Subtype != "" {
+				dst.Subtype = alias.Subtype
+			}
+		}
 	}
-	if dst.Type == "" {
-		dst.Type = src.Type
+	if dst.Class == "" {
+		dst.Class = src.Class
+		dst.Subtype = src.Subtype
 	}
 	if dst.Identifiers == nil {
 		dst.Identifiers = make(map[string]string)
@@ -547,8 +554,9 @@ func mergeFragment(dst *horizonmodels.HorizonFragment, src *horizonmodels.Horizo
 
 	addLegacyPathMarkers(dst, src.CanonicalPath)
 
-	if dst.Type == "" && src.Type != "" {
-		dst.Type = src.Type
+	if dst.Class == "" && src.Class != "" {
+		dst.Class = src.Class
+		dst.Subtype = src.Subtype
 		changed = true
 	}
 
@@ -747,7 +755,7 @@ func migrateEdgesByQuery(ctx context.Context, q firestore.Query, edgesRepo *hori
 			continue
 		}
 
-		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, edge.TenantID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, edge.TenantID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 		if err == nil && existing != nil && existing.ID != "" && existing.ID != origID {
 			if err := edgesRepo.Delete(ctx, origID); err != nil {
 				return updated, deletedDup, err

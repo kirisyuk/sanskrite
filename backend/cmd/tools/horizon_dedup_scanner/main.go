@@ -18,6 +18,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // horizon_dedup_scanner finds potential duplicate ORG fragments that slipped past
@@ -74,7 +75,7 @@ func main() {
 
 	aiExecutor := initAIExecutor(ctx)
 
-	fragType := models.FragmentType(strings.TrimSpace(*typeFilter))
+	fragType := ah.FragmentClass(strings.TrimSpace(*typeFilter))
 	log.Printf("=== Dedup Scanner: project=%s tenant=%s type=%s apply=%v ===", *projectID, *tenantID, fragType, *apply)
 
 	groups := loadAndGroupFragments(ctx, db, fragType)
@@ -156,9 +157,9 @@ func initAIExecutor(_ context.Context) *ai.AITaskExecutor {
 	return ai.NewAITaskExecutor([]ai.AIService{ai.NewGeminiService(apiKey, mm)}, mm)
 }
 
-func loadAndGroupFragments(ctx context.Context, db *firestore.Client, fragType models.FragmentType) []dedupGroup {
+func loadAndGroupFragments(ctx context.Context, db *firestore.Client, fragType ah.FragmentClass) []dedupGroup {
 	col := db.Collection("horizon_fragments")
-	q := col.Where("tenantId", "==", "global").Where("type", "==", string(fragType)).OrderBy("__name__", firestore.Asc)
+	q := col.Where("tenantId", "==", "global").Where("class", "==", string(fragType)).OrderBy("__name__", firestore.Asc)
 
 	index := make(map[string][]*models.HorizonFragment)
 	total := 0
@@ -315,7 +316,7 @@ func mergeFragments(
 	}
 	log.Printf("    edges: reassigned=%d deleted(dup)=%d", reassigned, deleted)
 
-	if err := redirectsRepo.Upsert(ctx, *tenantID, loser.CanonicalPath, winner.CanonicalPath, "dedup_scanner_llm", string(loser.Type)); err != nil {
+	if err := redirectsRepo.Upsert(ctx, *tenantID, loser.CanonicalPath, winner.CanonicalPath, "dedup_scanner_llm", string(loser.Class)); err != nil {
 		log.Printf("    WARN: redirect creation failed: %v", err)
 	}
 
@@ -361,7 +362,7 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 				continue
 			}
 
-			existing, _ := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, newSource, newTarget, edge.Type)
+			existing, _ := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, newSource, newTarget, edge.Relation)
 			if existing != nil {
 				if _, delErr := doc.Ref.Delete(ctx); delErr == nil {
 					deleted++

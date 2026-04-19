@@ -16,6 +16,7 @@ import (
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type repairRow struct {
@@ -66,7 +67,7 @@ func main() {
 		WithEntitiesRepo(corerepo.NewEntityRepository(fsClient.Client()))
 	scorer := importance.NewScorer(fragmentsRepo, edgesRepo)
 
-	items, err := fragmentsRepo.ListByTypeAndTenant(ctx, strings.TrimSpace(*tenantID), models.FragmentTypeAffectedZone, *limit)
+	items, err := fragmentsRepo.ListByClassSubtypeAndTenant(ctx, strings.TrimSpace(*tenantID), ah.FragmentClassGeo, "affected_zone", *limit)
 	if err != nil {
 		log.Fatalf("list affected zones: %v", err)
 	}
@@ -77,7 +78,7 @@ func main() {
 	}
 	groups := map[string]*group{}
 	for _, frag := range items {
-		if frag == nil || frag.Type != models.FragmentTypeAffectedZone {
+		if frag == nil || frag.Class != ah.FragmentClassGeo || frag.Subtype != "affected_zone" {
 			continue
 		}
 		identity, ok := scout.ParseAffectedZoneIdentity(frag.CanonicalPath)

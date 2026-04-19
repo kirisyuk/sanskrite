@@ -716,16 +716,16 @@ func migrateEdges(ctx context.Context, primaryID string, duplicateIDs []string, 
 
 		for _, edge := range sourceEdges {
 			if strings.TrimSpace(edge.ID) == "" {
-				log.Printf("WARNING: Skipping edge with empty id (dup=%s -> target=%s type=%s)", dupID, edge.TargetFragmentID, edge.Type)
+				log.Printf("WARNING: Skipping edge with empty id (dup=%s -> target=%s type=%s)", dupID, edge.TargetFragmentID, edge.Relation)
 				continue
 			}
-			if edge.Type == "" {
+			if edge.Relation == "" {
 				log.Printf("WARNING: Skipping edge %s with empty type (dup=%s -> target=%s)", edge.ID, dupID, edge.TargetFragmentID)
 				continue
 			}
 
 			// Check if edge already exists with primary as source
-			existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, primaryID, edge.TargetFragmentID, edge.Type)
+			existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, primaryID, edge.TargetFragmentID, edge.Relation)
 			if err == nil && existing != nil {
 				// Merge metrics into the existing edge before deleting the duplicate edge.
 				if mergeEdgeMetrics(existing, edge) {
@@ -765,16 +765,16 @@ func migrateEdges(ctx context.Context, primaryID string, duplicateIDs []string, 
 
 		for _, edge := range targetEdges {
 			if strings.TrimSpace(edge.ID) == "" {
-				log.Printf("WARNING: Skipping edge with empty id (source=%s -> dup=%s type=%s)", edge.SourceFragmentID, dupID, edge.Type)
+				log.Printf("WARNING: Skipping edge with empty id (source=%s -> dup=%s type=%s)", edge.SourceFragmentID, dupID, edge.Relation)
 				continue
 			}
-			if edge.Type == "" {
+			if edge.Relation == "" {
 				log.Printf("WARNING: Skipping edge %s with empty type (source=%s -> dup=%s)", edge.ID, edge.SourceFragmentID, dupID)
 				continue
 			}
 
 			// Check if edge already exists with primary as target
-			existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, edge.SourceFragmentID, primaryID, edge.Type)
+			existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, edge.SourceFragmentID, primaryID, edge.Relation)
 			if err == nil && existing != nil {
 				// Merge metrics into the existing edge before deleting the duplicate edge.
 				if mergeEdgeMetrics(existing, edge) {

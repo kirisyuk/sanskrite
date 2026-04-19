@@ -31,6 +31,7 @@ import (
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	coreRepo "github.com/igorkirisyuk/sanskrite/internal/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // Smart deduplication tool that:
@@ -140,7 +141,7 @@ func orgGroupishHint(f *models.HorizonFragment) bool {
 func orgConflictingWikidataIDs(frags []*models.HorizonFragment) (conflict bool, ids []string) {
 	seen := map[string]struct{}{}
 	for _, f := range frags {
-		if f == nil || f.Type != models.FragmentTypeOrganization {
+		if f == nil || f.Class != ah.FragmentClassOrg {
 			continue
 		}
 		qid := strings.TrimSpace(extractWikidataID(f))
@@ -167,7 +168,7 @@ func shouldSkipOrgNameCluster(matchType string, frags []*models.HorizonFragment)
 	}
 	// Only apply to ORGANIZATION clusters.
 	for _, f := range frags {
-		if f != nil && f.Type != models.FragmentTypeOrganization {
+		if f != nil && f.Class != ah.FragmentClassOrg {
 			return false, ""
 		}
 	}
@@ -184,7 +185,7 @@ func shouldSkipOrgNameCluster(matchType string, frags []*models.HorizonFragment)
 	groupish := 0
 	nonGroupish := 0
 	for _, f := range frags {
-		if f == nil || f.Type != models.FragmentTypeOrganization {
+		if f == nil || f.Class != ah.FragmentClassOrg {
 			continue
 		}
 		if orgGroupishHint(f) {
@@ -285,7 +286,7 @@ func shouldSkipOrgLegacyNoGeoCluster(frags []*models.HorizonFragment) (bool, str
 	groupish := 0
 	nonGroupish := 0
 	for _, f := range frags {
-		if f == nil || f.Type != models.FragmentTypeOrganization {
+		if f == nil || f.Class != ah.FragmentClassOrg {
 			continue
 		}
 		if orgGroupishHint(f) {
@@ -375,8 +376,8 @@ func canonicalNamespaceFamilyFromPath(path string) string {
 	}
 }
 
-func expectedNamespaceFamilyForType(t models.FragmentType) string {
-	prefix := strings.TrimSpace(policy.ExpectedCanonicalPathPrefix(t))
+func expectedNamespaceFamilyForType(t ah.FragmentClass) string {
+	prefix := strings.TrimSpace(policy.ExpectedCanonicalPathPrefix(t, ""))
 	if prefix == "" {
 		return ""
 	}
@@ -394,14 +395,14 @@ func fragmentNamespaceFamilyForDedup(f *models.HorizonFragment) string {
 	if fam := canonicalNamespaceFamilyFromPath(f.CanonicalPath); fam != "" {
 		return fam
 	}
-	return expectedNamespaceFamilyForType(f.Type)
+	return expectedNamespaceFamilyForType(f.Class)
 }
 
 func isTypePathCompatibleForDedup(f *models.HorizonFragment) bool {
 	if f == nil {
 		return false
 	}
-	expected := expectedNamespaceFamilyForType(f.Type)
+	expected := expectedNamespaceFamilyForType(f.Class)
 	if expected == "" {
 		return true
 	}
@@ -568,7 +569,7 @@ func buildOrgSlug(parts *taxonomy.OrgPathParts) string {
 // extractLegacyOrgSlugAliases returns slug aliases from identifiers that store historical paths.
 // We only care about legacy /org/{slug} aliases (merged_paths / legacy_org_canonical_path).
 func extractLegacyOrgSlugAliases(f *models.HorizonFragment) []string {
-	if f == nil || f.Type != models.FragmentTypeOrganization || f.Identifiers == nil {
+	if f == nil || f.Class != ah.FragmentClassOrg || f.Identifiers == nil {
 		return nil
 	}
 	var out []string
@@ -796,7 +797,7 @@ func main() {
 	if *fixEdgesOnly {
 		log.Printf("\n=== Fix edges only mode (--fix-edges-only) ===")
 		log.Printf("Skipping fragment loading and deduplication; only fixing edge directions + canonicalization + dedup")
-		fragmentTypes := make(map[string]models.FragmentType) // empty; fixEdgeDirections fetches types on demand
+		fragmentTypes := make(map[string]ah.FragmentClass) // empty; fixEdgeDirections fetches types on demand
 		if *skipEdgePass {
 			log.Printf("SKIPPED (--skip-edge-pass): not modifying edges")
 		} else {
@@ -897,7 +898,7 @@ func main() {
 	kept := fragments[:0]
 	removed := 0
 	for _, f := range fragments {
-		if f == nil || f.Type != models.FragmentTypeProduct || !isProductPathEndingWithNA(f.CanonicalPath) {
+		if f == nil || f.Class != ah.FragmentClassProduct || !isProductPathEndingWithNA(f.CanonicalPath) {
 			kept = append(kept, f)
 			continue
 		}
@@ -947,7 +948,7 @@ func main() {
 		}
 		if !isTypePathCompatibleForDedup(f) {
 			if *verbose {
-				log.Printf("  SKIP indexing (type/path mismatch): id=%s type=%s path=%s", f.ID, f.Type, f.CanonicalPath)
+				log.Printf("  SKIP indexing (type/path mismatch): id=%s type=%s path=%s", f.ID, f.Class, f.CanonicalPath)
 			}
 			continue
 		}
@@ -960,7 +961,7 @@ func main() {
 		// Index by shortName (type-scoped)
 		if shortName := strings.TrimSpace(f.Identifiers["shortName"]); shortName != "" {
 			// For ORG: shortName is name-only and very collision-prone; default OFF.
-			if f.Type == models.FragmentTypeOrganization {
+			if f.Class == ah.FragmentClassOrg {
 				// When explicitly enabled, allow both /org/* and /gov/* to participate (still ISO2-scoped).
 				if *enableOrgNameOnly {
 					ns := canonicalNamespace(f)
@@ -969,12 +970,12 @@ func main() {
 					}
 					iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
 					if iso2 != "na" {
-						key := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, strings.ToLower(shortName))
+						key := fmt.Sprintf("%s:%s:%s:%s", f.Class, ns, iso2, strings.ToLower(shortName))
 						shortNameIndex[key] = append(shortNameIndex[key], f)
 					}
 				}
 			} else {
-				key := fmt.Sprintf("%s:%s", f.Type, strings.ToLower(shortName))
+				key := fmt.Sprintf("%s:%s", f.Class, strings.ToLower(shortName))
 				shortNameIndex[key] = append(shortNameIndex[key], f)
 			}
 		}
@@ -982,18 +983,18 @@ func main() {
 		// Index by legalName (type-scoped)
 		if legalName := strings.TrimSpace(f.Identifiers["legalName"]); legalName != "" {
 			// For ORG: only within known ISO2, scoped by namespace to avoid cross-namespace merges.
-			if f.Type == models.FragmentTypeOrganization {
+			if f.Class == ah.FragmentClassOrg {
 				ns := canonicalNamespace(f)
 				if ns == "" {
 					continue
 				}
 				iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
 				if iso2 != "na" {
-					key := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, strings.ToLower(legalName))
+					key := fmt.Sprintf("%s:%s:%s:%s", f.Class, ns, iso2, strings.ToLower(legalName))
 					legalNameIndex[key] = append(legalNameIndex[key], f)
 				}
 			} else {
-				key := fmt.Sprintf("%s:%s", f.Type, strings.ToLower(legalName))
+				key := fmt.Sprintf("%s:%s", f.Class, strings.ToLower(legalName))
 				legalNameIndex[key] = append(legalNameIndex[key], f)
 			}
 		}
@@ -1001,7 +1002,7 @@ func main() {
 		// Index by label[en] (type-scoped) — Tier 2 (high confidence)
 		if labelEN := strings.TrimSpace(f.Labels["en"]); labelEN != "" {
 			// For ORG: label is name-only and very collision-prone; default OFF.
-			if f.Type == models.FragmentTypeOrganization {
+			if f.Class == ah.FragmentClassOrg {
 				// When explicitly enabled, allow both /org/* and /gov/* to participate (still ISO2-scoped).
 				if *enableOrgNameOnly {
 					ns := canonicalNamespace(f)
@@ -1010,12 +1011,12 @@ func main() {
 					}
 					iso2 := extractOrgOrGovISO2ForDedupKey(f.CanonicalPath)
 					if iso2 != "na" {
-						key := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, strings.ToLower(labelEN))
+						key := fmt.Sprintf("%s:%s:%s:%s", f.Class, ns, iso2, strings.ToLower(labelEN))
 						labelENIndex[key] = append(labelENIndex[key], f)
 					}
 				}
 			} else {
-				key := fmt.Sprintf("%s:%s", f.Type, strings.ToLower(labelEN))
+				key := fmt.Sprintf("%s:%s", f.Class, strings.ToLower(labelEN))
 				labelENIndex[key] = append(labelENIndex[key], f)
 			}
 		}
@@ -1023,7 +1024,7 @@ func main() {
 		// Index by normalized legalName (removes JSC, LLC, Inc, etc.)
 		if legalName := strings.TrimSpace(f.Identifiers["legalName"]); legalName != "" {
 			// For ORG: this is fuzzy-ish; default OFF.
-			if f.Type == models.FragmentTypeOrganization {
+			if f.Class == ah.FragmentClassOrg {
 				if *enableOrgFuzzyName {
 					ns := canonicalNamespace(f)
 					if ns == "" {
@@ -1033,12 +1034,12 @@ func main() {
 					normalized := normalizeLegalName(legalName)
 					if normalized != "" {
 						if iso2 != "na" {
-							key := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, normalized)
+							key := fmt.Sprintf("%s:%s:%s:%s", f.Class, ns, iso2, normalized)
 							normalizedLegalIndex[key] = append(normalizedLegalIndex[key], f)
 						} else {
 							// Index "na" ORG fragments separately — they'll be merged into
 							// iso2-scoped clusters during cluster building (Priority 5).
-							naKey := fmt.Sprintf("%s:%s:na:%s", f.Type, ns, normalized)
+							naKey := fmt.Sprintf("%s:%s:na:%s", f.Class, ns, normalized)
 							normalizedLegalNAIndex[naKey] = append(normalizedLegalNAIndex[naKey], f)
 						}
 					}
@@ -1046,7 +1047,7 @@ func main() {
 			} else {
 				normalized := normalizeLegalName(legalName)
 				if normalized != "" {
-					key := fmt.Sprintf("%s:%s", f.Type, normalized)
+					key := fmt.Sprintf("%s:%s", f.Class, normalized)
 					normalizedLegalIndex[key] = append(normalizedLegalIndex[key], f)
 				}
 			}
@@ -1058,7 +1059,7 @@ func main() {
 		// Cross-org matching: facilities with same normalized name are likely the same,
 		// even if they are under different parent orgs (e.g., /fac/sa/four-points-riyadh vs /fac/sa/sheraton-khaldia).
 		// The normalization function requires at least 3 meaningful tokens to reduce false positives.
-		if f.Type == models.FragmentTypeFacility {
+		if f.Class == ah.FragmentClassSite {
 			aliasSet := map[string]struct{}{}
 			addFacilityAlias := func(s string, src string) {
 				s = strings.TrimSpace(s)
@@ -1070,7 +1071,7 @@ func main() {
 					return
 				}
 				// No org scoping: if normalized name is specific enough, match across orgs
-				key := fmt.Sprintf("%s:%s", f.Type, k)
+				key := fmt.Sprintf("%s:%s", f.Class, k)
 				aliasSet[key] = struct{}{}
 				// DEBUG for specific IDs
 				if f.ID == "anz6w0uDOjDlSorQLA6S" || f.ID == "756btZKk76bzLQfNp7XM" {
@@ -1091,7 +1092,7 @@ func main() {
 
 		// ORG-only: index normalized label/legal for LOW-signal stub rescue (e.g., "softbank group" → "softbank")
 		// Safety is enforced when creating clusters (must include at least one high-signal org + one low-signal stub).
-		if f.Type == models.FragmentTypeOrganization {
+		if f.Class == ah.FragmentClassOrg {
 			// Default OFF: still name-based; keep namespace-scoped to avoid cross-namespace merges.
 			if !*enableOrgFuzzyName {
 				continue
@@ -1113,11 +1114,11 @@ func main() {
 			if seed != "" {
 				n := normalizeLegalName(seed)
 				if n != "" {
-					key := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, n)
+					key := fmt.Sprintf("%s:%s:%s:%s", f.Class, ns, iso2, n)
 					orgNormalizedNameIndex[key] = append(orgNormalizedNameIndex[key], f)
 					// Phonetic key for transliteration variants (telecom/telekom, c/k)
 					if pk := normalizeOrgPhoneticKey(n); pk != "" {
-						pkKey := fmt.Sprintf("%s:%s:%s:%s", f.Type, ns, iso2, pk)
+						pkKey := fmt.Sprintf("%s:%s:%s:%s", f.Class, ns, iso2, pk)
 						orgPhoneticIndex[pkKey] = append(orgPhoneticIndex[pkKey], f)
 					}
 				}
@@ -1125,7 +1126,7 @@ func main() {
 		}
 
 		// Index GEO_REGION by city name (last part of path)
-		if f.Type == models.FragmentTypeGeoRegion {
+		if f.Class == ah.FragmentClassGeo {
 			cityName := extractCityFromPath(f.CanonicalPath)
 			if cityName != "" {
 				geoCityIndex[cityName] = append(geoCityIndex[cityName], f)
@@ -1140,7 +1141,7 @@ func main() {
 		// IMPORTANT: Do NOT include legacy org-nested paths (/product/{org}/{slug})
 		// and do NOT use merged_paths here. Both cause massive false-positive merges like:
 		//   "crm": /product/zoho/crm vs unrelated products that happened to have merged_paths containing "/product/.../crm".
-		if f.Type == models.FragmentTypeProduct {
+		if f.Class == ah.FragmentClassProduct {
 			if slug := extractCanonicalProductSlugForDedup(f.CanonicalPath); slug != "" {
 				productNameIndex[slug] = append(productNameIndex[slug], f)
 			}
@@ -1176,7 +1177,7 @@ func main() {
 		}
 
 		// PERSON: phonetic index for Arabic/transliteration variations (Tahnoon/Tahnoun, Khalid/Halid)
-		if f.Type == "PERSON" {
+		if f.Class == "PERSON" {
 			phoneticSet := map[string]struct{}{}
 			addPersonPhonetic := func(s string) {
 				s = strings.TrimSpace(s)
@@ -1206,7 +1207,7 @@ func main() {
 	// Index GEO_REGION by canonical path (for org-as-country matching)
 	geoByPath := make(map[string]*models.HorizonFragment)
 	for _, f := range fragments {
-		if f.Type == models.FragmentTypeGeoRegion {
+		if f.Class == ah.FragmentClassGeo {
 			geoByPath[f.CanonicalPath] = f
 		}
 	}
@@ -1217,7 +1218,7 @@ func main() {
 		if strings.TrimSpace(f.CanonicalPath) == "" {
 			continue
 		}
-		k := fmt.Sprintf("%s:%s", f.Type, f.CanonicalPath)
+		k := fmt.Sprintf("%s:%s", f.Class, f.CanonicalPath)
 		byCanonicalPath[k] = append(byCanonicalPath[k], f)
 	}
 
@@ -1228,7 +1229,7 @@ func main() {
 	orgSlugIndex := make(map[string][]*models.HorizonFragment)      // slug -> org fragments with /org/{geo}/{slug} (and legacy /org/{slug})
 	orgAliasSlugIndex := make(map[string][]*models.HorizonFragment) // slug -> fragments that declare alias via merged_paths / legacy_org_canonical_path (legacy /org/{slug})
 	for _, f := range fragments {
-		if f == nil || f.Type != models.FragmentTypeOrganization {
+		if f == nil || f.Class != ah.FragmentClassOrg {
 			continue
 		}
 		if canonicalNamespace(f) != "org" {
@@ -1262,9 +1263,9 @@ func main() {
 	log.Printf("✓ PERSON phonetic index: %d unique keys", len(personPhoneticIndex))
 
 	// Build fragment type cache for edge direction fixing (Step 6)
-	fragmentTypes := make(map[string]models.FragmentType)
+	fragmentTypes := make(map[string]ah.FragmentClass)
 	for _, f := range fragments {
-		fragmentTypes[f.ID] = f.Type
+		fragmentTypes[f.ID] = f.Class
 	}
 	log.Printf("✓ Fragment type cache: %d entries", len(fragmentTypes))
 
@@ -1286,7 +1287,7 @@ func main() {
 		if processedFragmentIDs[f.ID] {
 			continue
 		}
-		if f.Type != models.FragmentTypeOrganization {
+		if f.Class != ah.FragmentClassOrg {
 			continue
 		}
 		// Never treat /gov/* as "org-as-country": it's a different namespace and should not be merged into GEO_REGION.
@@ -1336,7 +1337,7 @@ func main() {
 		if processedFragmentIDs[f.ID] {
 			continue
 		}
-		if f.Type != models.FragmentTypeGeoRegion {
+		if f.Class != ah.FragmentClassGeo {
 			continue
 		}
 		// Check if path is non-canonical for /loc hierarchy.
@@ -1415,7 +1416,7 @@ func main() {
 				}
 				// Keep this conservative: org-specific alias identifiers are high-signal for ORGs,
 				// but can be noisy for other types (we have separate, safer dedup signals for them).
-				if f.Type != models.FragmentTypeOrganization {
+				if f.Class != ah.FragmentClassOrg {
 					continue
 				}
 				ns := canonicalNamespace(f)
@@ -1428,7 +1429,7 @@ func main() {
 							continue
 						}
 					}
-					k := fmt.Sprintf("%s:%s", f.Type, alias) // same type only
+					k := fmt.Sprintf("%s:%s", f.Class, alias) // same type only
 					for _, other := range byCanonicalPath[k] {
 						if other == nil || processedFragmentIDs[other.ID] || other.ID == f.ID {
 							continue
@@ -1457,7 +1458,7 @@ func main() {
 				}
 				cluster := &DuplicateCluster{
 					MatchType:  "aliasPath",
-					MatchValue: fmt.Sprintf("%s:%s", frs[0].Type, frs[0].ID),
+					MatchValue: fmt.Sprintf("%s:%s", frs[0].Class, frs[0].ID),
 					Fragments:  frs,
 				}
 				cluster.CanonicalID = selectCanonical(frs, profileCache)
@@ -1517,7 +1518,7 @@ func main() {
 		// LegalName must not conflict (ignore empties).
 		lnSet := map[string]struct{}{}
 		for _, f := range unprocessed {
-			if f == nil || f.Type != models.FragmentTypeOrganization {
+			if f == nil || f.Class != ah.FragmentClassOrg {
 				continue
 			}
 			ln := normalizeLegalKey(f.Identifiers["legalName"])
@@ -1567,7 +1568,7 @@ func main() {
 			if processedFragmentIDs[f.ID] {
 				continue
 			}
-			if f.Type != models.FragmentTypeOrganization {
+			if f.Class != ah.FragmentClassOrg {
 				continue
 			}
 			nk := normalizeOrgCanonicalPathForDedup(f.CanonicalPath)
@@ -1609,7 +1610,7 @@ func main() {
 			if processedFragmentIDs[f.ID] {
 				continue
 			}
-			if f.Type != models.FragmentTypeOrganization {
+			if f.Class != ah.FragmentClassOrg {
 				continue
 			}
 			if canonicalNamespace(f) != "org" {
@@ -1747,7 +1748,7 @@ func main() {
 			if processedFragmentIDs[f.ID] {
 				continue
 			}
-			if f.Type != models.FragmentTypeOrganization {
+			if f.Class != ah.FragmentClassOrg {
 				continue
 			}
 			if canonicalNamespace(f) != "org" {
@@ -1905,10 +1906,10 @@ func main() {
 			}
 			if len(unprocessed) > 1 {
 				// For GEO_REGION: filter out fragments with different countries
-				fragType := unprocessed[0].Type
-				if fragType == models.FragmentTypeGeoRegion {
+				fragType := unprocessed[0].Class
+				if fragType == ah.FragmentClassGeo {
 					unprocessed = filterGeoByCountry(unprocessed)
-				} else if fragType == models.FragmentTypeMarket {
+				} else if fragType == ah.FragmentClassMarket {
 					// MARKET name-only matches are very noisy across geos/domains.
 					// Keep only scope-consistent groups; otherwise skip.
 					filtered, skip, reason := filterMarketByScope(unprocessed)
@@ -1923,7 +1924,7 @@ func main() {
 			}
 			if len(unprocessed) > 1 {
 				// Extra safety for ORGANIZATION: name-only signals are risky.
-				if unprocessed[0].Type == models.FragmentTypeOrganization {
+				if unprocessed[0].Class == ah.FragmentClassOrg {
 					if skip, reason := shouldSkipOrgNameCluster("shortName", unprocessed); skip {
 						if *verbose {
 							log.Printf("  SKIP ORG cluster (shortName): key=%s reason=%s", key, reason)
@@ -1959,10 +1960,10 @@ func main() {
 			}
 			if len(unprocessed) > 1 {
 				// For GEO_REGION: filter out fragments with different countries
-				fragType := unprocessed[0].Type
-				if fragType == models.FragmentTypeGeoRegion {
+				fragType := unprocessed[0].Class
+				if fragType == ah.FragmentClassGeo {
 					unprocessed = filterGeoByCountry(unprocessed)
-				} else if fragType == models.FragmentTypeMarket {
+				} else if fragType == ah.FragmentClassMarket {
 					filtered, skip, reason := filterMarketByScope(unprocessed)
 					if skip {
 						if *verbose {
@@ -1975,7 +1976,7 @@ func main() {
 			}
 			if len(unprocessed) > 1 {
 				// Extra safety for ORGANIZATION: even exact legalName can collide; never merge across distinct Wikidata IDs.
-				if unprocessed[0].Type == models.FragmentTypeOrganization {
+				if unprocessed[0].Class == ah.FragmentClassOrg {
 					if skip, reason := shouldSkipOrgNameCluster("legalName", unprocessed); skip {
 						if *verbose {
 							log.Printf("  SKIP ORG cluster (legalName): key=%s reason=%s", key, reason)
@@ -2011,10 +2012,10 @@ func main() {
 			}
 			if len(unprocessed) > 1 {
 				// For GEO_REGION: filter out fragments with different countries
-				fragType := unprocessed[0].Type
-				if fragType == models.FragmentTypeGeoRegion {
+				fragType := unprocessed[0].Class
+				if fragType == ah.FragmentClassGeo {
 					unprocessed = filterGeoByCountry(unprocessed)
-				} else if fragType == models.FragmentTypeMarket {
+				} else if fragType == ah.FragmentClassMarket {
 					filtered, skip, reason := filterMarketByScope(unprocessed)
 					if skip {
 						if *verbose {
@@ -2027,7 +2028,7 @@ func main() {
 			}
 			if len(unprocessed) > 1 {
 				// Extra safety for ORGANIZATION: label-only signals are risky.
-				if unprocessed[0].Type == models.FragmentTypeOrganization {
+				if unprocessed[0].Class == ah.FragmentClassOrg {
 					if skip, reason := shouldSkipOrgNameCluster("labelEN", unprocessed); skip {
 						if *verbose {
 							log.Printf("  SKIP ORG cluster (labelEN): key=%s reason=%s", key, reason)
@@ -2127,12 +2128,12 @@ func main() {
 			}
 			if len(unprocessed) > 1 {
 				// Skip GEO_REGION — normalization removes "City of", "State of", etc.
-				fragType := unprocessed[0].Type
-				if fragType == models.FragmentTypeGeoRegion {
+				fragType := unprocessed[0].Class
+				if fragType == ah.FragmentClassGeo {
 					continue // Don't create cluster for GEO_REGION with normalized names
 				}
 				// Extra safety for ORGANIZATION: normalized legal can collapse group vs operating company.
-				if fragType == models.FragmentTypeOrganization {
+				if fragType == ah.FragmentClassOrg {
 					if skip, reason := shouldSkipOrgNameCluster("normalizedLegal", unprocessed); skip {
 						if *verbose {
 							log.Printf("  SKIP ORG cluster (normalizedLegal): key=%s reason=%s", key, reason)
@@ -2168,8 +2169,8 @@ func main() {
 		if len(unprocessed) <= 1 {
 			continue
 		}
-		fragType := unprocessed[0].Type
-		if fragType == models.FragmentTypeOrganization {
+		fragType := unprocessed[0].Class
+		if fragType == ah.FragmentClassOrg {
 			if skip, reason := shouldSkipOrgNameCluster("normalizedLegal", unprocessed); skip {
 				if *verbose {
 					log.Printf("  SKIP ORG cluster (normalizedLegal/na): key=%s reason=%s", naKey, reason)
@@ -2587,7 +2588,7 @@ func main() {
 		}
 
 		// Fix canonical path for GEO_REGION if needed (legacy geo fallback)
-		if canonical.Type == models.FragmentTypeGeoRegion {
+		if canonical.Class == ah.FragmentClassGeo {
 			if geoNamesClient != nil {
 				if norm, step, _ := scout.NormalizeGeoPathViaGeoNames(ctx, canonical.CanonicalPath, geoNamesClient); norm != "" && norm != canonical.CanonicalPath {
 					oldPath := canonical.CanonicalPath
@@ -2615,7 +2616,7 @@ func main() {
 		}
 
 		// Fix canonical path for DOMAIN if needed (normalize facet ordering)
-		if canonical.Type == models.FragmentTypeDomain {
+		if strings.HasPrefix(canonical.CanonicalPath, "/domain/") {
 			if normalized, err := taxonomy.NormalizeDomainCanonicalPath(canonical.CanonicalPath); err == nil && normalized != "" && normalized != canonical.CanonicalPath {
 				oldPath := canonical.CanonicalPath
 				if applyCanonicalPathUpdate(canonical, normalized) {
@@ -2930,9 +2931,9 @@ func loadAllFragments(ctx context.Context, db *firestore.Client, tenantID, typeF
 		}
 		// Check why it was missed
 		matchesTenant := strings.TrimSpace(f.TenantID) == tenantID
-		matchesType := typeFilter == "" || string(f.Type) == typeFilter
+		matchesType := typeFilter == "" || string(f.Class) == typeFilter
 		log.Printf("  DEBUG: doc %s exists but MISSED by query: tenantId=%q (match=%v) type=%q (match=%v)",
-			id, f.TenantID, matchesTenant, f.Type, matchesType)
+			id, f.TenantID, matchesTenant, f.Class, matchesType)
 		// If it matches filters, add it (workaround for eventual consistency)
 		if matchesTenant && matchesType {
 			fragments = append(fragments, &f)
@@ -3024,7 +3025,7 @@ func normalizeCanonicalPathWithPolicy(ctx context.Context, executor *policy.Poli
 }
 
 // normalizeRelationTypeWithPolicy uses the core canonization policy to normalize edge types.
-func normalizeRelationTypeWithPolicy(ctx context.Context, executor *policy.PolicyExecutor, edgeType models.DependencyType) string {
+func normalizeRelationTypeWithPolicy(ctx context.Context, executor *policy.PolicyExecutor, edgeType ah.RelationName) string {
 	if executor == nil {
 		return ""
 	}
@@ -3077,7 +3078,7 @@ func legacyOrgCountryFromEdges(ctx context.Context, edgesRepo *repo.DependencyEd
 	if edgesRepo == nil || strings.TrimSpace(legacyID) == "" {
 		return "", false
 	}
-	edgeType := models.DependencyTypeLocatedIn
+	edgeType := ah.RelationName("located_in")
 	edges, err := edgesRepo.ListBySource(ctx, tenantID, legacyID, &edgeType, 500)
 	if err != nil {
 		return "", false
@@ -3092,7 +3093,7 @@ func legacyOrgCountryFromEdges(ctx context.Context, edgesRepo *repo.DependencyEd
 			continue
 		}
 		target := idToFrag[targetID]
-		if target == nil || target.Type != models.FragmentTypeGeoRegion {
+		if target == nil || target.Class != ah.FragmentClassGeo {
 			continue
 		}
 		c := extractCountryFromLocPath(target.CanonicalPath)
@@ -3393,7 +3394,7 @@ func normalizeOrgGovGeoForDedupKey(s string) string {
 // from lightweight extraction (e.g., label-only "softbank group" with empty status).
 // We only use this as a guard for fuzzy-ish normalized-name clustering.
 func isLowSignalOrgStubForDedup(f *models.HorizonFragment) bool {
-	if f == nil || f.Type != models.FragmentTypeOrganization {
+	if f == nil || f.Class != ah.FragmentClassOrg {
 		return false
 	}
 	legalName := strings.TrimSpace(f.Identifiers["legalName"])
@@ -3410,7 +3411,7 @@ func isLowSignalOrgStubForDedup(f *models.HorizonFragment) bool {
 		return false
 	}
 	// Extra weak signal: generic/incorrect type placement
-	if f.Type == models.FragmentTypeGeoRegion || strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.CanonicalPath)), "/loc/") {
+	if f.Class == ah.FragmentClassGeo || strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.CanonicalPath)), "/loc/") {
 		return true
 	}
 	// Fallback: label-only + weak lifecycle is already a strong stub pattern.
@@ -3521,17 +3522,17 @@ func selectCanonical(fragments []*models.HorizonFragment, profileCache map[strin
 		}
 	}
 
-	fragType := fragments[0].Type
+	fragType := fragments[0].Class
 	// For PRODUCT: if a cluster mixes flat and full canonical paths, prefer full canonical paths.
 	// Example: /product/robotaxi-service vs /product/service/logistics/ride-hailing/robotaxi-service
-	if fragType == models.FragmentTypeProduct {
+	if fragType == ah.FragmentClassProduct {
 		if preferred := preferFullProductPaths(fragments); len(preferred) > 0 {
 			fragments = preferred
 		}
 	}
 
 	// For GEO_REGION: first check if any have /loc/ prefix
-	if fragType == models.FragmentTypeGeoRegion {
+	if fragType == ah.FragmentClassGeo {
 		// Prefer canonical /loc hierarchy when available.
 		var canonicalLocs []*models.HorizonFragment
 		var locFragments []*models.HorizonFragment
@@ -3562,7 +3563,7 @@ func preferFullProductPaths(fragments []*models.HorizonFragment) []*models.Horiz
 	flat := make([]*models.HorizonFragment, 0, len(fragments))
 	full := make([]*models.HorizonFragment, 0, len(fragments))
 	for _, f := range fragments {
-		if f == nil || f.Type != models.FragmentTypeProduct {
+		if f == nil || f.Class != ah.FragmentClassProduct {
 			continue
 		}
 		if isFlatProductPathForCanonicalSelection(f) {
@@ -3821,14 +3822,14 @@ func ensureHasMarketSegmentEdge(ctx context.Context, edgesRepo *repo.DependencyE
 		return false, nil
 	}
 
-	_, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, parentID, childID, models.DependencyTypeHasMarketSegment)
+	_, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, parentID, childID, ah.RelationName("has_market_segment"))
 	if err == nil {
 		return false, nil
 	}
 	if !errors.Is(err, repo.ErrEdgeNotFound) {
 		return false, err
 	}
-	_, err = edgesRepo.GetBySourceTargetAndType(ctx, tenantID, parentID, childID, models.DependencyTypeHasSubmarket)
+	_, err = edgesRepo.GetBySourceTargetAndType(ctx, tenantID, parentID, childID, ah.RelationName("has_submarket"))
 	if err == nil {
 		return false, nil
 	}
@@ -3845,7 +3846,7 @@ func ensureHasMarketSegmentEdge(ctx context.Context, edgesRepo *repo.DependencyE
 		TenantID:         tenantID,
 		SourceFragmentID: parentID,
 		TargetFragmentID: childID,
-		Type:             models.DependencyTypeHasMarketSegment,
+		Relation:         ah.RelationName("has_market_segment"),
 		Properties: models.EdgeProperties{
 			Criticality:   0.6,
 			Amplification: 1.0,
@@ -3958,7 +3959,7 @@ func selectCanonicalByScore(fragments []*models.HorizonFragment, profileCache ma
 		}
 
 		// For ORGANIZATION: prefer higher-quality canonical nodes over low-signal LLM stubs.
-		if f.Type == models.FragmentTypeOrganization {
+		if f.Class == ah.FragmentClassOrg {
 			// Prefer geo-scoped canonical paths over legacy flat paths (namespace-aware).
 			if cp := canonicalPartsFromPath(f.CanonicalPath); cp != nil {
 				switch cp.Namespace {
@@ -4055,7 +4056,7 @@ func filterMarketByScope(fragments []*models.HorizonFragment) ([]*models.Horizon
 	geos := map[string]struct{}{}
 	domains := map[string]struct{}{}
 	for _, f := range fragments {
-		if f == nil || f.Type != models.FragmentTypeMarket {
+		if f == nil || f.Class != ah.FragmentClassMarket {
 			continue
 		}
 		cp := canonicalPartsForFragment(f)
@@ -4092,7 +4093,7 @@ func filterMarketByScope(fragments []*models.HorizonFragment) ([]*models.Horizon
 // is flat/legacy. This is used to keep slug-only productName dedup conservative.
 func hasFlatProductAnchor(fragments []*models.HorizonFragment) bool {
 	for _, f := range fragments {
-		if f == nil || f.Type != models.FragmentTypeProduct {
+		if f == nil || f.Class != ah.FragmentClassProduct {
 			continue
 		}
 		cp := canonicalPartsForFragment(f)
@@ -4551,7 +4552,7 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 		assignActualEdgeID(&edge, d)
 
 		// Normalize symmetric edges so A->B and B->A are treated as the same key.
-		ns, nt, _, _ := scout.NormalizeSymmetricEdge(newID, edge.TargetFragmentID, edge.Type)
+		ns, nt, _, _ := scout.NormalizeSymmetricEdge(newID, edge.TargetFragmentID, edge.Relation)
 
 		// Check if this would become a self-loop
 		if scout.IsSelfLoop(ns, nt) {
@@ -4562,7 +4563,7 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 		}
 
 		// Check if edge already exists
-		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, ns, nt, edge.Type)
+		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, ns, nt, edge.Relation)
 		if err == nil && existing != nil {
 			// Merge edge metrics/qualifiers into the existing edge before deleting to avoid losing data.
 			merged := false
@@ -4639,7 +4640,7 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 		assignActualEdgeID(&edge, d)
 
 		// Normalize symmetric edges so A->B and B->A are treated as the same key.
-		ns, nt, _, _ := scout.NormalizeSymmetricEdge(edge.SourceFragmentID, newID, edge.Type)
+		ns, nt, _, _ := scout.NormalizeSymmetricEdge(edge.SourceFragmentID, newID, edge.Relation)
 
 		// Check if this would become a self-loop
 		if scout.IsSelfLoop(ns, nt) {
@@ -4650,7 +4651,7 @@ func reassignEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo.De
 		}
 
 		// Check if edge already exists
-		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, ns, nt, edge.Type)
+		existing, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, ns, nt, edge.Relation)
 		if err == nil && existing != nil {
 			// Merge edge metrics/qualifiers into the existing edge before deleting to avoid losing data.
 			merged := false
@@ -4890,7 +4891,7 @@ func cleanupBidirectionalTransformsInto(
 ) (int, error) {
 	iter := db.Collection("horizon_dependency_edges").
 		Where("tenantId", "==", tenantID).
-		Where("type", "==", string(models.DependencyTypeTransformsInto)).
+		Where("type", "==", string(ah.RelationName("transforms_into"))).
 		Documents(ctx)
 	defer iter.Stop()
 
@@ -5074,7 +5075,7 @@ func deduplicateEdges(ctx context.Context, db *firestore.Client, edgesRepo *repo
 				continue
 			}
 
-			key := scout.EdgeKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+			key := scout.EdgeKey(edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 			if key == "" {
 				continue
 			}
@@ -5170,7 +5171,7 @@ func normalizeSymmetricEdges(ctx context.Context, db *firestore.Client, edgesRep
 				continue
 			}
 			assignActualEdgeID(&edge, doc)
-			ns, nt, _, swapped := scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+			ns, nt, _, swapped := scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 			if !swapped {
 				continue
 			}
@@ -5709,7 +5710,7 @@ func extractPersonNameFromPath(path string) string {
 
 // fixEdgeDirections reverses edges that point in the wrong direction
 // Uses pagination (100 edges per page) and pre-built fragment type cache for efficiency
-func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, fragmentTypes map[string]models.FragmentType, tenantID string, canonicalizeTypes bool, validationExecutor *policy.PolicyExecutor, canonExecutor *policy.PolicyExecutor) (int, int, error) {
+func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, fragmentTypes map[string]ah.FragmentClass, tenantID string, canonicalizeTypes bool, validationExecutor *policy.PolicyExecutor, canonExecutor *policy.PolicyExecutor) (int, int, error) {
 	log.Printf("Fixing edge directions with pagination (page size: 100)...")
 	log.Printf("Edge canonicalization enabled: %t", canonicalizeTypes)
 	log.Printf("Using pre-loaded fragment type cache with %d entries", len(fragmentTypes))
@@ -5725,11 +5726,11 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 	// fragmentTypes cache can be incomplete, but edge direction fixing must remain global.
 	typeCache := fragmentTypes
 	if typeCache == nil {
-		typeCache = make(map[string]models.FragmentType)
+		typeCache = make(map[string]ah.FragmentClass)
 	}
 	pathCache := make(map[string]string, len(typeCache))
 	needPath := canonicalizeTypes || validationExecutor != nil
-	resolveEndpoint := func(id string) (models.FragmentType, string) {
+	resolveEndpoint := func(id string) (ah.FragmentClass, string) {
 		id = strings.TrimSpace(id)
 		if id == "" {
 			return "", ""
@@ -5738,7 +5739,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 		cachedPath := strings.TrimSpace(pathCache[id])
 		if cachedType != "" && (!needPath || cachedPath != "") {
 			if cachedPath != "" {
-				if reconciled, changed := edgesemantics.ReconcileTypeWithCanonicalPath(cachedType, cachedPath); changed {
+				if reconciled, _, changed := edgesemantics.ReconcileClassWithCanonicalPath(cachedType, cachedPath); changed {
 					cachedType = reconciled
 					typeCache[id] = reconciled
 				}
@@ -5752,8 +5753,8 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 		}
 		data := snap.Data()
 		if cachedType == "" {
-			if v, ok := data["type"].(string); ok {
-				cachedType = models.FragmentType(strings.TrimSpace(v))
+			if v, ok := data["class"].(string); ok {
+				cachedType = ah.FragmentClass(strings.TrimSpace(v))
 			}
 		}
 		if cachedPath == "" {
@@ -5762,7 +5763,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 			}
 		}
 		if cachedPath != "" && cachedType != "" {
-			if reconciled, changed := edgesemantics.ReconcileTypeWithCanonicalPath(cachedType, cachedPath); changed {
+			if reconciled, _, changed := edgesemantics.ReconcileClassWithCanonicalPath(cachedType, cachedPath); changed {
 				cachedType = reconciled
 			}
 		}
@@ -5812,12 +5813,12 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 			policyReason := ""
 			policyPenalty := 0.0
 			policyEdgeModality := ""
-			canonFromEdgeType := models.DependencyType("")
-			normSource, normTarget, normType, symSwapped := scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+			canonFromEdgeType := ah.RelationName("")
+			normSource, normTarget, normType, symSwapped := scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 			if symSwapped {
 				edge.SourceFragmentID = normSource
 				edge.TargetFragmentID = normTarget
-				edge.Type = normType
+				edge.Relation = normType
 				sourceType, targetType = targetType, sourceType
 				sourcePath, targetPath = targetPath, sourcePath
 				edgeChanged = true
@@ -5825,9 +5826,9 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 
 			// Core canonization: normalize relation type
 			if canonExecutor != nil {
-				if normalized := normalizeRelationTypeWithPolicy(ctx, canonExecutor, edge.Type); normalized != "" && normalized != string(edge.Type) {
-					canonFromEdgeType = edge.Type
-					edge.Type = models.DependencyType(normalized)
+				if normalized := normalizeRelationTypeWithPolicy(ctx, canonExecutor, edge.Relation); normalized != "" && normalized != string(edge.Relation) {
+					canonFromEdgeType = edge.Relation
+					edge.Relation = ah.RelationName(normalized)
 					edgeChanged = true
 					edgeCanonicalized = true
 				}
@@ -5835,43 +5836,43 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 
 			// Core edge canonicalization: path-aware matrix shared with runtime ingestion/repo.
 			if canonicalizeTypes {
-				rawRelationType := strings.TrimSpace(string(edge.Type))
+				rawRelationType := strings.TrimSpace(string(edge.Relation))
 				if edge.Qualifiers != nil {
 					if v, ok := edge.Qualifiers["rawRelationType"].(string); ok && strings.TrimSpace(v) != "" {
 						rawRelationType = strings.TrimSpace(v)
 					}
 				}
 				canon := policy.ApplyEdgeCanonicalizationPolicy(policy.EdgeCanonicalizationInput{
-					EdgeType:          edge.Type,
+					EdgeType:          edge.Relation,
 					SourceType:        sourceType,
 					TargetType:        targetType,
 					SourcePath:        sourcePath,
 					TargetPath:        targetPath,
 					RawRelationType:   rawRelationType,
-					OwnershipEvidence: models.HasOwnershipEvidence("", edge.Qualifiers, edge.Metrics),
+					OwnershipEvidence: scout.HasOwnershipEvidence("", edge.Qualifiers, edge.Metrics),
 				})
 				if canon.Changed {
-					origType := edge.Type
+					origType := edge.Relation
 					if canon.OriginalType != "" {
 						canonFromEdgeType = canon.OriginalType
 					} else if canonFromEdgeType == "" {
 						canonFromEdgeType = origType
 					}
-					edge.Type = canon.EdgeType
+					edge.Relation = canon.EdgeType
 					if canon.ShouldSwap {
 						edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
 						sourceType, targetType = targetType, sourceType
 						sourcePath, targetPath = targetPath, sourcePath
 						reversed++
 					}
-					edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+					edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 					if edge.Qualifiers == nil {
 						edge.Qualifiers = map[string]interface{}{}
 					}
 					edge.Qualifiers["canonicalized"] = true
 					edge.Qualifiers["canonicalizedFromEdgeType"] = string(canonFromEdgeType)
 					edge.Qualifiers["canonicalizationReason"] = canon.Reason
-					edge.Qualifiers["normalizedEdgeType"] = string(edge.Type)
+					edge.Qualifiers["normalizedEdgeType"] = string(edge.Relation)
 					if canon.ShouldSwap {
 						edge.Qualifiers["normalizedDirection"] = true
 					}
@@ -5898,7 +5899,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 						"edge_id":        edge.ID,
 						"source_type":    sourceType,
 						"target_type":    targetType,
-						"relation_type":  edge.Type,
+						"relation_type":  edge.Relation,
 						"action":         policy.ActionAllowWithPenalty,
 						"policy_status":  policyStatus,
 						"policy_reason":  canon.PolicyReason,
@@ -5922,7 +5923,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 						"targetType":          string(targetType),
 						"sourceCanonicalPath": sourcePath,
 						"targetCanonicalPath": targetPath,
-						"relationType":        string(edge.Type),
+						"relationType":        string(edge.Relation),
 					},
 				})
 				if err != nil {
@@ -5933,7 +5934,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 						"edge_id":        edge.ID,
 						"source_type":    sourceType,
 						"target_type":    targetType,
-						"relation_type":  edge.Type,
+						"relation_type":  edge.Relation,
 						"action":         "validate_edge",
 						"policy_status":  "na",
 						"policy_reason":  err.Error(),
@@ -5955,7 +5956,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 						"edge_id":        edge.ID,
 						"source_type":    sourceType,
 						"target_type":    targetType,
-						"relation_type":  edge.Type,
+						"relation_type":  edge.Relation,
 						"action":         decision.Action,
 						"policy_status":  policyStatus,
 						"policy_reason":  reason,
@@ -5966,7 +5967,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 
 					prevSource := edge.SourceFragmentID
 					prevTarget := edge.TargetFragmentID
-					prevType := edge.Type
+					prevType := edge.Relation
 					prevCriticality := edge.Properties.Criticality
 
 					policy.ApplyValidationDecisionBestEffort(logPrefix, decision, policy.ValidationDecisionHandlers{
@@ -5977,14 +5978,14 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 							reversed++
 						},
 						RewriteType: func(newType string, _ string) {
-							newEdgeType := models.DependencyType(strings.TrimSpace(newType))
-							if newEdgeType == "" || newEdgeType == edge.Type {
+							newEdgeType := ah.RelationName(strings.TrimSpace(newType))
+							if newEdgeType == "" || newEdgeType == edge.Relation {
 								return
 							}
 							if canonFromEdgeType == "" {
-								canonFromEdgeType = edge.Type
+								canonFromEdgeType = edge.Relation
 							}
-							edge.Type = newEdgeType
+							edge.Relation = newEdgeType
 						},
 						ApplyPenalty: func(penalty float64, _ string) {
 							if edge.Properties.Criticality > 0 {
@@ -6006,10 +6007,10 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 						policyEdgeModality = strings.TrimSpace(modality)
 					}
 
-					if edge.SourceFragmentID != prevSource || edge.TargetFragmentID != prevTarget || edge.Type != prevType {
+					if edge.SourceFragmentID != prevSource || edge.TargetFragmentID != prevTarget || edge.Relation != prevType {
 						edgeChanged = true
 					}
-					if edge.Type != prevType {
+					if edge.Relation != prevType {
 						edgeCanonicalized = true
 					}
 					if edge.Properties.Criticality != prevCriticality {
@@ -6037,7 +6038,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 			}
 
 			if edgeChanged {
-				edge.SourceFragmentID, edge.TargetFragmentID, edge.Type, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+				edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation, _ = scout.NormalizeSymmetricEdge(edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 				if err := edgesRepo.Update(ctx, &edge); err != nil {
 					log.Printf("  ERROR: failed to update edge %s: %v", edge.ID, err)
 					continue
@@ -6046,7 +6047,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 					canonicalized++
 				}
 				if *verbose {
-					log.Printf("  ✓ Updated edge %s: %s -> %s (%s)", edge.ID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Type)
+					log.Printf("  ✓ Updated edge %s: %s -> %s (%s)", edge.ID, edge.SourceFragmentID, edge.TargetFragmentID, edge.Relation)
 				}
 			}
 		}
@@ -6080,7 +6081,7 @@ func fixEdgeDirections(ctx context.Context, db *firestore.Client, edgesRepo *rep
 
 func cleanMarketEdgesAndDomains(ctx context.Context, db *firestore.Client, edgesRepo *repo.DependencyEdgesRepository, tenantID string, apply bool, verbose bool) (geoMismatchCleaned int, domainNormalized int) {
 	fragmentsRepo := repo.NewHorizonFragmentsRepository(db)
-	participatesIn := models.DependencyTypeParticipatesIn
+	participatesIn := ah.RelationName("participates_in")
 
 	// -------------------------------------------------------------------------
 	// 7a: Market geo-mismatch cleanup
@@ -6089,7 +6090,7 @@ func cleanMarketEdgesAndDomains(ctx context.Context, db *firestore.Client, edges
 
 	// Load all ORG fragments (only need ID + canonical path)
 	orgCol := db.Collection("horizon_fragments")
-	orgQuery := orgCol.Where("tenantId", "==", tenantID).Where("type", "==", string(models.FragmentTypeOrganization))
+	orgQuery := orgCol.Where("tenantId", "==", tenantID).Where("type", "==", string(ah.FragmentClassOrg))
 	orgIter := orgQuery.Documents(ctx)
 	defer orgIter.Stop()
 
@@ -6201,7 +6202,7 @@ func cleanMarketEdgesAndDomains(ctx context.Context, db *firestore.Client, edges
 	log.Printf("  Step 7b: Normalizing market fragment domains...")
 
 	marketCol := db.Collection("horizon_fragments")
-	marketQuery := marketCol.Where("tenantId", "==", tenantID).Where("type", "==", string(models.FragmentTypeMarket))
+	marketQuery := marketCol.Where("tenantId", "==", tenantID).Where("type", "==", string(ah.FragmentClassMarket))
 	marketIter := marketQuery.Documents(ctx)
 	defer marketIter.Stop()
 
@@ -6270,7 +6271,7 @@ func cleanMarketEdgesAndDomains(ctx context.Context, db *firestore.Client, edges
 					continue
 				}
 				// Check if the same edge already exists to the target
-				if _, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, e.SourceFragmentID, existing.ID, e.Type); err == nil {
+				if _, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, e.SourceFragmentID, existing.ID, e.Relation); err == nil {
 					// Already exists — just delete the old edge
 					_ = edgesRepo.Delete(ctx, e.ID)
 					continue
@@ -6284,7 +6285,7 @@ func cleanMarketEdgesAndDomains(ctx context.Context, db *firestore.Client, edges
 				if e == nil {
 					continue
 				}
-				if _, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, existing.ID, e.TargetFragmentID, e.Type); err == nil {
+				if _, err := edgesRepo.GetBySourceTargetAndType(ctx, tenantID, existing.ID, e.TargetFragmentID, e.Relation); err == nil {
 					_ = edgesRepo.Delete(ctx, e.ID)
 					continue
 				}
