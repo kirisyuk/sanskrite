@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // MaterializedKind defines the type/schema of a MaterializedArtifact overlay.
@@ -198,16 +200,17 @@ type RelationsGraphPayload struct {
 
 // RelationsGraphNode represents an entity node in a domain relations graph.
 type RelationsGraphNode struct {
-	Type string `json:"type"`
-	Ref  string `json:"ref"`
-	Name string `json:"name,omitempty"`
+	Class   ah.FragmentClass `json:"class"`
+	Subtype string           `json:"subtype,omitempty"`
+	Ref     string           `json:"ref"`
+	Name    string           `json:"name,omitempty"`
 }
 
 // RelationsGraphEdge represents a typed relationship edge in a domain relations graph.
 type RelationsGraphEdge struct {
-	From     int    `json:"from"`
-	To       int    `json:"to"`
-	Relation string `json:"relation"`
+	From     int             `json:"from"`
+	To       int             `json:"to"`
+	Relation ah.RelationName `json:"relation"`
 }
 
 func validateRelationsGraphPayload(payload map[string]interface{}) error {
@@ -237,6 +240,17 @@ func validateRelationsGraphPayload(payload map[string]interface{}) error {
 		return fmt.Errorf("payload 'nodes' array cannot be empty")
 	}
 	for i, node := range nodes {
+		if node.Class == "" {
+			return fmt.Errorf("payload node[%d] missing 'class'", i)
+		}
+		if !ah.IsKnownFragmentClass(node.Class) {
+			return fmt.Errorf("payload node[%d] unknown class %q", i, node.Class)
+		}
+		if ClassHasClosedSubtypes(node.Class) && strings.TrimSpace(node.Subtype) != "" {
+			if ok := IsKnownSubtype(node.Class, node.Subtype); !ok {
+				return fmt.Errorf("payload node[%d] unknown subtype %q for class %q", i, node.Subtype, node.Class)
+			}
+		}
 		if node.Ref == "" {
 			return fmt.Errorf("payload node[%d] missing 'ref'", i)
 		}
@@ -258,6 +272,9 @@ func validateRelationsGraphPayload(payload map[string]interface{}) error {
 			}
 			if edge.Relation == "" {
 				return fmt.Errorf("payload edge[%d] missing 'relation'", i)
+			}
+			if !ah.IsKnownRelation(edge.Relation) {
+				return fmt.Errorf("payload edge[%d] unknown relation %q", i, edge.Relation)
 			}
 		}
 	}
@@ -305,8 +322,6 @@ type SupplyChainAssemblyGraphPayload struct {
 	ProductNodes                    []SupplyChainAssemblyNode            `json:"productNodes,omitempty"`
 	ActorNodes                      []SupplyChainAssemblyNode            `json:"actorNodes,omitempty"`
 	SupplyEdges                     []SupplyChainAssemblySupplyEdge      `json:"supplyEdges,omitempty"`
-	TransformEdges                  []SupplyChainAssemblyTransformEdge   `json:"transformEdges,omitempty"`
-	AssemblyEdges                   []SupplyChainAssemblyTransformEdge   `json:"assemblyEdges,omitempty"`
 	RouteBindings                   []SupplyChainAssemblyRouteBinding    `json:"routeBindings,omitempty"`
 	Coverage                        *SupplyChainAssemblyCoverage         `json:"coverage,omitempty"`
 	OpenGaps                        []string                             `json:"openGaps,omitempty"`
@@ -335,19 +350,21 @@ type SupplyChainAssemblyAnchorComponent struct {
 }
 
 type SupplyChainAssemblyNode struct {
-	Type                       string  `json:"type"`
-	Ref                        string  `json:"ref"`
-	Name                       string  `json:"name,omitempty"`
-	Role                       string  `json:"role,omitempty"`
-	BranchClass                string  `json:"branchClass,omitempty"`
-	PriorityTier               string  `json:"priorityTier,omitempty"`
-	PrimaryBranchID            string  `json:"primaryBranchId,omitempty"`
-	DecisionValueScore         float64 `json:"decisionValueScore,omitempty"`
-	AnchorDistance             int     `json:"anchorDistance,omitempty"`
-	EvidenceStrengthScore      float64 `json:"evidenceStrengthScore,omitempty"`
-	IsPrimaryFocus             bool    `json:"isPrimaryFocus,omitempty"`
-	IsTerminalDistributionNode bool    `json:"isTerminalDistributionNode,omitempty"`
-	IsSupportNode              bool    `json:"isSupportNode,omitempty"`
+	Class                      ah.FragmentClass `json:"class"`
+	Subtype                    string           `json:"subtype,omitempty"`
+	Ref                        string           `json:"ref"`
+	Name                       string           `json:"name,omitempty"`
+	Role                       string           `json:"role,omitempty"`
+	SiteTransforms             []SiteTransform  `json:"siteTransforms,omitempty"`
+	BranchClass                string           `json:"branchClass,omitempty"`
+	PriorityTier               string           `json:"priorityTier,omitempty"`
+	PrimaryBranchID            string           `json:"primaryBranchId,omitempty"`
+	DecisionValueScore         float64          `json:"decisionValueScore,omitempty"`
+	AnchorDistance             int              `json:"anchorDistance,omitempty"`
+	EvidenceStrengthScore      float64          `json:"evidenceStrengthScore,omitempty"`
+	IsPrimaryFocus             bool             `json:"isPrimaryFocus,omitempty"`
+	IsTerminalDistributionNode bool             `json:"isTerminalDistributionNode,omitempty"`
+	IsSupportNode              bool             `json:"isSupportNode,omitempty"`
 }
 
 type SupplyChainAssemblySupplyEdge struct {
@@ -370,6 +387,7 @@ type SupplyChainAssemblySupplyEdge struct {
 	NoisePenaltyScore       float64                `json:"noisePenaltyScore,omitempty"`
 }
 
+// SupplyChainAssemblyTransformEdge is used while assembling graphs; transforms are persisted on actor nodes as siteTransforms, not as top-level payload edges.
 type SupplyChainAssemblyTransformEdge struct {
 	FromProductRef     string  `json:"fromProductRef,omitempty"`
 	ToProductRef       string  `json:"toProductRef,omitempty"`
@@ -426,17 +444,32 @@ type SupplyChainAssemblyBranchSummary struct {
 
 // SupplyChainPathNode represents a node in a supply chain path.
 type SupplyChainPathNode struct {
-	// Type: "org", "fac", "product"
-	Type string `json:"type"`
+	Class          ah.FragmentClass `json:"class"`
+	Subtype        string           `json:"subtype,omitempty"`
+	Ref            string           `json:"ref"`
+	SiteTransforms []SiteTransform  `json:"siteTransforms,omitempty"`
+}
 
-	// Ref: canonical path to the fragment (e.g., "/org/catl", "/product/.../battery-cell")
-	Ref string `json:"ref"`
+// SupplyChainPathNodeForRef maps a canonical path to class/subtype for SUPPLY_CHAIN_PATH payloads.
+func SupplyChainPathNodeForRef(ref string) SupplyChainPathNode {
+	ref = strings.TrimSpace(ref)
+	switch {
+	case strings.HasPrefix(ref, "/product/"):
+		return SupplyChainPathNode{Class: ah.FragmentClassProduct, Ref: ref}
+	case strings.HasPrefix(ref, "/deposit/"):
+		return SupplyChainPathNode{Class: ah.FragmentClassSite, Subtype: "deposit", Ref: ref}
+	case strings.HasPrefix(ref, "/fac/"):
+		return SupplyChainPathNode{Class: ah.FragmentClassSite, Ref: ref}
+	case strings.HasPrefix(ref, "/gov/"), strings.HasPrefix(ref, "/regime/"):
+		return SupplyChainPathNode{Class: ah.FragmentClassRegime, Ref: ref}
+	default:
+		return SupplyChainPathNode{Class: ah.FragmentClassOrg, Ref: ref}
+	}
 }
 
 // SupplyChainPathEdge represents an edge/transition in a supply chain path.
 type SupplyChainPathEdge struct {
-	// Type: "SUPPLY_LINK", "ONTOLOGY", etc.
-	Type string `json:"type"`
+	Relation ah.RelationName `json:"relation"`
 
 	// From: index into Nodes array
 	From int `json:"from"`
@@ -444,7 +477,7 @@ type SupplyChainPathEdge struct {
 	// To: index into Nodes array
 	To int `json:"to"`
 
-	// ViaProductIndex: for SUPPLY_LINK, index of the product node (optional)
+	// ViaProductIndex: for supplies edges, index of the product node (optional)
 	ViaProductIndex *int `json:"viaProductIndex,omitempty"`
 
 	// ProductNodeIndex/ProductRef make the carried product explicit on materialized edges,
@@ -461,20 +494,9 @@ type SupplyChainPathEdge struct {
 	// CarriesProduct marks edges that represent actual product flow/logistics, not just overlay semantics.
 	CarriesProduct bool `json:"carriesProduct,omitempty"`
 
-	// Role distinguishes flow edges inside the materialized path.
-	// Examples: product_flow, logistics_leg, product_transformation.
-	Role string `json:"role,omitempty"`
-
 	// Metrics/Qualifiers carry best-effort operational semantics from the underlying SupplyLink segment.
 	Metrics    map[string]MetricValue `json:"metrics,omitempty"`
 	Qualifiers map[string]interface{} `json:"qualifiers,omitempty"`
-
-	// Relation: for ONTOLOGY edges, the relation type (e.g., "TRANSFORMS_INTO", "USED_IN")
-	Relation string `json:"relation,omitempty"`
-
-	// FromProductIndex/ToProductIndex: for ONTOLOGY edges, product node indices
-	FromProductIndex *int `json:"fromProductIndex,omitempty"`
-	ToProductIndex   *int `json:"toProductIndex,omitempty"`
 
 	// Mode: "optional", "required", "strict" (for validation/ranking)
 	Mode string `json:"mode,omitempty"`
@@ -643,12 +665,21 @@ func validateSupplyChainPathPayload(payload map[string]interface{}) error {
 
 	// Validate each node
 	for i, node := range decodedNodes {
-		nodeType := node.Type
-		if nodeType == "" {
-			return fmt.Errorf("payload node[%d] missing or invalid 'type'", i)
+		if node.Class == "" {
+			return fmt.Errorf("payload node[%d] missing or invalid 'class'", i)
 		}
-		if nodeType != "org" && nodeType != "fac" && nodeType != "product" && nodeType != "deposit" {
-			return fmt.Errorf("payload node[%d] invalid type: %q (expected org|fac|product|deposit)", i, nodeType)
+		if !ah.IsKnownFragmentClass(node.Class) {
+			return fmt.Errorf("payload node[%d] unknown class %q", i, node.Class)
+		}
+		switch node.Class {
+		case ah.FragmentClassOrg, ah.FragmentClassSite, ah.FragmentClassProduct, ah.FragmentClassRegime:
+		default:
+			return fmt.Errorf("payload node[%d] invalid class %q (expected org|site|product|regime)", i, node.Class)
+		}
+		if ClassHasClosedSubtypes(node.Class) && strings.TrimSpace(node.Subtype) != "" {
+			if ok := IsKnownSubtype(node.Class, node.Subtype); !ok {
+				return fmt.Errorf("payload node[%d] unknown subtype %q for class %q", i, node.Subtype, node.Class)
+			}
 		}
 		ref := node.Ref
 		if ref == "" {
@@ -710,9 +741,14 @@ func validateSupplyChainPathPayload(payload map[string]interface{}) error {
 			if toIdx < 0 || toIdx >= len(decodedNodes) {
 				return fmt.Errorf("payload edge[%d] 'to' index %d out of range (nodes length: %d)", i, toIdx, len(decodedNodes))
 			}
-			edgeType := strings.TrimSpace(edge.Type)
-			switch edgeType {
-			case "SUPPLY_LINK", "LOGISTICS":
+			if edge.Relation == "" {
+				return fmt.Errorf("payload edge[%d] missing 'relation'", i)
+			}
+			if !ah.IsKnownRelation(edge.Relation) {
+				return fmt.Errorf("payload edge[%d] unknown relation %q", i, edge.Relation)
+			}
+			switch edge.Relation {
+			case ah.RelationNameSupplies, ah.RelationNameLegConnects:
 				if strings.TrimSpace(edge.SupplyLinkCanonicalPath) == "" {
 					return fmt.Errorf("payload edge[%d] missing supplyLinkCanonicalPath", i)
 				}
@@ -721,13 +757,6 @@ func validateSupplyChainPathPayload(payload map[string]interface{}) error {
 				}
 				if edge.SegmentIndex == nil || *edge.SegmentIndex < 0 {
 					return fmt.Errorf("payload edge[%d] missing segmentIndex", i)
-				}
-				expectedRole := "product_flow"
-				if edgeType == "LOGISTICS" {
-					expectedRole = "logistics_leg"
-				}
-				if strings.TrimSpace(edge.Role) != expectedRole {
-					return fmt.Errorf("payload edge[%d] role %q must be %q for %s", i, edge.Role, expectedRole, edgeType)
 				}
 			}
 		}
@@ -793,6 +822,9 @@ func validateSupplyChainAssemblyGraphPayload(payload map[string]interface{}) err
 		if strings.TrimSpace(node.Ref) == "" || !strings.HasPrefix(strings.TrimSpace(node.Ref), "/product/") {
 			return fmt.Errorf("payload productNode[%d] must reference /product/...", i)
 		}
+		if node.Class != ah.FragmentClassProduct {
+			return fmt.Errorf("payload productNode[%d] class must be product", i)
+		}
 	}
 	actorNodes, err := decodeSupplyChainAssemblyNodes(payload["actorNodes"])
 	if err != nil {
@@ -802,6 +834,12 @@ func validateSupplyChainAssemblyGraphPayload(payload map[string]interface{}) err
 		ref := strings.TrimSpace(node.Ref)
 		if ref == "" || !strings.HasPrefix(ref, "/") {
 			return fmt.Errorf("payload actorNode[%d] must reference canonical path", i)
+		}
+		if node.Class == "" {
+			return fmt.Errorf("payload actorNode[%d] missing class", i)
+		}
+		if node.Class != ah.FragmentClassOrg && node.Class != ah.FragmentClassSite && node.Class != ah.FragmentClassRegime {
+			return fmt.Errorf("payload actorNode[%d] class must be org, site, or regime", i)
 		}
 	}
 	if len(productNodes) == 0 && len(actorNodes) == 0 {
@@ -815,18 +853,6 @@ func validateSupplyChainAssemblyGraphPayload(payload map[string]interface{}) err
 		if strings.TrimSpace(edge.ProductRef) == "" || !strings.HasPrefix(strings.TrimSpace(edge.ProductRef), "/product/") {
 			return fmt.Errorf("payload supplyEdge[%d] must reference productRef", i)
 		}
-	}
-	transformEdges, err := decodeSupplyChainAssemblyTransformEdges(payload["transformEdges"])
-	if err != nil {
-		return err
-	}
-	for i, edge := range transformEdges {
-		if strings.TrimSpace(edge.FromProductRef) == "" || strings.TrimSpace(edge.ToProductRef) == "" {
-			return fmt.Errorf("payload transformEdge[%d] missing product refs", i)
-		}
-	}
-	if _, err := decodeSupplyChainAssemblyTransformEdges(payload["assemblyEdges"]); err != nil {
-		return err
 	}
 	if _, err := decodeSupplyChainAssemblyRouteBindings(payload["routeBindings"]); err != nil {
 		return err

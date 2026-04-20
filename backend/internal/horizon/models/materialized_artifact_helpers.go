@@ -8,7 +8,29 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
+
+// AssemblyGraphSiteTransformCounts returns pairwise product transition counts carried on actor siteTransforms.
+func AssemblyGraphSiteTransformCounts(parsed *SupplyChainAssemblyGraphPayload) (processingN, assemblyN int) {
+	if parsed == nil {
+		return 0, 0
+	}
+	for _, an := range parsed.ActorNodes {
+		for _, st := range an.SiteTransforms {
+			c := len(st.InputProducts) * len(st.OutputProducts)
+			if c == 0 {
+				continue
+			}
+			if st.Kind == "assembly" {
+				assemblyN += c
+			} else {
+				processingN += c
+			}
+		}
+	}
+	return processingN, assemblyN
+}
 
 type SupplyChainLinkageSummary struct {
 	OperationalEdges int  `json:"operationalEdges"`
@@ -724,38 +746,6 @@ func decodeSupplyChainAssemblySupplyEdges(raw interface{}) ([]SupplyChainAssembl
 	}
 }
 
-func decodeSupplyChainAssemblyTransformEdges(raw interface{}) ([]SupplyChainAssemblyTransformEdge, error) {
-	switch edges := raw.(type) {
-	case nil:
-		return nil, nil
-	case []SupplyChainAssemblyTransformEdge:
-		return edges, nil
-	case []interface{}:
-		out := make([]SupplyChainAssemblyTransformEdge, 0, len(edges))
-		for i, value := range edges {
-			switch edge := value.(type) {
-			case SupplyChainAssemblyTransformEdge:
-				out = append(out, edge)
-			case map[string]interface{}:
-				edgeJSON, err := json.Marshal(edge)
-				if err != nil {
-					return nil, fmt.Errorf("payload assembly transformEdge[%d] marshal failed: %w", i, err)
-				}
-				var parsed SupplyChainAssemblyTransformEdge
-				if err := json.Unmarshal(edgeJSON, &parsed); err != nil {
-					return nil, fmt.Errorf("payload assembly transformEdge[%d] unmarshal failed: %w", i, err)
-				}
-				out = append(out, parsed)
-			default:
-				return nil, fmt.Errorf("payload assembly transformEdge[%d] must be an object", i)
-			}
-		}
-		return out, nil
-	default:
-		return nil, fmt.Errorf("payload assembly transformEdges must be an array")
-	}
-}
-
 func decodeSupplyChainAssemblyRouteBindings(raw interface{}) ([]SupplyChainAssemblyRouteBinding, error) {
 	switch bindings := raw.(type) {
 	case nil:
@@ -927,8 +917,6 @@ type SupplyChainAssemblyGraphPayloadOptions struct {
 	ProductNodes                    []SupplyChainAssemblyNode
 	ActorNodes                      []SupplyChainAssemblyNode
 	SupplyEdges                     []SupplyChainAssemblySupplyEdge
-	TransformEdges                  []SupplyChainAssemblyTransformEdge
-	AssemblyEdges                   []SupplyChainAssemblyTransformEdge
 	RouteBindings                   []SupplyChainAssemblyRouteBinding
 	Coverage                        *SupplyChainAssemblyCoverage
 	OpenGaps                        []string
@@ -954,8 +942,6 @@ func BuildSupplyChainAssemblyGraphPayload(
 	productNodes []SupplyChainAssemblyNode,
 	actorNodes []SupplyChainAssemblyNode,
 	supplyEdges []SupplyChainAssemblySupplyEdge,
-	transformEdges []SupplyChainAssemblyTransformEdge,
-	assemblyEdges []SupplyChainAssemblyTransformEdge,
 	routeBindings []SupplyChainAssemblyRouteBinding,
 	coverage *SupplyChainAssemblyCoverage,
 	openGaps []string,
@@ -970,8 +956,6 @@ func BuildSupplyChainAssemblyGraphPayload(
 		ProductNodes:    productNodes,
 		ActorNodes:      actorNodes,
 		SupplyEdges:     supplyEdges,
-		TransformEdges:  transformEdges,
-		AssemblyEdges:   assemblyEdges,
 		RouteBindings:   routeBindings,
 		Coverage:        coverage,
 		OpenGaps:        openGaps,
@@ -1012,12 +996,6 @@ func BuildSupplyChainAssemblyGraphPayloadDetailed(opts SupplyChainAssemblyGraphP
 	}
 	if len(opts.SupplyEdges) > 0 {
 		payload["supplyEdges"] = opts.SupplyEdges
-	}
-	if len(opts.TransformEdges) > 0 {
-		payload["transformEdges"] = opts.TransformEdges
-	}
-	if len(opts.AssemblyEdges) > 0 {
-		payload["assemblyEdges"] = opts.AssemblyEdges
 	}
 	if len(opts.RouteBindings) > 0 {
 		payload["routeBindings"] = opts.RouteBindings
@@ -1213,14 +1191,6 @@ func ParseSupplyChainAssemblyGraphPayload(payload map[string]interface{}) (*Supp
 	if err != nil {
 		return nil, err
 	}
-	transformEdges, err := decodeSupplyChainAssemblyTransformEdges(payload["transformEdges"])
-	if err != nil {
-		return nil, err
-	}
-	assemblyEdges, err := decodeSupplyChainAssemblyTransformEdges(payload["assemblyEdges"])
-	if err != nil {
-		return nil, err
-	}
 	routeBindings, err := decodeSupplyChainAssemblyRouteBindings(payload["routeBindings"])
 	if err != nil {
 		return nil, err
@@ -1300,8 +1270,6 @@ func ParseSupplyChainAssemblyGraphPayload(payload map[string]interface{}) (*Supp
 		ProductNodes:                    productNodes,
 		ActorNodes:                      actorNodes,
 		SupplyEdges:                     supplyEdges,
-		TransformEdges:                  transformEdges,
-		AssemblyEdges:                   assemblyEdges,
 		RouteBindings:                   routeBindings,
 		Coverage:                        coverage,
 		OpenGaps:                        openGaps,
@@ -1388,7 +1356,7 @@ func RepairSupplyChainPathLinkage(artifact *MaterializedArtifact, resolver func(
 
 	for idx := range parsed.Edges {
 		edge := &parsed.Edges[idx]
-		if edge.Type != "SUPPLY_LINK" && edge.Type != "LOGISTICS" {
+		if edge.Relation != ah.RelationNameSupplies && edge.Relation != ah.RelationNameLegConnects {
 			continue
 		}
 		summary.OperationalEdges++
@@ -1463,16 +1431,6 @@ func inferMissingOperationalEdgeMetadata(parsed *SupplyChainPathPayload, edge *S
 		return false
 	}
 	changed := false
-	if strings.TrimSpace(edge.Role) == "" {
-		switch edge.Type {
-		case "SUPPLY_LINK":
-			edge.Role = "product_flow"
-			changed = true
-		case "LOGISTICS":
-			edge.Role = "logistics_leg"
-			changed = true
-		}
-	}
 	if !edge.CarriesProduct {
 		edge.CarriesProduct = true
 		changed = true
@@ -1530,7 +1488,7 @@ func synthesizeLegacySupplyChainLegs(parsed *SupplyChainPathPayload, tenantID st
 	groupIndexByCanonical := map[string]int{}
 	for edgeIdx := range parsed.Edges {
 		edge := parsed.Edges[edgeIdx]
-		if edge.Type != "SUPPLY_LINK" && edge.Type != "LOGISTICS" {
+		if edge.Relation != ah.RelationNameSupplies && edge.Relation != ah.RelationNameLegConnects {
 			continue
 		}
 		canonicalPath := strings.TrimSpace(edge.SupplyLinkCanonicalPath)
@@ -1610,7 +1568,7 @@ func buildLegacyLegFromOperationalEdges(parsed *SupplyChainPathPayload, canonica
 			}
 		}
 
-		if edge.Type == "SUPPLY_LINK" {
+		if edge.Relation == ah.RelationNameSupplies {
 			productFlowFound = true
 			if edge.Qualifiers != nil && strings.TrimSpace(leg.RouteVariantKey) == "" {
 				if raw, ok := edge.Qualifiers["route_variant_key"].(string); ok {
@@ -1630,7 +1588,7 @@ func buildLegacyLegFromOperationalEdges(parsed *SupplyChainPathPayload, canonica
 			continue
 		}
 
-		if edge.Type == "LOGISTICS" {
+		if edge.Relation == ah.RelationNameLegConnects {
 			if leg.SupplierNodeIndex == nil && edge.From >= 0 {
 				idx := edge.From
 				leg.SupplierNodeIndex = &idx
@@ -1688,7 +1646,7 @@ func scoreOperationalEdgeAgainstLeg(parsed *SupplyChainPathPayload, edge *Supply
 	if edgeProductRef != "" && edgeProductRef == strings.TrimSpace(leg.ProductRef) {
 		score += 4
 	}
-	if edge.Type == "SUPPLY_LINK" {
+	if edge.Relation == ah.RelationNameSupplies {
 		if matchesNodeRef(parsed, edge.From, leg.SupplierNodeIndex, leg.SupplierRef) {
 			score += 4
 		}
@@ -2089,11 +2047,11 @@ func FindNodeByRef(nodes []SupplyChainPathNode, ref string) int {
 	return -1
 }
 
-// FindNodesByType finds all node indices of a specific type.
-func FindNodesByType(nodes []SupplyChainPathNode, nodeType string) []int {
+// FindNodesByClass finds all node indices with the given fragment class.
+func FindNodesByClass(nodes []SupplyChainPathNode, class ah.FragmentClass) []int {
 	indices := []int{}
 	for i, node := range nodes {
-		if node.Type == nodeType {
+		if node.Class == class {
 			indices = append(indices, i)
 		}
 	}
@@ -2152,7 +2110,7 @@ func (a *MaterializedArtifact) GenerateVectorText() string {
 					b.WriteString("Participants: ")
 					refs := make([]string, 0, len(parsed.Nodes))
 					for _, n := range parsed.Nodes {
-						refs = append(refs, n.Type+":"+n.Ref)
+						refs = append(refs, string(n.Class)+":"+n.Ref)
 					}
 					b.WriteString(strings.Join(refs, ", "))
 					b.WriteString("\n")
@@ -2160,14 +2118,20 @@ func (a *MaterializedArtifact) GenerateVectorText() string {
 				for _, edge := range parsed.Edges {
 					if edge.CarriesProduct && edge.ProductRef != "" {
 						b.WriteString("Product Flow Edge: ")
-						b.WriteString(edge.Role)
+						b.WriteString(string(edge.Relation))
 						b.WriteString(" ")
 						b.WriteString(edge.ProductRef)
 						b.WriteString("\n")
 					}
-					if edge.Type == "ONTOLOGY" && edge.Relation != "" {
-						b.WriteString("Transformation: ")
-						b.WriteString(edge.Relation)
+				}
+				for _, n := range parsed.Nodes {
+					for _, st := range n.SiteTransforms {
+						b.WriteString("Site transform: ")
+						b.WriteString(st.Kind)
+						b.WriteString(" ")
+						b.WriteString(strings.Join(st.InputProducts, ","))
+						b.WriteString(" -> ")
+						b.WriteString(strings.Join(st.OutputProducts, ","))
 						b.WriteString("\n")
 					}
 				}
@@ -2234,19 +2198,18 @@ func (a *MaterializedArtifact) GenerateVectorText() string {
 					b.WriteString(strings.Join(refs, ", "))
 					b.WriteString("\n")
 				}
-				for _, edge := range parsed.TransformEdges {
-					b.WriteString("Transformation: ")
-					b.WriteString(edge.FromProductRef)
-					b.WriteString(" -> ")
-					b.WriteString(edge.ToProductRef)
-					b.WriteString("\n")
-				}
-				for _, edge := range parsed.AssemblyEdges {
-					b.WriteString("Assembly: ")
-					b.WriteString(edge.FromProductRef)
-					b.WriteString(" => ")
-					b.WriteString(edge.ToProductRef)
-					b.WriteString("\n")
+				for _, node := range parsed.ActorNodes {
+					for _, st := range node.SiteTransforms {
+						b.WriteString("Actor site transform: ")
+						b.WriteString(node.Ref)
+						b.WriteString(" ")
+						b.WriteString(st.Kind)
+						b.WriteString(" ")
+						b.WriteString(strings.Join(st.InputProducts, ","))
+						b.WriteString(" -> ")
+						b.WriteString(strings.Join(st.OutputProducts, ","))
+						b.WriteString("\n")
+					}
 				}
 			}
 		}
@@ -2286,7 +2249,7 @@ func (a *MaterializedArtifact) GenerateVectorText() string {
 					if edge.Relation != "" && edge.From >= 0 && edge.From < len(parsed.Nodes) && edge.To >= 0 && edge.To < len(parsed.Nodes) {
 						fromName := parsed.Nodes[edge.From].Ref
 						toName := parsed.Nodes[edge.To].Ref
-						b.WriteString(fmt.Sprintf("Relation: %s -[%s]-> %s\n", fromName, edge.Relation, toName))
+						b.WriteString(fmt.Sprintf("Relation: %s -[%s]-> %s\n", fromName, string(edge.Relation), toName))
 					}
 				}
 			}
@@ -2370,9 +2333,8 @@ func mergePathNodes(existing, incoming []SupplyChainPathNode) []SupplyChainPathN
 func mergePathEdges(existing, incoming []SupplyChainPathEdge) []SupplyChainPathEdge {
 	type edgeKey struct {
 		From, To     int
-		Type         string
+		Relation     string
 		ProductRef   string
-		Role         string
 		SegmentIndex int
 	}
 	indexByKey := map[edgeKey]int{}
@@ -2382,7 +2344,7 @@ func mergePathEdges(existing, incoming []SupplyChainPathEdge) []SupplyChainPathE
 		if e.SegmentIndex != nil {
 			segmentIndex = *e.SegmentIndex
 		}
-		k := edgeKey{From: e.From, To: e.To, Type: e.Type, ProductRef: strings.TrimSpace(e.ProductRef), Role: strings.TrimSpace(e.Role), SegmentIndex: segmentIndex}
+		k := edgeKey{From: e.From, To: e.To, Relation: string(e.Relation), ProductRef: strings.TrimSpace(e.ProductRef), SegmentIndex: segmentIndex}
 		if _, exists := indexByKey[k]; !exists {
 			merged = append(merged, e)
 			indexByKey[k] = len(merged) - 1
@@ -2393,7 +2355,7 @@ func mergePathEdges(existing, incoming []SupplyChainPathEdge) []SupplyChainPathE
 		if e.SegmentIndex != nil {
 			segmentIndex = *e.SegmentIndex
 		}
-		k := edgeKey{From: e.From, To: e.To, Type: e.Type, ProductRef: strings.TrimSpace(e.ProductRef), Role: strings.TrimSpace(e.Role), SegmentIndex: segmentIndex}
+		k := edgeKey{From: e.From, To: e.To, Relation: string(e.Relation), ProductRef: strings.TrimSpace(e.ProductRef), SegmentIndex: segmentIndex}
 		if idx, exists := indexByKey[k]; exists {
 			merged[idx] = mergeSupplyChainPathEdge(merged[idx], e)
 			continue
@@ -2468,19 +2430,11 @@ func mergeSupplyChainPathEdge(existing, incoming SupplyChainPathEdge) SupplyChai
 		idx := *incoming.ViaProductIndex
 		existing.ViaProductIndex = &idx
 	}
-	if existing.FromProductIndex == nil && incoming.FromProductIndex != nil {
-		idx := *incoming.FromProductIndex
-		existing.FromProductIndex = &idx
-	}
-	if existing.ToProductIndex == nil && incoming.ToProductIndex != nil {
-		idx := *incoming.ToProductIndex
-		existing.ToProductIndex = &idx
-	}
 	if strings.TrimSpace(existing.Mode) == "" {
 		existing.Mode = strings.TrimSpace(incoming.Mode)
 	}
-	if strings.TrimSpace(existing.Relation) == "" {
-		existing.Relation = strings.TrimSpace(incoming.Relation)
+	if existing.Relation == "" && incoming.Relation != "" {
+		existing.Relation = incoming.Relation
 	}
 	if !existing.CarriesProduct && incoming.CarriesProduct {
 		existing.CarriesProduct = true
@@ -2932,6 +2886,15 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 					parsed.Nodes[i].Ref = newPath
 					changed = true
 				}
+				for j := range parsed.Nodes[i].SiteTransforms {
+					st := &parsed.Nodes[i].SiteTransforms[j]
+					if replacePathInStringSlice(st.InputProducts, oldPath, newPath) {
+						changed = true
+					}
+					if replacePathInStringSlice(st.OutputProducts, oldPath, newPath) {
+						changed = true
+					}
+				}
 			}
 			for i := range parsed.Edges {
 				if strings.TrimSpace(parsed.Edges[i].ProductRef) == oldPath {
@@ -3012,11 +2975,29 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 					parsed.ProductNodes[i].Ref = newPath
 					changed = true
 				}
+				for j := range parsed.ProductNodes[i].SiteTransforms {
+					st := &parsed.ProductNodes[i].SiteTransforms[j]
+					if replacePathInStringSlice(st.InputProducts, oldPath, newPath) {
+						changed = true
+					}
+					if replacePathInStringSlice(st.OutputProducts, oldPath, newPath) {
+						changed = true
+					}
+				}
 			}
 			for i := range parsed.ActorNodes {
 				if strings.TrimSpace(parsed.ActorNodes[i].Ref) == oldPath {
 					parsed.ActorNodes[i].Ref = newPath
 					changed = true
+				}
+				for j := range parsed.ActorNodes[i].SiteTransforms {
+					st := &parsed.ActorNodes[i].SiteTransforms[j]
+					if replacePathInStringSlice(st.InputProducts, oldPath, newPath) {
+						changed = true
+					}
+					if replacePathInStringSlice(st.OutputProducts, oldPath, newPath) {
+						changed = true
+					}
 				}
 			}
 			for i := range parsed.SupplyEdges {
@@ -3033,26 +3014,6 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 					changed = true
 				}
 				if replacePathInStringSlice(parsed.SupplyEdges[i].TransportViaRefs, oldPath, newPath) {
-					changed = true
-				}
-			}
-			for i := range parsed.TransformEdges {
-				if strings.TrimSpace(parsed.TransformEdges[i].FromProductRef) == oldPath {
-					parsed.TransformEdges[i].FromProductRef = newPath
-					changed = true
-				}
-				if strings.TrimSpace(parsed.TransformEdges[i].ToProductRef) == oldPath {
-					parsed.TransformEdges[i].ToProductRef = newPath
-					changed = true
-				}
-			}
-			for i := range parsed.AssemblyEdges {
-				if strings.TrimSpace(parsed.AssemblyEdges[i].FromProductRef) == oldPath {
-					parsed.AssemblyEdges[i].FromProductRef = newPath
-					changed = true
-				}
-				if strings.TrimSpace(parsed.AssemblyEdges[i].ToProductRef) == oldPath {
-					parsed.AssemblyEdges[i].ToProductRef = newPath
 					changed = true
 				}
 			}
@@ -3128,8 +3089,6 @@ func ReplaceCanonicalPathInArtifact(artifact *MaterializedArtifact, oldPath, new
 				ProductNodes:                    parsed.ProductNodes,
 				ActorNodes:                      parsed.ActorNodes,
 				SupplyEdges:                     parsed.SupplyEdges,
-				TransformEdges:                  parsed.TransformEdges,
-				AssemblyEdges:                   parsed.AssemblyEdges,
 				RouteBindings:                   parsed.RouteBindings,
 				Coverage:                        parsed.Coverage,
 				OpenGaps:                        parsed.OpenGaps,
@@ -3210,10 +3169,12 @@ func ValidateSupplyChainPathStructure(nodes []SupplyChainPathNode, edges []Suppl
 		return fmt.Errorf("path must have at least one node")
 	}
 
-	// Validate node types
+	// Validate node classes
 	for i, node := range nodes {
-		if node.Type != "org" && node.Type != "fac" && node.Type != "product" && node.Type != "deposit" {
-			return fmt.Errorf("node[%d] invalid type: %q (expected org|fac|product|deposit)", i, node.Type)
+		switch node.Class {
+		case ah.FragmentClassOrg, ah.FragmentClassSite, ah.FragmentClassProduct, ah.FragmentClassRegime:
+		default:
+			return fmt.Errorf("node[%d] invalid class: %q (expected org|site|product|regime)", i, node.Class)
 		}
 		if node.Ref == "" {
 			return fmt.Errorf("node[%d] missing ref", i)
@@ -3233,8 +3194,8 @@ func ValidateSupplyChainPathStructure(nodes []SupplyChainPathNode, edges []Suppl
 			if viaIdx < 0 || viaIdx >= len(nodes) {
 				return fmt.Errorf("edge[%d] 'viaProductIndex' %d out of range (nodes length: %d)", i, viaIdx, len(nodes))
 			}
-			if nodes[viaIdx].Type != "product" {
-				return fmt.Errorf("edge[%d] 'viaProductIndex' %d points to non-product node (type: %q)", i, viaIdx, nodes[viaIdx].Type)
+			if nodes[viaIdx].Class != ah.FragmentClassProduct {
+				return fmt.Errorf("edge[%d] 'viaProductIndex' %d points to non-product node (class: %q)", i, viaIdx, nodes[viaIdx].Class)
 			}
 		}
 		if edge.ProductNodeIndex != nil {
@@ -3242,8 +3203,8 @@ func ValidateSupplyChainPathStructure(nodes []SupplyChainPathNode, edges []Suppl
 			if productIdx < 0 || productIdx >= len(nodes) {
 				return fmt.Errorf("edge[%d] 'productNodeIndex' %d out of range (nodes length: %d)", i, productIdx, len(nodes))
 			}
-			if nodes[productIdx].Type != "product" {
-				return fmt.Errorf("edge[%d] 'productNodeIndex' %d points to non-product node (type: %q)", i, productIdx, nodes[productIdx].Type)
+			if nodes[productIdx].Class != ah.FragmentClassProduct {
+				return fmt.Errorf("edge[%d] 'productNodeIndex' %d points to non-product node (class: %q)", i, productIdx, nodes[productIdx].Class)
 			}
 		}
 		if strings.TrimSpace(edge.ProductRef) != "" && !strings.HasPrefix(strings.TrimSpace(edge.ProductRef), "/product/") {
