@@ -49,20 +49,6 @@ func (s *Service) includeProduct(p *horizonmodels.HorizonFragment, configIDs map
 	return ok
 }
 
-func (s *Service) mergeProductIntoMaterial(m *Material, p *horizonmodels.HorizonFragment) {
-	if m == nil || p == nil {
-		return
-	}
-	if p.State != nil {
-		if rv, ok := p.State["risk_score"]; ok {
-			m.RiskScore = rv.Value
-		}
-	}
-	if len(p.AlternativeNames) > 0 {
-		m.Aliases = append([]string(nil), p.AlternativeNames...)
-	}
-}
-
 // ListMaterials returns the embedded catalog merged with AH /product/* overlays when repos are configured.
 func (s *Service) ListMaterials(ctx context.Context) ([]*Material, error) {
 	defs, err := config.LoadAllMaterials()
@@ -94,9 +80,9 @@ func (s *Service) ListMaterials(ctx context.Context) ([]*Material, error) {
 	for _, def := range defs {
 		m := materialFromDefinition(def)
 		if p := bySlug[def.MaterialID]; p != nil {
-			s.mergeProductIntoMaterial(m, p)
+			ApplyAHProductOverlay(m, p)
 		}
-		m.RiskDelta7d = calculateRiskDelta7d(m.RiskScore, nil)
+		m.RiskDelta7d = calculateRiskDelta7d(m.RiskScore, m.RiskHistory)
 		out = append(out, m)
 	}
 	for slug, p := range bySlug {
@@ -113,8 +99,8 @@ func (s *Service) ListMaterials(ctx context.Context) ([]*Material, error) {
 		if m.Name == "" {
 			m.Name = slug
 		}
-		s.mergeProductIntoMaterial(m, p)
-		m.RiskDelta7d = calculateRiskDelta7d(m.RiskScore, nil)
+		ApplyAHProductOverlay(m, p)
+		m.RiskDelta7d = calculateRiskDelta7d(m.RiskScore, m.RiskHistory)
 		out = append(out, m)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
@@ -139,7 +125,7 @@ func (s *Service) GetMaterial(ctx context.Context, id string) (*Material, error)
 		for _, p := range prods {
 			if materialSlugFromFragment(p) == id {
 				foundAH = true
-				s.mergeProductIntoMaterial(m, p)
+				ApplyAHProductOverlay(m, p)
 				break
 			}
 		}
@@ -147,7 +133,7 @@ func (s *Service) GetMaterial(ctx context.Context, id string) (*Material, error)
 	if defErr != nil && !foundAH {
 		return nil, fmt.Errorf("material %q: %w", id, defErr)
 	}
-	m.RiskDelta7d = calculateRiskDelta7d(m.RiskScore, nil)
+	m.RiskDelta7d = calculateRiskDelta7d(m.RiskScore, m.RiskHistory)
 	return m, nil
 }
 
@@ -155,7 +141,7 @@ func (s *Service) siteFacilities(ctx context.Context) ([]*horizonmodels.HorizonF
 	if s.frags == nil {
 		return nil, nil
 	}
-	subtypes := []string{"deposit", "refinery", "processing_plant", "factory"}
+	subtypes := []string{"deposit", "refinery", "processing_plant", "factory", "mine", "processor"}
 	seen := map[string]*horizonmodels.HorizonFragment{}
 	for _, sub := range subtypes {
 		fs, err := s.frags.ListByClassSubtypeAndTenant(ctx, globalTenant, ah.FragmentClassSite, sub, 500)
@@ -190,19 +176,88 @@ func (s *Service) siteFacilities(ctx context.Context) ([]*horizonmodels.HorizonF
 	return out, nil
 }
 
-func (s *Service) facilityProducesMaterial(ctx context.Context, site *horizonmodels.HorizonFragment, productID string) bool {
+// facilityLinkedToMaterial is true when the site produces or supplies the given catalog material id (product slug).
+func (s *Service) facilityLinkedToMaterial(ctx context.Context, site *horizonmodels.HorizonFragment, productID string) bool {
 	if s == nil || s.edges == nil || s.frags == nil || site == nil || productID == "" {
 		return false
 	}
 	edges, err := s.edges.ListBySource(ctx, globalTenant, site.ID, ptrRelation(ah.RelationNameProduces), 80)
+	if err == nil {
+		for _, e := range edges {
+			if tgt, err := s.frags.Get(ctx, e.TargetFragmentID); err == nil && tgt != nil {
+				if tgt.Class == ah.FragmentClassProduct && materialSlugFromFragment(tgt) == productID {
+					return true
+				}
+			}
+		}
+	}
+	edges2, err := s.edges.ListBySource(ctx, globalTenant, site.ID, ptrRelation(ah.RelationNameSupplies), 120)
+	if err != nil {
+		return false
+	}
+	for _, e := range edges2 {
+		tgt, err := s.frags.Get(ctx, e.TargetFragmentID)
+		if err != nil || tgt == nil {
+			continue
+		}
+		if tgt.Class == ah.FragmentClassProduct && materialSlugFromFragment(tgt) == productID {
+			return true
+		}
+	}
+	return false
+}
+
+func (s *Service) sanctionedSiteIDs(ctx context.Context) map[string]struct{} {
+	out := make(map[string]struct{})
+	if s.frags == nil || s.edges == nil {
+		return out
+	}
+	sanctions, err := s.frags.ListByClassSubtypeAndTenant(ctx, globalTenant, ah.FragmentClassEvidence, "sanction", 400)
+	if err != nil {
+		return out
+	}
+	rel := ah.RelationNameSubjectTo
+	for _, frag := range sanctions {
+		if frag == nil {
+			continue
+		}
+		edges, err := s.edges.ListBySource(ctx, globalTenant, frag.ID, &rel, 120)
+		if err != nil {
+			continue
+		}
+		for _, e := range edges {
+			tid := strings.TrimSpace(e.TargetFragmentID)
+			if tid == "" {
+				continue
+			}
+			tgt, err := s.frags.Get(ctx, tid)
+			if err != nil || tgt == nil {
+				continue
+			}
+			if tgt.Class == ah.FragmentClassSite {
+				out[strings.TrimSpace(tgt.ID)] = struct{}{}
+			}
+		}
+	}
+	return out
+}
+
+func (s *Service) siteSubjectToSanction(ctx context.Context, siteID string) bool {
+	if s.frags == nil || s.edges == nil || strings.TrimSpace(siteID) == "" {
+		return false
+	}
+	rel := ah.RelationNameSubjectTo
+	edges, err := s.edges.ListByTarget(ctx, globalTenant, siteID, &rel, 80)
 	if err != nil {
 		return false
 	}
 	for _, e := range edges {
-		if tgt, err := s.frags.Get(ctx, e.TargetFragmentID); err == nil && tgt != nil {
-			if materialSlugFromFragment(tgt) == productID {
-				return true
-			}
+		src, err := s.frags.Get(ctx, e.SourceFragmentID)
+		if err != nil || src == nil {
+			continue
+		}
+		if src.Class == ah.FragmentClassEvidence && strings.EqualFold(strings.TrimSpace(src.Subtype), "sanction") {
+			return true
 		}
 	}
 	return false
@@ -218,14 +273,16 @@ func (s *Service) ListFacilities(ctx context.Context, opts *ListFacilitiesOpts) 
 	if err != nil {
 		return nil, err
 	}
+	sanctioned := s.sanctionedSiteIDs(ctx)
 	var out []*Facility
 	for _, sf := range sites {
-		f := facilityFromSiteFragment(sf, "")
+		_, isSanctioned := sanctioned[strings.TrimSpace(sf.ID)]
+		f := facilityFromSiteFragment(sf, "", isSanctioned)
 		if f == nil {
 			continue
 		}
 		if opts != nil {
-			if opts.MaterialID != "" && !s.facilityProducesMaterial(ctx, sf, opts.MaterialID) {
+			if opts.MaterialID != "" && !s.facilityLinkedToMaterial(ctx, sf, opts.MaterialID) {
 				// Allow attribute hint match when edges are missing.
 				if attrString(sf.Attributes, "material_id") != opts.MaterialID {
 					continue
@@ -252,7 +309,8 @@ func (s *Service) GetFacility(ctx context.Context, id string) (*Facility, error)
 	if err != nil {
 		return nil, err
 	}
-	f := facilityFromSiteFragment(sf, "")
+	isSanctioned := s.siteSubjectToSanction(ctx, id)
+	f := facilityFromSiteFragment(sf, "", isSanctioned)
 	if f == nil {
 		return nil, repo.ErrFragmentNotFound
 	}
