@@ -18,6 +18,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathstress"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/supplysemantics"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // pathBuilderCacheEntry holds a cached value with expiry.
@@ -1613,42 +1614,21 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 		// Add supplier node
 		if segment.SupplierRef != "" && segment.SupplierRef != "natural" {
 			if _, exists := nodeIndexMap[segment.SupplierRef]; !exists {
-				nodeType := "org"
-				if strings.HasPrefix(segment.SupplierRef, "/fac/") {
-					nodeType = "fac"
-				} else if strings.HasPrefix(segment.SupplierRef, "/deposit/") {
-					nodeType = "deposit"
-				}
-				nodes = append(nodes, models.SupplyChainPathNode{
-					Type: nodeType,
-					Ref:  segment.SupplierRef,
-				})
+				nodes = append(nodes, models.SupplyChainPathNodeForRef(segment.SupplierRef))
 				nodeIndexMap[segment.SupplierRef] = len(nodes) - 1
 			}
 		}
 
 		// Add product node
 		if _, exists := nodeIndexMap[segment.ProductRef]; !exists {
-			nodes = append(nodes, models.SupplyChainPathNode{
-				Type: "product",
-				Ref:  segment.ProductRef,
-			})
+			nodes = append(nodes, models.SupplyChainPathNodeForRef(segment.ProductRef))
 			nodeIndexMap[segment.ProductRef] = len(nodes) - 1
 		}
 
 		// Add customer node
 		if segment.CustomerRef != "" && segment.CustomerRef != "end-consumer" {
 			if _, exists := nodeIndexMap[segment.CustomerRef]; !exists {
-				nodeType := "org"
-				if strings.HasPrefix(segment.CustomerRef, "/fac/") {
-					nodeType = "fac"
-				} else if strings.HasPrefix(segment.CustomerRef, "/deposit/") {
-					nodeType = "deposit"
-				}
-				nodes = append(nodes, models.SupplyChainPathNode{
-					Type: nodeType,
-					Ref:  segment.CustomerRef,
-				})
+				nodes = append(nodes, models.SupplyChainPathNodeForRef(segment.CustomerRef))
 				nodeIndexMap[segment.CustomerRef] = len(nodes) - 1
 			}
 		}
@@ -1661,14 +1641,7 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 			if _, exists := nodeIndexMap[viaRef]; exists {
 				continue
 			}
-			nodeType := "fac"
-			if strings.HasPrefix(viaRef, "/deposit/") {
-				nodeType = "deposit"
-			}
-			nodes = append(nodes, models.SupplyChainPathNode{
-				Type: nodeType,
-				Ref:  viaRef,
-			})
+			nodes = append(nodes, models.SupplyChainPathNodeForRef(viaRef))
 			nodeIndexMap[viaRef] = len(nodes) - 1
 		}
 	}
@@ -1789,7 +1762,7 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 		if supplierIdx >= 0 && customerIdx >= 0 && productIdx >= 0 {
 			segmentIdx := i
 			edges = append(edges, models.SupplyChainPathEdge{
-				Type:                    "SUPPLY_LINK",
+				Relation:                ah.RelationNameSupplies,
 				From:                    supplierIdx,
 				To:                      customerIdx,
 				ViaProductIndex:         &productIdx,
@@ -1800,7 +1773,6 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 				SupplyLinkTenantID:      strings.TrimSpace(firstNonEmpty(segment.SupplyLinkTenantID, segment.TenantID)),
 				SegmentIndex:            &segmentIdx,
 				CarriesProduct:          true,
-				Role:                    "product_flow",
 				Metrics:                 cloneMetricValues(segment.Metrics),
 				Qualifiers:              buildPathEdgeQualifiers(segment, leg, "product_flow", 0),
 			})
@@ -1818,7 +1790,7 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 				}
 				segmentIdx := i
 				edges = append(edges, models.SupplyChainPathEdge{
-					Type:                    "LOGISTICS",
+					Relation:                ah.RelationNameLegConnects,
 					From:                    previousIdx,
 					To:                      viaIdx,
 					Mode:                    "required",
@@ -1829,7 +1801,6 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 					SupplyLinkTenantID:      strings.TrimSpace(firstNonEmpty(segment.SupplyLinkTenantID, segment.TenantID)),
 					SegmentIndex:            &segmentIdx,
 					CarriesProduct:          true,
-					Role:                    "logistics_leg",
 					Metrics:                 cloneMetricValues(segment.Metrics),
 					Qualifiers:              buildPathEdgeQualifiers(segment, leg, "logistics_leg", viaOrder),
 				})
@@ -1838,7 +1809,7 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 			if customerIdx >= 0 && previousIdx != customerIdx {
 				segmentIdx := i
 				edges = append(edges, models.SupplyChainPathEdge{
-					Type:                    "LOGISTICS",
+					Relation:                ah.RelationNameLegConnects,
 					From:                    previousIdx,
 					To:                      customerIdx,
 					Mode:                    "required",
@@ -1849,36 +1820,25 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 					SupplyLinkTenantID:      strings.TrimSpace(firstNonEmpty(segment.SupplyLinkTenantID, segment.TenantID)),
 					SegmentIndex:            &segmentIdx,
 					CarriesProduct:          true,
-					Role:                    "logistics_leg",
 					Metrics:                 cloneMetricValues(segment.Metrics),
 					Qualifiers:              buildPathEdgeQualifiers(segment, leg, "logistics_leg", len(segment.TransportViaRefs)),
 				})
 			}
 		}
 
-		// Add ontological edge between products if this is not the last segment
-		if i < len(segments)-1 {
+		// Product transitions are recorded on the customer actor node as siteTransforms (AH).
+		if i < len(segments)-1 && customerIdx >= 0 {
 			nextSegment := segments[i+1]
-			currentProductIdx := productIdx
-			nextProductIdx := nodeIndexMap[nextSegment.ProductRef]
-
-			// Check if products are connected via canonical product transition (optional)
-			// For now, we'll add it as "optional" mode
-			relation := string(ProductToProductEdgeTypeFromPaths(segment.ProductRef, nextSegment.ProductRef))
-			mode := "optional"
-			edges = append(edges, models.SupplyChainPathEdge{
-				Type:             "ONTOLOGY",
-				From:             currentProductIdx,
-				To:               nextProductIdx,
-				ProductNodeIndex: &currentProductIdx,
-				ProductRef:       segment.ProductRef,
-				SegmentIndex:     intPtr(i),
-				CarriesProduct:   true,
-				Role:             "product_transformation",
-				Relation:         relation,
-				FromProductIndex: &currentProductIdx,
-				ToProductIndex:   &nextProductIdx,
-				Mode:             mode,
+			rel := ProductToProductEdgeTypeFromPaths(segment.ProductRef, nextSegment.ProductRef)
+			kind := "processing"
+			if rel == DependencyTypeAssemblesInto {
+				kind = "assembly"
+			}
+			nodes[customerIdx].SiteTransforms = append(nodes[customerIdx].SiteTransforms, models.SiteTransform{
+				Kind:           kind,
+				InputProducts:  []string{strings.TrimSpace(segment.ProductRef)},
+				OutputProducts: []string{strings.TrimSpace(nextSegment.ProductRef)},
+				Source:         "supply_chain_builder:segment_transition",
 			})
 		}
 
@@ -1977,10 +1937,6 @@ func buildPathEdgeQualifiers(segment PathSegment, leg models.SupplyChainPathLeg,
 		qualifiers["supplyLinkCanonicalPath"] = strings.TrimSpace(segment.SupplyLinkCanonicalPath)
 	}
 	return qualifiers
-}
-
-func intPtr(v int) *int {
-	return &v
 }
 
 func extractVesselTypeQualifier(qualifiers map[string]interface{}) string {
