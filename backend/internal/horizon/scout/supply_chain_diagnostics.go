@@ -199,6 +199,15 @@ func DiagnoseSupplyChainAssembly(
 			}
 		}
 	}
+	for _, pn := range parsed.ProductNodes {
+		for _, st := range pn.SiteTransforms {
+			for _, fromRef := range st.InputProducts {
+				for _, toRef := range st.OutputProducts {
+					addIncoming(toRef, fromRef)
+				}
+			}
+		}
+	}
 	for _, edge := range parsed.SupplyEdges {
 		addIncoming(edge.CustomerRef, edge.SupplierRef)
 		addIncoming(edge.ProductRef, edge.SupplierRef)

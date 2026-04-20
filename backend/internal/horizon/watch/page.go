@@ -1108,6 +1108,24 @@ func buildWatchPageProducts(
 				}
 			}
 		}
+		for _, pn := range assembly.Parsed.ProductNodes {
+			for _, st := range pn.SiteTransforms {
+				for _, inRef := range st.InputProducts {
+					for _, outRef := range st.OutputProducts {
+						from := ensure(inRef, productLabels[strings.TrimSpace(inRef)])
+						to := ensure(outRef, productLabels[strings.TrimSpace(outRef)])
+						if from != nil && to != nil {
+							from.transformedInto = compactUnique(append(from.transformedInto, to.label))
+							to.transformedFrom = compactUnique(append(to.transformedFrom, from.label))
+							from.backing = compactUnique(append(from.backing, assembly.Artifact.ID))
+							to.backing = compactUnique(append(to.backing, assembly.Artifact.ID))
+							from.score += maxFloat(0.35, st.Confidence)
+							to.score += maxFloat(0.25, st.Confidence/2)
+						}
+					}
+				}
+			}
+		}
 	}
 	for _, item := range substrate {
 		path := strings.TrimSpace(item.ProductAxis)

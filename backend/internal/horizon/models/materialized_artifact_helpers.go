@@ -11,24 +11,29 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
-// AssemblyGraphSiteTransformCounts returns pairwise product transition counts carried on actor siteTransforms.
+// AssemblyGraphSiteTransformCounts returns pairwise product transition counts carried on siteTransforms
+// for both actor nodes and product nodes (product-level transforms appear when no supply edge resolves an actor).
 func AssemblyGraphSiteTransformCounts(parsed *SupplyChainAssemblyGraphPayload) (processingN, assemblyN int) {
 	if parsed == nil {
 		return 0, 0
 	}
-	for _, an := range parsed.ActorNodes {
-		for _, st := range an.SiteTransforms {
-			c := len(st.InputProducts) * len(st.OutputProducts)
-			if c == 0 {
-				continue
-			}
-			if st.Kind == "assembly" {
-				assemblyN += c
-			} else {
-				processingN += c
+	count := func(nodes []SupplyChainAssemblyNode) {
+		for _, n := range nodes {
+			for _, st := range n.SiteTransforms {
+				c := len(st.InputProducts) * len(st.OutputProducts)
+				if c == 0 {
+					continue
+				}
+				if st.Kind == "assembly" {
+					assemblyN += c
+				} else {
+					processingN += c
+				}
 			}
 		}
 	}
+	count(parsed.ActorNodes)
+	count(parsed.ProductNodes)
 	return processingN, assemblyN
 }
 

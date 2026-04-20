@@ -52,7 +52,7 @@ Example (minimal):
 
 Payload shape: `SupplyChainAssemblyGraphPayload`.
 
-- **`productNodes[]`**, **`actorNodes[]`**: `class`, `subtype?`, `ref`, `role?`, `siteTransforms?`.
+- **`productNodes[]`**, **`actorNodes[]`**: `class`, `subtype?`, `ref`, `role?`, `siteTransforms?` (transforms are usually on actors; when no supply edge pins an actor, the builder may record a transform on the output **product** node instead).
 - **`supplyEdges[]`**, **`routeBindings[]`**, **`coverage`**, branch metadata, notes — unchanged at the JSON key level.
 - **Removed from the serialized payload**: top-level `transformEdges` and `assemblyEdges`. The same information is represented as `siteTransforms` on nodes (and derived/synthetic lists are built in code when needed).
 
