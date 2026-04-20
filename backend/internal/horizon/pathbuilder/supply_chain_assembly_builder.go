@@ -13,6 +13,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type SupplyChainAssemblyOptions struct {
@@ -554,7 +555,7 @@ func buildAssemblyPayloadFromInputs(
 			openGapSet["graph_truncated:product_nodes"] = struct{}{}
 			return false
 		}
-		productNodes[ref] = models.SupplyChainAssemblyNode{Type: "product", Ref: ref, Name: assemblyNodeLabel(ref, opts.RawNodeLabels)}
+		productNodes[ref] = models.SupplyChainAssemblyNode{Class: ah.FragmentClassProduct, Ref: ref, Name: assemblyNodeLabel(ref, opts.RawNodeLabels)}
 		return true
 	}
 	addActorNode := func(ref string, role string) bool {
@@ -570,7 +571,8 @@ func buildAssemblyPayloadFromInputs(
 			openGapSet["graph_truncated:actor_nodes"] = struct{}{}
 			return false
 		}
-		actorNodes[ref] = models.SupplyChainAssemblyNode{Type: inferAssemblyActorType(ref), Ref: ref, Name: assemblyNodeLabel(ref, opts.RawNodeLabels), Role: role}
+		bn := models.SupplyChainPathNodeForRef(ref)
+		actorNodes[ref] = models.SupplyChainAssemblyNode{Class: bn.Class, Subtype: bn.Subtype, Ref: ref, Name: assemblyNodeLabel(ref, opts.RawNodeLabels), Role: role}
 		return true
 	}
 	normalizeProductRelation := func(fromProduct, toProduct, relation string) (string, string, string) {
@@ -626,6 +628,7 @@ func buildAssemblyPayloadFromInputs(
 			Relation:       relation,
 			Status:         strings.TrimSpace(status),
 		}
+		assemblyAttachTransformSite(productNodes, actorNodes, supplyEdges, fromProduct, toProduct, relation, status)
 		connect(fromProduct, toProduct)
 		if relation != "USED_IN" {
 			if assemblyCandidates[toProduct] == nil {
@@ -746,13 +749,19 @@ func buildAssemblyPayloadFromInputs(
 		}
 		for _, node := range contribution.parsed.Nodes {
 			ref := canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(node.Ref))
-			switch strings.ToLower(strings.TrimSpace(node.Type)) {
-			case "product":
+			switch node.Class {
+			case ah.FragmentClassProduct:
 				if !addProductNode(ref) {
 					addActorNode(ref, "")
 				}
 			default:
 				addActorNode(ref, "")
+			}
+			if len(node.SiteTransforms) > 0 && node.Class != ah.FragmentClassProduct {
+				if an, ok := actorNodes[ref]; ok {
+					an.SiteTransforms = append(an.SiteTransforms, node.SiteTransforms...)
+					actorNodes[ref] = an
+				}
 			}
 		}
 		for _, leg := range contribution.parsed.Legs {
@@ -801,22 +810,6 @@ func buildAssemblyPayloadFromInputs(
 				}
 			}
 		}
-		for _, edge := range contribution.parsed.Edges {
-			if strings.TrimSpace(edge.Relation) == "ONTOLOGY" &&
-				(strings.EqualFold(strings.TrimSpace(edge.Relation), "TRANSFORMS_INTO") ||
-					strings.EqualFold(strings.TrimSpace(edge.Relation), "ASSEMBLES_INTO") ||
-					strings.EqualFold(strings.TrimSpace(edge.Relation), "USED_IN")) {
-				fromProduct := strings.TrimSpace(edge.ProductRef)
-				if fromProduct == "" && edge.FromProductIndex != nil && *edge.FromProductIndex >= 0 && *edge.FromProductIndex < len(contribution.parsed.Nodes) {
-					fromProduct = contribution.parsed.Nodes[*edge.FromProductIndex].Ref
-				}
-				toProduct := ""
-				if edge.ToProductIndex != nil && *edge.ToProductIndex >= 0 && *edge.ToProductIndex < len(contribution.parsed.Nodes) {
-					toProduct = contribution.parsed.Nodes[*edge.ToProductIndex].Ref
-				}
-				addTransform(fromProduct, toProduct, strings.ToUpper(strings.TrimSpace(edge.Relation)), status)
-			}
-		}
 		for idx := 0; idx < len(contribution.parsed.Legs)-1; idx++ {
 			left := contribution.parsed.Legs[idx]
 			right := contribution.parsed.Legs[idx+1]
@@ -827,27 +820,40 @@ func buildAssemblyPayloadFromInputs(
 		}
 	}
 
-	assemblyEdges := make(map[string]models.SupplyChainAssemblyTransformEdge)
 	for downstream, upstreams := range assemblyCandidates {
 		if len(upstreams) < 2 {
 			continue
 		}
 		count := 0
+		inputs := make([]string, 0, len(upstreams))
 		for upstream := range upstreams {
 			if count >= opts.MaxTransformsPerProduct {
 				truncated = true
 				openGapSet["graph_truncated:assembly_edges"] = struct{}{}
 				break
 			}
-			key := upstream + "=>" + downstream
-			assemblyEdges[key] = models.SupplyChainAssemblyTransformEdge{
-				FromProductRef: upstream,
-				ToProductRef:   downstream,
-				Relation:       "ASSEMBLES_INTO",
-				Status:         "inferred",
-			}
+			u := canonical.NormalizeCanonicalPathForPersist(upstream)
+			inputs = append(inputs, u)
 			connect(upstream, downstream)
 			count++
+		}
+		if len(inputs) < 2 {
+			continue
+		}
+		sort.Strings(inputs)
+		downRef := canonical.NormalizeCanonicalPathForPersist(downstream)
+		actorRef := assemblyCustomerRefForSupplyEdges(supplyEdges, downRef)
+		if actorRef == "" {
+			continue
+		}
+		if n, ok := actorNodes[actorRef]; ok {
+			n.SiteTransforms = append(n.SiteTransforms, models.SiteTransform{
+				Kind:           "assembly",
+				InputProducts:  append([]string(nil), inputs...),
+				OutputProducts: []string{downRef},
+				Source:         "assembly:multi_upstream",
+			})
+			actorNodes[actorRef] = n
 		}
 	}
 
@@ -877,27 +883,7 @@ func buildAssemblyPayloadFromInputs(
 		return supplyEdgeList[i].ProductRef < supplyEdgeList[j].ProductRef
 	})
 
-	transformEdgeList := make([]models.SupplyChainAssemblyTransformEdge, 0, len(transformEdges))
-	for _, edge := range transformEdges {
-		transformEdgeList = append(transformEdgeList, edge)
-	}
-	sort.SliceStable(transformEdgeList, func(i, j int) bool {
-		if transformEdgeList[i].ToProductRef == transformEdgeList[j].ToProductRef {
-			return transformEdgeList[i].FromProductRef < transformEdgeList[j].FromProductRef
-		}
-		return transformEdgeList[i].ToProductRef < transformEdgeList[j].ToProductRef
-	})
-
-	assemblyEdgeList := make([]models.SupplyChainAssemblyTransformEdge, 0, len(assemblyEdges))
-	for _, edge := range assemblyEdges {
-		assemblyEdgeList = append(assemblyEdgeList, edge)
-	}
-	sort.SliceStable(assemblyEdgeList, func(i, j int) bool {
-		if assemblyEdgeList[i].ToProductRef == assemblyEdgeList[j].ToProductRef {
-			return assemblyEdgeList[i].FromProductRef < assemblyEdgeList[j].FromProductRef
-		}
-		return assemblyEdgeList[i].ToProductRef < assemblyEdgeList[j].ToProductRef
-	})
+	transformEdgeList, assemblyEdgeList := assemblySyntheticTransformLists(append(append([]models.SupplyChainAssemblyNode{}, actorNodeList...), productNodeList...))
 
 	routeBindingList := make([]models.SupplyChainAssemblyRouteBinding, 0, len(routeBindings))
 	for _, binding := range routeBindings {
@@ -920,7 +906,7 @@ func buildAssemblyPayloadFromInputs(
 		ProductsN:        len(productNodeList),
 		ActorsN:          len(actorNodeList),
 		SuppliersN:       len(supplierSet),
-		TransformationsN: len(transformEdgeList),
+		TransformationsN: len(transformEdgeList) + len(assemblyEdgeList),
 		DerivedPathsN:    len(contributions),
 		UnresolvedLeaves: len(openGaps),
 		Truncated:        truncated,
@@ -946,8 +932,6 @@ func buildAssemblyPayloadFromInputs(
 		ProductNodes:              quality.ProductNodes,
 		ActorNodes:                quality.ActorNodes,
 		SupplyEdges:               quality.SupplyEdges,
-		TransformEdges:            quality.TransformEdges,
-		AssemblyEdges:             quality.AssemblyEdges,
 		RouteBindings:             routeBindingList,
 		Coverage:                  quality.Coverage,
 		OpenGaps:                  openGaps,
@@ -1085,18 +1069,96 @@ func buildSupplyChainAssemblyDisplayName(anchors []string) string {
 	return fmt.Sprintf("Assembly graph: %s (+%d)", inferAssemblyNodeName(anchors[0]), len(anchors)-1)
 }
 
-func inferAssemblyActorType(ref string) string {
-	ref = canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(ref))
-	switch {
-	case strings.HasPrefix(ref, "/org/"):
-		return "org"
-	case strings.HasPrefix(ref, "/gov/"):
-		return "gov"
-	case strings.HasPrefix(ref, "/deposit/"):
-		return "deposit"
-	default:
-		return "fac"
+func assemblyCustomerRefForSupplyEdges(edges map[string]models.SupplyChainAssemblySupplyEdge, productRef string) string {
+	want := canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(productRef))
+	for _, e := range edges {
+		if canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(e.ProductRef)) == want {
+			return canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(e.CustomerRef))
+		}
 	}
+	return ""
+}
+
+func assemblySupplierRefForSupplyEdges(edges map[string]models.SupplyChainAssemblySupplyEdge, productRef string) string {
+	want := canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(productRef))
+	for _, e := range edges {
+		if canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(e.ProductRef)) == want {
+			return canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(e.SupplierRef))
+		}
+	}
+	return ""
+}
+
+func assemblyAttachTransformSite(productNodes map[string]models.SupplyChainAssemblyNode, actorNodes map[string]models.SupplyChainAssemblyNode, supplyEdges map[string]models.SupplyChainAssemblySupplyEdge, fromProduct, toProduct, relation, status string) {
+	kind := "processing"
+	if strings.Contains(strings.ToUpper(strings.TrimSpace(relation)), "ASSEMBLES") {
+		kind = "assembly"
+	}
+	fp := canonical.NormalizeCanonicalPathForPersist(fromProduct)
+	tp := canonical.NormalizeCanonicalPathForPersist(toProduct)
+	st := models.SiteTransform{
+		Kind:           kind,
+		InputProducts:  []string{fp},
+		OutputProducts: []string{tp},
+		Source:         "assembly_transform:" + strings.TrimSpace(status),
+	}
+	actorRef := assemblyCustomerRefForSupplyEdges(supplyEdges, tp)
+	if actorRef == "" {
+		actorRef = assemblySupplierRefForSupplyEdges(supplyEdges, fp)
+	}
+	if actorRef != "" {
+		if node, ok := actorNodes[actorRef]; ok {
+			node.SiteTransforms = append(node.SiteTransforms, st)
+			actorNodes[actorRef] = node
+		}
+		return
+	}
+	if pn, ok := productNodes[tp]; ok {
+		pn.SiteTransforms = append(pn.SiteTransforms, st)
+		productNodes[tp] = pn
+	}
+}
+
+func assemblySyntheticTransformLists(actors []models.SupplyChainAssemblyNode) (transforms []models.SupplyChainAssemblyTransformEdge, assemblies []models.SupplyChainAssemblyTransformEdge) {
+	for _, node := range actors {
+		for _, st := range node.SiteTransforms {
+			isAssembly := st.Kind == "assembly"
+			for _, in := range st.InputProducts {
+				in = canonical.NormalizeCanonicalPathForPersist(in)
+				for _, out := range st.OutputProducts {
+					out = canonical.NormalizeCanonicalPathForPersist(out)
+					if in == "" || out == "" {
+						continue
+					}
+					edge := models.SupplyChainAssemblyTransformEdge{
+						FromProductRef: in,
+						ToProductRef:   out,
+						Relation:       "TRANSFORMS_INTO",
+						Status:         "materialized",
+					}
+					if isAssembly {
+						edge.Relation = "ASSEMBLES_INTO"
+						assemblies = append(assemblies, edge)
+					} else {
+						transforms = append(transforms, edge)
+					}
+				}
+			}
+		}
+	}
+	sort.SliceStable(transforms, func(i, j int) bool {
+		if transforms[i].ToProductRef == transforms[j].ToProductRef {
+			return transforms[i].FromProductRef < transforms[j].FromProductRef
+		}
+		return transforms[i].ToProductRef < transforms[j].ToProductRef
+	})
+	sort.SliceStable(assemblies, func(i, j int) bool {
+		if assemblies[i].ToProductRef == assemblies[j].ToProductRef {
+			return assemblies[i].FromProductRef < assemblies[j].FromProductRef
+		}
+		return assemblies[i].ToProductRef < assemblies[j].ToProductRef
+	})
+	return transforms, assemblies
 }
 
 func inferAssemblyNodeName(ref string) string {
