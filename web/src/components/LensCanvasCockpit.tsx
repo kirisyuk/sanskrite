@@ -27,6 +27,8 @@ import {
   getHorizonNodeVisualType,
 } from './HorizonGraphNodeTypes';
 import { api, type DirectedSupplyChainExplorationRequest } from '../lib/api';
+import { normalizeEdgeType } from '../lib/taxonomy';
+import { RELATION } from '../lib/taxonomy.generated';
 import { useIsAdmin } from '../hooks/useIsAdmin';
 import { useUIStore } from '../stores/uiStore';
 import ReactMarkdown from 'react-markdown';
@@ -4881,10 +4883,13 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       }
       const existingEdgeIds = new Set((edges || []).map((e) => String((e as any)?.id || '').trim()));
       const resolvePathEdgeType = (edge: any): string => {
-        if (edge.type === 'ONTOLOGY' && edge.relation) return edge.relation;
-        if (String(edge.role || '').trim() === 'logistics_leg' || edge.type === 'LOGISTICS') return 'OPERATES_VIA';
-        if (edge.type === 'SUPPLY_LINK') return 'SUPPLIES_TO';
-        return 'DEPENDS_ON';
+        const relRaw = String(edge?.relation || '').trim();
+        if (relRaw) return normalizeEdgeType(relRaw);
+        if (String(edge?.role || '').trim() === 'logistics_leg' || edge?.type === 'LOGISTICS') {
+          return normalizeEdgeType('OPERATES_VIA');
+        }
+        if (edge?.type === 'SUPPLY_LINK') return RELATION.Supplies;
+        return normalizeEdgeType('DEPENDS_ON');
       };
       const addEdge = (
         id: string,
@@ -5043,7 +5048,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
 
         const productIdx = e.productNodeIndex ?? e.viaProductIndex ?? (e as any).productNodeIndex ?? (e as any).viaProductIndex;
         if (
-          edgeType === 'SUPPLIES_TO' &&
+          edgeType === RELATION.Supplies &&
           typeof productIdx === 'number' &&
           productIdx >= 0 &&
           productIdx < payloadNodes.length
@@ -5055,11 +5060,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               `supply:${artifact.id}:${e.from}-product${productIdx}`,
               srcId,
               productId,
-              'PRODUCES',
+              RELATION.Produces,
               {
                 ...pathEdgeMeta,
                 edgeCaption: buildSupplyPathEdgeCaption({
-                  edgeType: 'PRODUCES',
+                  edgeType: RELATION.Produces,
                   role: String(e.role || ''),
                   getEdgeCaptionShort,
                   productRef: String(pathEdgeMeta.pathProductRef || e.productRef || '').trim() || undefined,
@@ -5073,11 +5078,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
               `supply:${artifact.id}:product${productIdx}-${e.to}`,
               productId,
               trgId,
-              'SUPPLIES_TO',
+              RELATION.Supplies,
               {
                 ...pathEdgeMeta,
                 edgeCaption: buildSupplyPathEdgeCaption({
-                  edgeType: 'SUPPLIES_TO',
+                  edgeType: RELATION.Supplies,
                   role: String(e.role || ''),
                   getEdgeCaptionShort,
                   productRef: String(pathEdgeMeta.pathProductRef || e.productRef || '').trim() || undefined,

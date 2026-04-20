@@ -1,4 +1,5 @@
 import type { GraphViewId, PersistedGraphViewState } from '../lib/graphViews/types';
+import type { RelationName } from '../lib/taxonomy.generated';
 
 export interface HorizonViewDirective {
   contractType?: string;
@@ -10,7 +11,13 @@ export interface HorizonViewDirective {
     label?: string;
     style?: string;
   }>;
+  /** P12.07: AH snake_case relation names to include (preferred over filterRelTypes). */
+  filterRelations?: RelationName[];
+  /** P12.07: AH snake_case relation names to exclude (preferred over excludeRelTypes). */
+  excludeRelations?: RelationName[];
+  /** @deprecated Use filterRelations; still merged when loading persisted lenses. */
   filterRelTypes?: string[];
+  /** @deprecated Use excludeRelations; still merged when loading persisted lenses. */
   excludeRelTypes?: string[];
   groupBy?: string;
   focusNodePaths?: string[];

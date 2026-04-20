@@ -668,7 +668,8 @@ everywhere, render subtypes, use `pathquery` in inspectors, drop the hand-mainta
 - `lensItem.ts` — 48-entry `DependencyType` union must become `import { RelationName } from
   '../lib/taxonomy.generated'`. The union has legacy UPPER_SNAKE values like `SUPPLIES_TO`,
   `TRANSFORMS_INTO`; those become snake_case AH.
-- `horizonView.ts` — `filterRelTypes: string[]` becomes `filterRelations: RelationName[]`.
+- `horizonView.ts` — `filterRelations` / `excludeRelations` (`RelationName[]`) are preferred;
+  legacy `filterRelTypes` / `excludeRelTypes` are still merged when loading persisted lenses.
 - `horizonWatch.ts`, `ontology.ts`, `artifact.ts`, `generated.ts` — audit each for taxonomy
   mentions.
 - `index.ts` — exports.

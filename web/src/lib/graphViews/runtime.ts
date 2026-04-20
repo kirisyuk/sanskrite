@@ -639,6 +639,24 @@ export function getGraphViewExpansionPolicy(view: GraphViewId, context: GraphVie
   };
 }
 
+function normalizedDirectiveRelationSet(...parts: (readonly string[] | undefined)[]): Set<string> | null {
+  const raw: string[] = [];
+  for (const p of parts) {
+    if (!p?.length) continue;
+    for (const v of p) {
+      const s = String(v || '').trim();
+      if (s) raw.push(s);
+    }
+  }
+  if (!raw.length) return null;
+  const set = new Set<string>();
+  for (const v of raw) {
+    const n = normalizeEdgeType(v);
+    if (n) set.add(n);
+  }
+  return set.size > 0 ? set : null;
+}
+
 export function filterEdgesForGraphView(
   view: GraphViewId,
   edges: Edge[],
@@ -647,18 +665,15 @@ export function filterEdgesForGraphView(
   const controller = getGraphViewController(view);
   let filtered = controller.filterVisibleEdges ? controller.filterVisibleEdges(edges, context) : edges;
 
-  const filterRelTypes = Array.isArray(context.viewDirective?.filterRelTypes)
-    ? new Set(context.viewDirective.filterRelTypes.map((value) => String(value || '').toUpperCase().trim()).filter(Boolean))
-    : null;
-  const excludeRelTypes = Array.isArray(context.viewDirective?.excludeRelTypes)
-    ? new Set(context.viewDirective.excludeRelTypes.map((value) => String(value || '').toUpperCase().trim()).filter(Boolean))
-    : null;
+  const d = context.viewDirective;
+  const filterRelSet = normalizedDirectiveRelationSet(d?.filterRelations, d?.filterRelTypes);
+  const excludeRelSet = normalizedDirectiveRelationSet(d?.excludeRelations, d?.excludeRelTypes);
 
-  if (filterRelTypes && filterRelTypes.size > 0) {
-    filtered = filtered.filter((edge) => filterRelTypes.has(context.edgeTypeOf(edge)));
+  if (filterRelSet && filterRelSet.size > 0) {
+    filtered = filtered.filter((edge) => filterRelSet.has(context.edgeTypeOf(edge)));
   }
-  if (excludeRelTypes && excludeRelTypes.size > 0) {
-    filtered = filtered.filter((edge) => !excludeRelTypes.has(context.edgeTypeOf(edge)));
+  if (excludeRelSet && excludeRelSet.size > 0) {
+    filtered = filtered.filter((edge) => !excludeRelSet.has(context.edgeTypeOf(edge)));
   }
   if (controller.filterPolicy.semanticGroupFilter && context.edgeViewFilter !== 'all' && context.edgeViewFilter.length > 0) {
     const allowed = new Set(context.edgeViewFilter);
