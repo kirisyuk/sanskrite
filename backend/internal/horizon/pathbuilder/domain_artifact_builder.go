@@ -138,9 +138,10 @@ func (b *DomainArtifactBuilder) MaterializeRelationsGraph(
 			name = inferNameFromPath(frag.CanonicalPath)
 		}
 		nodes = append(nodes, models.RelationsGraphNode{
-			Type: strings.ToLower(string(frag.Class)),
-			Ref:  frag.CanonicalPath,
-			Name: name,
+			Class:   frag.Class,
+			Subtype: frag.Subtype,
+			Ref:     frag.CanonicalPath,
+			Name:    name,
 		})
 		nodeRefs = append(nodeRefs, frag.CanonicalPath)
 	}
@@ -156,7 +157,7 @@ func (b *DomainArtifactBuilder) MaterializeRelationsGraph(
 		graphEdges = append(graphEdges, models.RelationsGraphEdge{
 			From:     fromIdx,
 			To:       toIdx,
-			Relation: string(e.Relation),
+			Relation: e.Relation,
 		})
 	}
 

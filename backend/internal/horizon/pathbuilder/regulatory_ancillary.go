@@ -11,6 +11,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/regstress"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // UpsertRegulatoryTransmissionArtifact persists REGULATORY_IMPACT_TRANSMISSION_PATH from computed paths.
@@ -83,7 +84,11 @@ func (b *DomainArtifactBuilder) UpsertRegulatoryScenarioArtifact(
 			Overrides: map[string]float64{"/mechanism/": 1.15},
 		}}
 	}
-	nodes := []models.RelationsGraphNode{{Type: "policy_root", Ref: strings.TrimSpace(rootPath), Name: strings.TrimSpace(rootPath)}}
+	rootRef := strings.TrimSpace(rootPath)
+	rootNode := models.SupplyChainPathNodeForRef(rootRef)
+	nodes := []models.RelationsGraphNode{{
+		Class: rootNode.Class, Subtype: rootNode.Subtype, Ref: rootRef, Name: rootRef,
+	}}
 	nodeRefs := []string{nodes[0].Ref}
 	scenarioIDs := make([]string, 0, len(scenarios))
 	var scenarioBlocks []map[string]interface{}
@@ -186,10 +191,12 @@ func (b *DomainArtifactBuilder) UpsertRegulatoryTimelineArtifact(
 	nodeRefs := make([]string, 0, len(events))
 	for i, e := range events {
 		ref := fmt.Sprintf("/regulatory/timeline/%d", i)
-		nodes = append(nodes, models.RelationsGraphNode{Type: "timeline", Ref: ref, Name: e.s})
+		nodes = append(nodes, models.RelationsGraphNode{
+			Class: ah.FragmentClassEvidence, Subtype: string(ah.EvidenceSubtypeOther), Ref: ref, Name: e.s,
+		})
 		nodeRefs = append(nodeRefs, ref)
 		if i > 0 {
-			edges = append(edges, models.RelationsGraphEdge{From: i - 1, To: i, Relation: "PRECEDES"})
+			edges = append(edges, models.RelationsGraphEdge{From: i - 1, To: i, Relation: ah.RelationNameInfluences})
 		}
 	}
 	notes := map[string]interface{}{"rootEntity": rootPath, "artifactClass": "regulatory_timeline"}
@@ -392,7 +399,7 @@ func (b *DomainArtifactBuilder) UpsertRegulatoryCascadeArtifact(
 	var edges []models.RelationsGraphEdge
 	idx := map[string]int{}
 
-	addNode := func(ref, typ, name string) int {
+	addNode := func(ref, name string) int {
 		ref = strings.TrimSpace(ref)
 		if ref == "" {
 			return -1
@@ -401,24 +408,29 @@ func (b *DomainArtifactBuilder) UpsertRegulatoryCascadeArtifact(
 			return i
 		}
 		i := len(nodes)
-		nodes = append(nodes, models.RelationsGraphNode{Type: typ, Ref: ref, Name: name})
+		base := models.SupplyChainPathNodeForRef(ref)
+		display := strings.TrimSpace(name)
+		if display == "" {
+			display = ref
+		}
+		nodes = append(nodes, models.RelationsGraphNode{Class: base.Class, Subtype: base.Subtype, Ref: ref, Name: display})
 		nodeRefs = append(nodeRefs, ref)
 		idx[ref] = i
 		return i
 	}
 
 	for p := range directSet {
-		addNode(p, "direct_exposure", p)
+		addNode(p, p)
 	}
 	for p, rec := range indirect {
 		name := fmt.Sprintf("%s (indirect att=%.3f hops=%d from=%s)", p, rec.att, rec.hops, rec.origin)
-		ip := addNode(p, "indirect_supply_exposure", name)
-		oi := addNode(rec.origin, "direct_exposure", rec.origin)
+		ip := addNode(p, name)
+		oi := addNode(rec.origin, rec.origin)
 		if ip >= 0 && oi >= 0 {
 			edges = append(edges, models.RelationsGraphEdge{
 				From:     oi,
 				To:       ip,
-				Relation: "INDIRECT_REGULATORY_CASCADE",
+				Relation: ah.RelationNameExposesTo,
 			})
 		}
 	}
@@ -480,7 +492,8 @@ func relationsGraphFromRegPaths(paths []regstress.RegulatoryImpactPath) ([]model
 		}
 		i := len(nodes)
 		idx[ref] = i
-		nodes = append(nodes, models.RelationsGraphNode{Type: "entity", Ref: ref, Name: ref})
+		base := models.SupplyChainPathNodeForRef(ref)
+		nodes = append(nodes, models.RelationsGraphNode{Class: base.Class, Subtype: base.Subtype, Ref: ref, Name: ref})
 		nodeRefs = append(nodeRefs, ref)
 		return i
 	}
@@ -492,10 +505,14 @@ func relationsGraphFromRegPaths(paths []regstress.RegulatoryImpactPath) ([]model
 			if fi < 0 || ti < 0 {
 				continue
 			}
+			rel := ah.RelationNameInfluences
+			if dec, ok := models.NormalizeRelationName(leg.RelationType); ok && !dec.Dropped && dec.Relation != "" {
+				rel = dec.Relation
+			}
 			edges = append(edges, models.RelationsGraphEdge{
 				From:     fi,
 				To:       ti,
-				Relation: leg.RelationType,
+				Relation: rel,
 			})
 		}
 	}
