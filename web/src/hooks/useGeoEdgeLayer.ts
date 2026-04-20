@@ -37,6 +37,7 @@ import {
   type MapRouteVisibilitySelection,
 } from '../lib/mapRouteVisibility';
 import { STATIC_TRANSPORT_FLOW_DATA, type TransportFlowFeature } from '../lib/staticTransportFlows';
+import { seedRouteFragmentPolylinesIntoFlowMap } from '../lib/seedRouteFragmentFlowById';
 
 const SRC = 'geo-edges';
 const ENDPOINT_SRC = 'geo-edge-endpoints';
@@ -3410,6 +3411,7 @@ function buildSupplyPathFeatures(
     const id = String(feature?.id || '').trim();
     if (id) flowById.set(id, feature);
   }
+  seedRouteFragmentPolylinesIntoFlowMap(flowById, pathArtifacts);
   const stressedArtifactIds = new Set(
     (simulationStressSelection?.artifactIds || []).map((value) => String(value || '').trim()).filter(Boolean),
   );

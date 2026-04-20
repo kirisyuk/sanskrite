@@ -4,6 +4,7 @@ import type { GeoObject } from './useGeoObjects';
 import type { MaterializedArtifact } from '../components/SupplyChainOverlay';
 import type { PathLegVisibilityPolicy } from './usePathLegLayer';
 import { STATIC_TRANSPORT_FLOW_DATA, type TransportFlowFeature } from '../lib/staticTransportFlows';
+import { seedRouteFragmentPolylinesIntoFlowMap } from '../lib/seedRouteFragmentFlowById';
 import {
   buildPointFeature,
   ensureMarkerImages,
@@ -546,6 +547,7 @@ export function usePathLegClusterLayer(
       const id = String(feature?.id || '').trim();
       if (id) flowById.set(id, feature);
     }
+    seedRouteFragmentPolylinesIntoFlowMap(flowById, artifacts);
 
     const legs: NormalizedLeg[] = [];
     for (const artifact of artifacts || []) {

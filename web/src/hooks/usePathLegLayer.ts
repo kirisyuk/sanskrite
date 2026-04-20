@@ -24,6 +24,7 @@ import {
   readLegRouteOverlays,
   selectPrimaryLegRouteOverlay,
 } from '../lib/supplyRouteOverlays';
+import { seedRouteFragmentPolylinesIntoFlowMap } from '../lib/seedRouteFragmentFlowById';
 import {
   planCaptionDensity,
   publishLegCaptionPlan,
@@ -1525,6 +1526,7 @@ export function usePathLegLayer(
       const id = String(feature?.id || '').trim();
       if (id) flowById.set(id, feature);
     }
+    seedRouteFragmentPolylinesIntoFlowMap(flowById, artifacts);
 
     let legCount = 0;
     let boundLegCount = 0;
