@@ -11,6 +11,49 @@ import { describeRouteOverlay, readLegRouteOverlays, selectPrimaryLegRouteOverla
 import { HorizonOnDemandDependencyResolverModal, type HorizonOnDemandContext } from './HorizonOnDemandDependencyResolverModal';
 import { RISK_SEGMENTS, RiskSegmentIcon, segmentForMetricBaseKey } from '../lib/riskShield';
 
+/** One row from `attributes.site_transforms` on a horizon fragment (backend: models.SiteTransform). */
+type HorizonSiteTransformRow = {
+  kind: string;
+  inputProducts: string[];
+  outputProducts: string[];
+  yieldRatio?: number;
+  confidence?: number;
+  source?: string;
+};
+
+function normalizeProductPathList(v: unknown): string[] {
+  if (!Array.isArray(v)) return [];
+  return v.map((x) => String(x || '').trim()).filter(Boolean);
+}
+
+function parseSiteTransformsFromFragment(fragment: unknown): HorizonSiteTransformRow[] {
+  const attrs = (fragment as any)?.attributes;
+  if (!attrs || typeof attrs !== 'object') return [];
+  const raw = (attrs as any).site_transforms ?? (attrs as any).siteTransforms;
+  if (raw == null) return [];
+  const arr = Array.isArray(raw) ? raw : [];
+  const out: HorizonSiteTransformRow[] = [];
+  for (const item of arr) {
+    if (!item || typeof item !== 'object') continue;
+    const rec = item as Record<string, unknown>;
+    const kind = String(rec.kind ?? '').trim();
+    const inputProducts = normalizeProductPathList(rec.inputProducts);
+    const outputProducts = normalizeProductPathList(rec.outputProducts);
+    const yieldRatio = typeof rec.yieldRatio === 'number' && Number.isFinite(rec.yieldRatio) ? rec.yieldRatio : undefined;
+    const confidence =
+      typeof rec.confidence === 'number' && Number.isFinite(rec.confidence) ? rec.confidence : undefined;
+    const source = String(rec.source ?? '').trim() || undefined;
+    if (!kind && inputProducts.length === 0 && outputProducts.length === 0) continue;
+    out.push({ kind, inputProducts, outputProducts, yieldRatio, confidence, source });
+  }
+  return out;
+}
+
+function formatSiteTransformConfidence(c: number): string {
+  if (c >= 0 && c <= 1) return `${Math.round(c * 100)}%`;
+  return c.toFixed(2);
+}
+
 interface HorizonEntityInspectorProps {
   nodeId: string | null;
   nodeData: HorizonNodeData | null;
@@ -1243,6 +1286,11 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
     const loadedId = String((fragment as any)?.id || (fragment as any)?.ID || '').trim();
     return Boolean(!edgeId && wantId && loadedId && loadedId === wantId);
   }, [edgeId, nodeData?.fragmentId, nodeId, fragment]);
+
+  const siteTransforms = React.useMemo(() => {
+    if (!canUseLoadedFragment || !fragment) return [];
+    return parseSiteTransformsFromFragment(fragment);
+  }, [canUseLoadedFragment, fragment]);
 
   const [directRelationsLoading, setDirectRelationsLoading] = React.useState(false);
   const [directRelationsError, setDirectRelationsError] = React.useState<string | null>(null);
@@ -2505,6 +2553,98 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
                   return segs.length > 0 ? segs.join('\n') : undefined;
                 })()}
               />
+            </SectionCard>
+          )}
+
+          {canUseLoadedFragment && siteTransforms.length > 0 && (
+            <SectionCard
+              title="Site transforms"
+              right={<Chip tone="info">{siteTransforms.length}</Chip>}
+            >
+              <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginBottom: 10, lineHeight: 1.45 }}>
+                Product transitions recorded on this fragment (<span style={mono}>attributes.site_transforms</span>).
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {siteTransforms.map((st, idx) => {
+                  const key = `${st.kind}|${st.inputProducts.join(',')}->${st.outputProducts.join(',')}|${idx}`;
+                  const copyLine = [
+                    st.kind ? `kind=${st.kind}` : '',
+                    st.inputProducts.length ? `in=${st.inputProducts.join(';')}` : '',
+                    st.outputProducts.length ? `out=${st.outputProducts.join(';')}` : '',
+                    typeof st.yieldRatio === 'number' ? `yield=${st.yieldRatio}` : '',
+                    typeof st.confidence === 'number' ? `confidence=${st.confidence}` : '',
+                    st.source ? `source=${st.source}` : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ');
+                  return (
+                    <div
+                      key={key}
+                      style={{
+                        borderRadius: 12,
+                        border: '1px solid var(--border-subtle)',
+                        background: 'var(--bg-secondary)',
+                        padding: 10,
+                        display: 'flex',
+                        flexDirection: 'column',
+                        gap: 8,
+                      }}
+                    >
+                      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                        {st.kind ? <Chip>{formatHorizonFragmentType(st.kind, '', '')}</Chip> : <Chip tone="neutral">unknown kind</Chip>}
+                        {typeof st.yieldRatio === 'number' && (
+                          <Chip tone="info">yield {st.yieldRatio}</Chip>
+                        )}
+                        {typeof st.confidence === 'number' && (
+                          <Chip>conf {formatSiteTransformConfidence(st.confidence)}</Chip>
+                        )}
+                      </div>
+                      <KV
+                        k="Inputs"
+                        v={
+                          <span style={mono}>
+                            {st.inputProducts.length > 0 ? st.inputProducts.join(', ') : '—'}
+                          </span>
+                        }
+                        copyText={st.inputProducts.length > 0 ? st.inputProducts.join('\n') : undefined}
+                      />
+                      <KV
+                        k="Outputs"
+                        v={
+                          <span style={mono}>
+                            {st.outputProducts.length > 0 ? st.outputProducts.join(', ') : '—'}
+                          </span>
+                        }
+                        copyText={st.outputProducts.length > 0 ? st.outputProducts.join('\n') : undefined}
+                      />
+                      {st.source ? (
+                        <KV k="Source" v={<span style={mono}>{st.source}</span>} copyText={st.source} />
+                      ) : null}
+                      {copyLine ? (
+                        <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+                          <button
+                            type="button"
+                            onClick={() => void copyToClipboard(copyLine)}
+                            title="Copy transform summary"
+                            style={{
+                              padding: '4px 8px',
+                              fontSize: 11,
+                              fontWeight: 650,
+                              borderRadius: 8,
+                              border: '1px solid var(--border-subtle)',
+                              background: 'var(--bg-tertiary)',
+                              color: 'var(--text-secondary-strong)',
+                              cursor: 'pointer',
+                            }}
+                          >
+                            Copy
+                          </button>
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </div>
             </SectionCard>
           )}
 
