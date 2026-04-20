@@ -1233,7 +1233,9 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
       fragment?.labels?.[Object.keys(fragment?.labels || {})[0]] ||
       fragment?.label;
     const facilityKind = readFacilityKind(nodeData) || readFacilityKind(fragment);
-    return getHorizonNodeVisualType(t, cp, lbl, facilityKind);
+    const fClass = String((fragment as any)?.class || (nodeData as any)?.fragmentClass || '').trim() || null;
+    const fSub = String((fragment as any)?.subtype || (nodeData as any)?.fragmentSubtype || '').trim() || null;
+    return getHorizonNodeVisualType(t, cp, lbl, facilityKind, fClass, fSub);
   }, [nodeType, nodeCanonicalPath, fragment, nodeData, readFacilityKind]);
 
   const canUseLoadedFragment = React.useMemo(() => {
@@ -1574,7 +1576,23 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
     return getNodeColors(nodeVisualType || nodeType || fragment?.type, theme === 'dark' ? 'dark' : 'light').accent;
   }, [nodeVisualType, nodeType, fragment, theme]);
 
-  const nodeTypeHuman = React.useMemo(() => formatHorizonFragmentType(nodeType), [nodeType]);
+  const nodeTypeHuman = React.useMemo(() => {
+    const lbl =
+      nodeData?.label ||
+      fragment?.labels?.en ||
+      fragment?.labels?.[Object.keys(fragment?.labels || {})[0]] ||
+      fragment?.label;
+    return formatHorizonFragmentType(nodeType, nodeCanonicalPath, lbl, {
+      fragmentClass: (fragment as any)?.class || (nodeData as any)?.fragmentClass,
+      fragmentSubtype: undefined,
+    });
+  }, [nodeType, nodeCanonicalPath, nodeData, fragment]);
+
+  const nodeSubtypeHuman = React.useMemo(() => {
+    const raw = String((fragment as any)?.subtype || (nodeData as any)?.fragmentSubtype || '').trim();
+    if (!raw) return '';
+    return formatHorizonFragmentType(raw, '', '');
+  }, [fragment, nodeData]);
 
   const METRIC_META: Record<
     string,
@@ -1677,15 +1695,25 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
                   {nodeCanonicalPath && (
                     <FieldBlock label="Canonical path" value={<span style={mono}>{nodeCanonicalPath}</span>} copyText={nodeCanonicalPath} />
                   )}
-                  {nodeType && (
+                  {(nodeType ||
+                    String((fragment as any)?.class || (nodeData as any)?.fragmentClass || '').trim()) && (
                     <FieldBlock
-                      label="Type"
+                      label="Class"
                       value={
                         <AccentChip accent={nodeAccent}>
                           <HorizonNodeIcon type={nodeVisualType || nodeType} color={nodeAccent} size={14} />
                           {nodeTypeHuman}
                         </AccentChip>
                       }
+                    />
+                  )}
+                  {nodeSubtypeHuman && (
+                    <FieldBlock
+                      label="Subtype"
+                      value={<span style={{ fontWeight: 650, color: 'var(--text-heading)' }}>{nodeSubtypeHuman}</span>}
+                      copyText={String(
+                        (fragment as any)?.subtype || (nodeData as any)?.fragmentSubtype || '',
+                      ).trim()}
                     />
                   )}
                 </div>
@@ -1737,7 +1765,7 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
                         humanizeCanonicalPath(sourceFragment.canonicalPath) ||
                         'Unknown'}
                     </div>
-                    {sourceFragment?.type && (
+                    {(sourceFragment?.type || sourceFragment?.class) && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         {(() => {
                           const vt = getHorizonNodeVisualType(
@@ -1745,12 +1773,19 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
                             sourceFragment.canonicalPath,
                             sourceFragment.labels?.en || sourceFragment.labels?.[Object.keys(sourceFragment.labels || {})[0]],
                             readFacilityKind(sourceFragment),
+                            sourceFragment.class,
+                            sourceFragment.subtype,
                           );
                           const accent = getNodeColors(vt || sourceFragment.type, theme === 'dark' ? 'dark' : 'light').accent;
                           return (
                             <AccentChip accent={accent}>
                               <HorizonNodeIcon type={vt || sourceFragment.type} color={accent} size={14} />
-                              {formatHorizonFragmentType(sourceFragment.type, sourceFragment.canonicalPath, sourceFragment.labels?.en)}
+                              {formatHorizonFragmentType(
+                                sourceFragment.type,
+                                sourceFragment.canonicalPath,
+                                sourceFragment.labels?.en,
+                                { fragmentClass: sourceFragment.class, fragmentSubtype: sourceFragment.subtype },
+                              )}
                             </AccentChip>
                           );
                         })()}
@@ -1777,7 +1812,7 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
                         humanizeCanonicalPath(targetFragment.canonicalPath) ||
                         'Unknown'}
                     </div>
-                    {targetFragment?.type && (
+                    {(targetFragment?.type || targetFragment?.class) && (
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         {(() => {
                           const vt = getHorizonNodeVisualType(
@@ -1785,12 +1820,19 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
                             targetFragment.canonicalPath,
                             targetFragment.labels?.en || targetFragment.labels?.[Object.keys(targetFragment.labels || {})[0]],
                             readFacilityKind(targetFragment),
+                            targetFragment.class,
+                            targetFragment.subtype,
                           );
                           const accent = getNodeColors(vt || targetFragment.type, theme === 'dark' ? 'dark' : 'light').accent;
                           return (
                             <AccentChip accent={accent}>
                               <HorizonNodeIcon type={vt || targetFragment.type} color={accent} size={14} />
-                              {formatHorizonFragmentType(targetFragment.type, targetFragment.canonicalPath, targetFragment.labels?.en)}
+                              {formatHorizonFragmentType(
+                                targetFragment.type,
+                                targetFragment.canonicalPath,
+                                targetFragment.labels?.en,
+                                { fragmentClass: targetFragment.class, fragmentSubtype: targetFragment.subtype },
+                              )}
                             </AccentChip>
                           );
                         })()}

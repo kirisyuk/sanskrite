@@ -12,6 +12,8 @@ import type {
   ValueChainViewMeta,
 } from '../lib/graphViews/types';
 import { humanizeCanonicalPath, preferDisplayLabel } from '../lib/uiUtils';
+import { FRAGMENT_CLASS, type FragmentClass } from '../lib/taxonomy.generated';
+import { humanizeFragmentClass, tryParseFragmentClass } from '../lib/taxonomy';
 import * as CountryFlags from 'country-flag-icons/react/1x1';
 
 // Extract ISO 2-letter country code from canonical path
@@ -215,7 +217,11 @@ export interface HorizonNodeData {
   /** Deduped list of normalized domain/vertical pairs (for future filtering). */
   marketSegmentNormPairs?: string[];
   label?: string;
-  type?: string; // FragmentType
+  type?: string; // Legacy FragmentType or AH fragment class string (persistable)
+  /** AH wire `class` when known (may duplicate `type` for class-only payloads). */
+  fragmentClass?: string;
+  /** AH wire `subtype` when known (not persisted on LensItem today). */
+  fragmentSubtype?: string;
   facilityKind?: string;
   state?: Record<string, number>; // Метрики
   /** UI: whether to render metrics inside the node (disabled by default for performance). */
@@ -840,12 +846,98 @@ const isQuranReference = (label?: string | null, canonicalPath?: string | null):
   return words.includes('quran') || words.includes('koran');
 };
 
+const normalizeFragmentSubtypeKey = (s: string | null | undefined): string =>
+  String(s || '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_');
+
+const SUBTYPE_TO_VISUAL: Partial<Record<FragmentClass, Record<string, string>>> = {
+  [FRAGMENT_CLASS.Site]: {
+    factory: 'FACILITY_FACTORY',
+    plant: 'FACILITY_FACTORY',
+    gigafactory: 'FACILITY_FACTORY',
+    foundry: 'FACILITY_FACTORY',
+    mine: 'FACILITY_MINE',
+    port: 'FACILITY_SEAPORT',
+    seaport: 'FACILITY_SEAPORT',
+    harbor: 'FACILITY_SEAPORT',
+    harbour: 'FACILITY_SEAPORT',
+    airport: 'FACILITY_AIRPORT',
+    warehouse: 'FACILITY_WAREHOUSE',
+    pipeline: 'FACILITY_PIPELINE',
+    datacenter: 'FACILITY_DATACENTER',
+    data_center: 'FACILITY_DATACENTER',
+    terminal: 'FACILITY_TERMINAL',
+    substation: 'FACILITY_SUBSTATION',
+    refinery: 'FACILITY_REFINERY',
+    power_plant: 'FACILITY_POWER_PLANT',
+    deposit: 'DEPOSIT',
+    affected_zone: 'AFFECTED_ZONE',
+  },
+  [FRAGMENT_CLASS.Product]: {
+    deposit: 'DEPOSIT',
+  },
+  [FRAGMENT_CLASS.Community]: {
+    dynasty: 'COMMUNITY_DYNASTY',
+    tribe: 'COMMUNITY_TRIBE',
+  },
+  [FRAGMENT_CLASS.Geo]: {
+    affected_zone: 'AFFECTED_ZONE',
+  },
+};
+
+const AH_CLASS_DEFAULT_VISUAL: Record<FragmentClass, string> = {
+  [FRAGMENT_CLASS.Org]: 'ORGANIZATION',
+  [FRAGMENT_CLASS.Site]: 'FACILITY',
+  [FRAGMENT_CLASS.Product]: 'PRODUCT',
+  [FRAGMENT_CLASS.Geo]: 'GEO_REGION',
+  [FRAGMENT_CLASS.Person]: 'PERSON',
+  [FRAGMENT_CLASS.Market]: 'MARKET',
+  [FRAGMENT_CLASS.Community]: 'COMMUNITY',
+  [FRAGMENT_CLASS.Decision]: 'DECISION_POINT',
+  [FRAGMENT_CLASS.Mechanism]: 'MECHANISM',
+  [FRAGMENT_CLASS.Regime]: 'GOV_ORG',
+  [FRAGMENT_CLASS.Project]: 'TECHNOLOGY',
+  [FRAGMENT_CLASS.Route]: 'SERVICE',
+  [FRAGMENT_CLASS.MobileAsset]: 'FACILITY',
+  [FRAGMENT_CLASS.VesselClass]: 'FACILITY',
+  [FRAGMENT_CLASS.Evidence]: 'EVENT',
+};
+
+export type HorizonFragmentFormatOpts = {
+  fragmentClass?: string | null;
+  fragmentSubtype?: string | null;
+};
+
 export const formatHorizonFragmentType = (
   type: string | undefined,
   canonicalPath?: string | null,
   label?: string | null,
+  opts?: HorizonFragmentFormatOpts,
 ): string => {
+  const clsRaw = String(opts?.fragmentClass || '').trim();
+  const subRaw = String(opts?.fragmentSubtype || '').trim();
+  const parsedFromCls = tryParseFragmentClass(clsRaw);
   const t = String(type || '').trim();
+  const parsedFromType = tryParseFragmentClass(t);
+  const parsed = parsedFromCls || parsedFromType;
+  if (parsed) {
+    if (parsed === FRAGMENT_CLASS.Product && isQuranReference(label, canonicalPath)) {
+      return 'Sacred Text';
+    }
+    if (
+      parsed === FRAGMENT_CLASS.Geo &&
+      (subRaw === 'affected_zone' || String(canonicalPath || '').startsWith('/zone/'))
+    ) {
+      return 'Affected Zone';
+    }
+    let out = humanizeFragmentClass(parsed);
+    if (subRaw) {
+      out = `${out} · ${titleizeBadge(subRaw)}`;
+    }
+    return out;
+  }
   if (!t) return 'Unknown';
   if (t.toUpperCase() === 'PRODUCT' && isQuranReference(label, canonicalPath)) {
     return 'Sacred Text';
@@ -936,9 +1028,14 @@ export const getHorizonNodeVisualType = (
   canonicalPath?: string | null,
   label?: string | null,
   facilityKind?: string | null,
+  fragmentClass?: string | null,
+  fragmentSubtype?: string | null,
 ): string => {
   const t = String(type || '').trim();
   const cp = String(canonicalPath || '').trim();
+  const pc =
+    tryParseFragmentClass(fragmentClass) || tryParseFragmentClass(t) || undefined;
+  const subKey = normalizeFragmentSubtypeKey(fragmentSubtype);
   // Any /gov/* fragment should look "government-ish", regardless of declared type.
   if (cp.startsWith('/gov/')) {
     return 'GOV_ORG';
@@ -958,14 +1055,25 @@ export const getHorizonNodeVisualType = (
     if (communityType === 'dynasty') return 'COMMUNITY_DYNASTY';
     if (communityType === 'tribe') return 'COMMUNITY_TRIBE';
   }
-  if (String(t).toUpperCase() === 'FACILITY') {
+  if (pc && subKey) {
+    const hit = SUBTYPE_TO_VISUAL[pc]?.[subKey];
+    if (hit) return hit;
+  }
+  const typeUpper = t.toUpperCase();
+  const isFacilityLike = typeUpper === 'FACILITY' || typeUpper === 'SITE' || pc === FRAGMENT_CLASS.Site;
+  const isProductLike =
+    typeUpper === 'PRODUCT' || typeUpper === 'TECHNOLOGY' || pc === FRAGMENT_CLASS.Product;
+  if (isFacilityLike) {
     const facilityVisualType =
       facilityKindToVisualType(facilityKind) ||
       facilityKindToVisualType(inferFacilityKindToken(cp, label));
     if (facilityVisualType) return facilityVisualType;
   }
-  if (String(t).toUpperCase() === 'PRODUCT' && isQuranReference(label, cp)) {
+  if (isProductLike && isQuranReference(label, cp)) {
     return 'SACRED_TEXT_QURAN';
+  }
+  if (pc) {
+    return AH_CLASS_DEFAULT_VISUAL[pc] || t;
   }
   return t;
 };
@@ -974,10 +1082,20 @@ const getHorizonNodeDisplayType = (
   type: string | undefined,
   canonicalPath?: string | null,
   label?: string | null,
+  fragmentClass?: string | null,
+  fragmentSubtype?: string | null,
 ): string => {
   const t = String(type || '').trim();
   const cp = String(canonicalPath || '').trim().toLowerCase();
-  if (!t) return 'Unknown';
+  const pc =
+    tryParseFragmentClass(fragmentClass) || tryParseFragmentClass(t) || undefined;
+  const subKey = normalizeFragmentSubtypeKey(fragmentSubtype);
+  if (pc === FRAGMENT_CLASS.Community && subKey === 'dynasty') return 'DYNASTY';
+  if (pc === FRAGMENT_CLASS.Community && subKey === 'tribe') return 'TRIBE';
+  if (!t) {
+    if (pc) return humanizeFragmentClass(pc);
+    return 'Unknown';
+  }
   if (cp.startsWith('/zone/') || t.toUpperCase() === 'AFFECTED_ZONE') {
     return 'Affected Zone';
   }
@@ -3760,6 +3878,8 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
                       (item as any)?.canonicalPath || '',
                       item.label,
                       (item as any)?.facilityKind,
+                      (item as any)?.class,
+                      (item as any)?.subtype,
                     );
                     const colors = getNodeColors(visualType, theme);
                     const badgeAccent = colors.accent;
@@ -3894,7 +4014,14 @@ const HorizonContextCardNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(
 const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ data, selected, id }) => {
   // Note: ensureHorizonNode2026Styles() is called once on module load (not per render)
   const { theme } = React.useContext(ThemeContext);
-  const baseVisualType = getHorizonNodeVisualType(data.type, data.canonicalPath, data.label, data.facilityKind);
+  const baseVisualType = getHorizonNodeVisualType(
+    data.type,
+    data.canonicalPath,
+    data.label,
+    data.facilityKind,
+    data.fragmentClass,
+    data.fragmentSubtype,
+  );
   const colors = getNodeColors(baseVisualType, theme);
   const [isHovering, setIsHovering] = React.useState(false);
   const [fragmentProfileTab, setFragmentProfileTab] = React.useState<'events' | 'signals'>('events');
@@ -4202,7 +4329,13 @@ const HorizonFragmentNode: React.FC<NodeProps<HorizonNodeData>> = React.memo(({ 
           return preferred || humanizeCanonicalPath(data.canonicalPath) || 'Fragment';
         })());
   const titleLineClamp = isCollapsed ? 2 : (data.showMetrics ? 2 : 6);
-  const displayType = getHorizonNodeDisplayType(data.type, data.canonicalPath, data.label);
+  const displayType = getHorizonNodeDisplayType(
+    data.type,
+    data.canonicalPath,
+    data.label,
+    data.fragmentClass,
+    data.fragmentSubtype,
+  );
   const geoFlagCode =
     data.geoAnchor?.kind === 'country'
       ? data.geoAnchor.id

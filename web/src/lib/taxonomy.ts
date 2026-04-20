@@ -3,8 +3,11 @@
  * browser caches / persisted prefs no longer emit UPPER_SNAKE.
  */
 import {
+  FRAGMENT_CLASS,
+  FRAGMENT_CLASSES,
   RELATION,
   RELATION_NAMES,
+  type FragmentClass,
   type RelationName,
 } from './taxonomy.generated';
 
@@ -172,4 +175,63 @@ export function coerceWireRelation(raw: unknown): RelationName {
   const s = String(raw ?? '').trim();
   if (s) warnLegacyMap(s, RELATION.Supplies);
   return RELATION.Supplies;
+}
+
+// ---- Fragment class (AH wire `class` + optional `subtype`) ----
+
+const FRAGMENT_CLASS_SET = new Set<string>(FRAGMENT_CLASSES);
+
+const LEGACY_FRAGMENT_TYPE_TO_CLASS: Record<string, FragmentClass> = {
+  ORGANIZATION: FRAGMENT_CLASS.Org,
+  ORG: FRAGMENT_CLASS.Org,
+  FACILITY: FRAGMENT_CLASS.Site,
+  SITE: FRAGMENT_CLASS.Site,
+  PRODUCT: FRAGMENT_CLASS.Product,
+  PERSON: FRAGMENT_CLASS.Person,
+  MARKET: FRAGMENT_CLASS.Market,
+  COMMUNITY: FRAGMENT_CLASS.Community,
+  GOV: FRAGMENT_CLASS.Org,
+  GOVERNMENT: FRAGMENT_CLASS.Org,
+  GOVERNMENT_AGENCY: FRAGMENT_CLASS.Org,
+  GEO_REGION: FRAGMENT_CLASS.Geo,
+  GEO: FRAGMENT_CLASS.Geo,
+  COUNTRY: FRAGMENT_CLASS.Geo,
+  REGION: FRAGMENT_CLASS.Geo,
+  DECISION_POINT: FRAGMENT_CLASS.Decision,
+  DECISION: FRAGMENT_CLASS.Decision,
+  MECHANISM: FRAGMENT_CLASS.Mechanism,
+  PROGRAM: FRAGMENT_CLASS.Project,
+  PROJECT: FRAGMENT_CLASS.Project,
+  EVENT: FRAGMENT_CLASS.Evidence,
+  EVIDENCE: FRAGMENT_CLASS.Evidence,
+  TECHNOLOGY: FRAGMENT_CLASS.Product,
+  SERVICE: FRAGMENT_CLASS.Project,
+  DOMAIN: FRAGMENT_CLASS.Org,
+  SUPPLIER: FRAGMENT_CLASS.Org,
+  DEPENDENCY: FRAGMENT_CLASS.Org,
+  DEPOSIT: FRAGMENT_CLASS.Product,
+  RISK: FRAGMENT_CLASS.Evidence,
+  MEDIA_CHANNEL: FRAGMENT_CLASS.Market,
+  REGIME: FRAGMENT_CLASS.Regime,
+  ROUTE: FRAGMENT_CLASS.Route,
+  MOBILE_ASSET: FRAGMENT_CLASS.MobileAsset,
+  VESSEL_CLASS: FRAGMENT_CLASS.VesselClass,
+};
+
+/** Resolve wire `class` (snake_case) or legacy FragmentType UPPER_SNAKE to FragmentClass. */
+export function tryParseFragmentClass(raw: string | undefined | null): FragmentClass | undefined {
+  const s = String(raw ?? '').trim();
+  if (!s) return undefined;
+  const lower = s.toLowerCase();
+  if (FRAGMENT_CLASS_SET.has(lower)) return lower as FragmentClass;
+  return LEGACY_FRAGMENT_TYPE_TO_CLASS[s.toUpperCase()];
+}
+
+/** Title Case labels for AH fragment classes (e.g. `mobile_asset` → "Mobile Asset"). */
+export function humanizeFragmentClass(cls: FragmentClass): string {
+  return cls
+    .split('_')
+    .filter(Boolean)
+    .map((p) => p.charAt(0).toUpperCase() + p.slice(1))
+    .join(' ');
 }

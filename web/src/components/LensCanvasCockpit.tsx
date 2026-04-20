@@ -121,6 +121,16 @@ const readFacilityKindFromAny = (obj: any): string | undefined => {
   return value || undefined;
 };
 
+/** AH `class` / `subtype` plus persistable `type` (legacy FragmentType or class string). */
+const readNodeWireTaxonomy = (src: any): { type?: string; fragmentClass?: string; fragmentSubtype?: string } => {
+  if (!src) return {};
+  const fragmentClass = String(src.class || '').trim() || undefined;
+  const fragmentSubtype = String(src.subtype || '').trim() || undefined;
+  const legacyType = String(src.type || '').trim();
+  const type = legacyType || fragmentClass || undefined;
+  return { type, fragmentClass, fragmentSubtype };
+};
+
 // Deterministic hash for stable edge routing/label offsets across renders.
 const stableHash32 = (input: string): number => {
   let h = 2166136261;
@@ -4593,7 +4603,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                   marketSegmentNormVerticals: Array.isArray(fragObj?.marketSegmentNormVerticals) ? fragObj.marketSegmentNormVerticals : undefined,
                   marketSegmentNormPairs: Array.isArray(fragObj?.marketSegmentNormPairs) ? fragObj.marketSegmentNormPairs : undefined,
                   label: fragObj?.labels?.en || humanizeCanonicalPath(fragObj?.canonicalPath) || 'Fragment',
-                  type: fragObj?.type,
+                  ...readNodeWireTaxonomy(fragObj),
                   state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
                   showMetrics: showNodeMetrics,
                   status: fragObj?.status,
@@ -4843,7 +4853,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             canonicalPath: path,
             facilityKind: readFacilityKindFromAny(frag),
             label,
-            type: frag?.type || 'ORGANIZATION',
+            ...(() => {
+              const w = readNodeWireTaxonomy(frag);
+              return { ...w, type: w.type || 'ORGANIZATION' };
+            })(),
             state: frag?.state,
             showMetrics: showNodeMetrics,
             expanded: false,
@@ -7072,7 +7085,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             canonicalPath: item.canonicalPath,
             facilityKind: readFacilityKindFromAny(item as any),
             label: item.label,
-            type: item.type,
+            ...readNodeWireTaxonomy(item as any),
             state: item.state,
             showMetrics: showNodeMetrics,
             status: item.status,
@@ -7311,7 +7324,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             marketSegmentNormVerticals: Array.isArray(fragment.marketSegmentNormVerticals) ? fragment.marketSegmentNormVerticals : undefined,
             marketSegmentNormPairs: Array.isArray(fragment.marketSegmentNormPairs) ? fragment.marketSegmentNormPairs : undefined,
             label: fragment.labels?.en || humanizeCanonicalPath(fragment.canonicalPath) || `Fragment ${index}`,
-            type: fragment.type,
+            ...readNodeWireTaxonomy(fragment),
             state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
             showMetrics: showNodeMetrics,
             status: fragment.status,
@@ -7508,7 +7521,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           fragmentId: norm(fragment.id),
           canonicalPath: fragment.canonicalPath,
           label: fragment.labels?.en || humanizeCanonicalPath(fragment.canonicalPath) || `Fragment ${index}`,
-          type: fragment.type,
+          ...readNodeWireTaxonomy(fragment),
           state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
           status: fragment.status,
           position: posByFragmentId.get(norm(fragment.id)),
@@ -9011,7 +9024,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             marketSegmentNormVerticals: Array.isArray(fragment.marketSegmentNormVerticals) ? fragment.marketSegmentNormVerticals : undefined,
             marketSegmentNormPairs: Array.isArray(fragment.marketSegmentNormPairs) ? fragment.marketSegmentNormPairs : undefined,
             label: fragment.labels?.en || humanizeCanonicalPath(fragment.canonicalPath) || 'Fragment',
-            type: fragment.type,
+            ...readNodeWireTaxonomy(fragment),
             state: Object.keys(stateMetrics).length > 0 ? stateMetrics : undefined,
             showMetrics: showNodeMetrics,
             status: fragment.status,
@@ -13020,7 +13033,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         String(fragment?.labels?.en || fragment?.label || '').trim() ||
         humanizeCanonicalPath(canonicalPath) ||
         fragmentId;
-      const type = String(fragment?.type || '').trim() || undefined;
+      const wireFields = readNodeWireTaxonomy(fragment);
+      const type = wireFields.type;
       const state = extractStateMetrics(fragment?.state);
       const placement = computeNewRootPosition(fragmentId);
       const position = placement.position;
@@ -13059,7 +13073,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           canonicalPath,
           facilityKind: readFacilityKindFromAny(fragment),
           label,
-          type,
+          ...wireFields,
           state,
           showMetrics: showNodeMetrics,
           status: fragment?.status,
@@ -13121,7 +13135,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         String(fragment?.labels?.en || fragment?.label || '').trim() ||
         humanizeCanonicalPath(canonicalPath) ||
         fragmentId;
-      const type = String(fragment?.type || '').trim() || undefined;
+      const wireFields = readNodeWireTaxonomy(fragment);
+      const type = wireFields.type;
       const state = extractStateMetrics(fragment?.state);
       const placement = computeNewRootPosition(fragmentId);
       const position = placement.position;
@@ -13159,7 +13174,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           canonicalPath,
           facilityKind: readFacilityKindFromAny(fragment),
           label,
-          type,
+          ...wireFields,
           state,
           showMetrics: showNodeMetrics,
           status: fragment?.status,
@@ -13665,7 +13680,11 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         String(fragment?.labels?.en || fragment?.label || entity?.name || '').trim() ||
         humanizeCanonicalPath(canonicalPath) ||
         fragmentId;
-      const type = String(fragment?.type || entity?.type || '').trim() || undefined;
+      const wireFields = readNodeWireTaxonomy({
+        ...fragment,
+        type: fragment?.type || entity?.type,
+      });
+      const type = wireFields.type;
       const state = extractStateMetrics(fragment?.state);
 
       const placement = computeNewRootPosition(fragmentId);
@@ -13732,7 +13751,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           canonicalPath,
           facilityKind: readFacilityKindFromAny(fragment),
           label,
-          type,
+          ...wireFields,
           state,
           showMetrics: showNodeMetrics,
           status: fragment?.status,
@@ -13964,7 +13983,14 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const miniMapNodeColor = React.useCallback((node: Node<HorizonNodeData>) => {
     const data = node.data as HorizonNodeData;
     if (data.critical) return '#EF4444';
-    const vt = getHorizonNodeVisualType(data.type, (data as any)?.canonicalPath, (data as any)?.label, (data as any)?.facilityKind);
+    const vt = getHorizonNodeVisualType(
+      data.type,
+      (data as any)?.canonicalPath,
+      (data as any)?.label,
+      (data as any)?.facilityKind,
+      (data as any)?.fragmentClass,
+      (data as any)?.fragmentSubtype,
+    );
     return getNodeColors(vt || data.type, theme === 'dark' ? 'dark' : 'light').accent;
   }, [theme]);
 

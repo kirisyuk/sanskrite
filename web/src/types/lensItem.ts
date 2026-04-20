@@ -40,7 +40,11 @@ export interface LensItem {
   fragmentId?: string;
   canonicalPath?: string;
   label?: string; // labels["en"]
-  type?: string; // FragmentType
+  /** Legacy FragmentType and/or AH fragment class string (see backend LensItem.Type). */
+  type?: string;
+  /** When hydrated from a fragment payload (not persisted on LensItem until backend adds fields). */
+  class?: string;
+  subtype?: string;
   state?: Record<string, number>; // Key metrics for display
   status?: string;
   
