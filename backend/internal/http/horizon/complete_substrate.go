@@ -19,6 +19,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathstress"
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 const (
@@ -1197,7 +1198,7 @@ func inferPathEndpoint(nodes []horizonmodels.SupplyChainPathNode, role string) s
 	switch role {
 	case "supplier":
 		for _, node := range nodes {
-			if strings.TrimSpace(node.Type) == "product" {
+			if node.Class == ah.FragmentClassProduct {
 				continue
 			}
 			if ref := strings.TrimSpace(node.Ref); ref != "" {
@@ -1207,7 +1208,7 @@ func inferPathEndpoint(nodes []horizonmodels.SupplyChainPathNode, role string) s
 	case "customer":
 		for idx := len(nodes) - 1; idx >= 0; idx-- {
 			node := nodes[idx]
-			if strings.TrimSpace(node.Type) == "product" {
+			if node.Class == ah.FragmentClassProduct {
 				continue
 			}
 			if ref := strings.TrimSpace(node.Ref); ref != "" {

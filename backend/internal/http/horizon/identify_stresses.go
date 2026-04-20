@@ -25,6 +25,7 @@ import (
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	corerepo "github.com/igorkirisyuk/sanskrite/internal/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 const (
@@ -2804,19 +2805,6 @@ func buildIdentifyArtifactLabels(supplierRef, productRef, customerRef string) ma
 	}
 }
 
-func supplyPathNodeType(ref string) string {
-	switch {
-	case strings.HasPrefix(ref, "/product/"):
-		return "product"
-	case strings.HasPrefix(ref, "/fac/"):
-		return "fac"
-	case strings.HasPrefix(ref, "/deposit/"):
-		return "deposit"
-	default:
-		return "org"
-	}
-}
-
 func buildSingleSupplyLinkArtifact(fragment *horizonmodels.HorizonFragment, tenantID, lensID string) *horizonmodels.MaterializedArtifact {
 	if fragment == nil || fragment.SupplierRef == nil || fragment.CustomerRef == nil || fragment.ProductRef == nil {
 		return nil
@@ -2871,10 +2859,7 @@ func buildSingleSupplyLinkArtifact(fragment *horizonmodels.HorizonFragment, tena
 	nodeIndex := make(map[string]int, len(orderedNodeRefs))
 	for _, ref := range orderedNodeRefs {
 		nodeIndex[ref] = len(nodes)
-		nodes = append(nodes, horizonmodels.SupplyChainPathNode{
-			Type: supplyPathNodeType(ref),
-			Ref:  ref,
-		})
+		nodes = append(nodes, horizonmodels.SupplyChainPathNodeForRef(ref))
 	}
 	supplierIdx := nodeIndex[supplierRef]
 	productIdx := nodeIndex[productRef]
@@ -2891,7 +2876,7 @@ func buildSingleSupplyLinkArtifact(fragment *horizonmodels.HorizonFragment, tena
 	metrics := cloneMetricValueMap(fragment.State)
 	edges := []horizonmodels.SupplyChainPathEdge{
 		{
-			Type:                    "SUPPLY_LINK",
+			Relation:                ah.RelationNameSupplies,
 			From:                    supplierIdx,
 			To:                      customerIdx,
 			ViaProductIndex:         &productIdx,
@@ -2902,7 +2887,6 @@ func buildSingleSupplyLinkArtifact(fragment *horizonmodels.HorizonFragment, tena
 			SupplyLinkTenantID:      firstNonEmptyString(strings.TrimSpace(fragment.TenantID), strings.TrimSpace(tenantID), "global"),
 			SegmentIndex:            intPtr(0),
 			CarriesProduct:          true,
-			Role:                    "product_flow",
 			Metrics:                 metrics,
 			Qualifiers:              buildIdentifyPathEdgeQualifiers(metrics, leg, "product_flow", 0),
 		},
@@ -2915,7 +2899,7 @@ func buildSingleSupplyLinkArtifact(fragment *horizonmodels.HorizonFragment, tena
 				continue
 			}
 			edges = append(edges, horizonmodels.SupplyChainPathEdge{
-				Type:                    "LOGISTICS",
+				Relation:                ah.RelationNameLegConnects,
 				From:                    previousIdx,
 				To:                      viaIdx,
 				Mode:                    "required",
@@ -2926,7 +2910,6 @@ func buildSingleSupplyLinkArtifact(fragment *horizonmodels.HorizonFragment, tena
 				SupplyLinkTenantID:      firstNonEmptyString(strings.TrimSpace(fragment.TenantID), strings.TrimSpace(tenantID), "global"),
 				SegmentIndex:            intPtr(0),
 				CarriesProduct:          true,
-				Role:                    "logistics_leg",
 				Metrics:                 metrics,
 				Qualifiers:              buildIdentifyPathEdgeQualifiers(metrics, leg, "logistics_leg", viaOrder),
 			})
@@ -2934,7 +2917,7 @@ func buildSingleSupplyLinkArtifact(fragment *horizonmodels.HorizonFragment, tena
 		}
 		if previousIdx != customerIdx {
 			edges = append(edges, horizonmodels.SupplyChainPathEdge{
-				Type:                    "LOGISTICS",
+				Relation:                ah.RelationNameLegConnects,
 				From:                    previousIdx,
 				To:                      customerIdx,
 				Mode:                    "required",
@@ -2945,7 +2928,6 @@ func buildSingleSupplyLinkArtifact(fragment *horizonmodels.HorizonFragment, tena
 				SupplyLinkTenantID:      firstNonEmptyString(strings.TrimSpace(fragment.TenantID), strings.TrimSpace(tenantID), "global"),
 				SegmentIndex:            intPtr(0),
 				CarriesProduct:          true,
-				Role:                    "logistics_leg",
 				Metrics:                 metrics,
 				Qualifiers:              buildIdentifyPathEdgeQualifiers(metrics, leg, "logistics_leg", len(transportVia)),
 			})

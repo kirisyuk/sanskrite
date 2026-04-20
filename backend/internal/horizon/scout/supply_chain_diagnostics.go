@@ -119,8 +119,7 @@ func DiagnoseSupplyChainAssembly(
 	report.ProductNodesN = len(parsed.ProductNodes)
 	report.ActorNodesN = len(parsed.ActorNodes)
 	report.SupplyEdgesN = len(parsed.SupplyEdges)
-	report.TransformEdgesN = len(parsed.TransformEdges)
-	report.AssemblyEdgesN = len(parsed.AssemblyEdges)
+	report.TransformEdgesN, report.AssemblyEdgesN = models.AssemblyGraphSiteTransformCounts(parsed)
 	report.RouteBindingsN = len(parsed.RouteBindings)
 	report.DerivedPathKeysN = len(parsed.DerivedPathKeys)
 	report.PrimaryBranchesN = len(parsed.PrimaryBranches)
@@ -146,7 +145,7 @@ func DiagnoseSupplyChainAssembly(
 	if len(parsed.ProductNodes) == 0 && len(parsed.ActorNodes) == 0 {
 		report.Errors = append(report.Errors, "productNodes and actorNodes are empty")
 	}
-	if len(parsed.SupplyEdges) == 0 && len(parsed.TransformEdges) == 0 && len(parsed.AssemblyEdges) == 0 {
+	if len(parsed.SupplyEdges) == 0 && report.TransformEdgesN == 0 && report.AssemblyEdgesN == 0 {
 		report.Errors = append(report.Errors, "assembly graph has no supply, transform, or assembly edges")
 	}
 	if opts.MinPrimaryBranches > 0 && len(parsed.PrimaryBranches) < opts.MinPrimaryBranches {
@@ -191,11 +190,14 @@ func DiagnoseSupplyChainAssembly(
 		}
 		incoming[toRef][fromRef] = struct{}{}
 	}
-	for _, edge := range parsed.TransformEdges {
-		addIncoming(edge.ToProductRef, edge.FromProductRef)
-	}
-	for _, edge := range parsed.AssemblyEdges {
-		addIncoming(edge.ToProductRef, edge.FromProductRef)
+	for _, an := range parsed.ActorNodes {
+		for _, st := range an.SiteTransforms {
+			for _, fromRef := range st.InputProducts {
+				for _, toRef := range st.OutputProducts {
+					addIncoming(toRef, fromRef)
+				}
+			}
+		}
 	}
 	for _, edge := range parsed.SupplyEdges {
 		addIncoming(edge.CustomerRef, edge.SupplierRef)
@@ -210,8 +212,8 @@ func DiagnoseSupplyChainAssembly(
 		}
 	}
 
-	if opts.RequireAssemblyEdges && len(parsed.AssemblyEdges) == 0 {
-		report.Errors = append(report.Errors, "assemblyEdges is empty")
+	if opts.RequireAssemblyEdges && report.AssemblyEdgesN == 0 {
+		report.Errors = append(report.Errors, "assembly siteTransforms (assembly kind) is empty")
 	}
 	if opts.RequireDerivedPaths && len(parsed.DerivedPathKeys) == 0 {
 		report.Errors = append(report.Errors, "derivedPathKeys is empty")
@@ -258,7 +260,7 @@ func DiagnoseSupplyChainAssembly(
 		}
 		compareSummaryCount(&report.SummaryMismatches, "productsN", parseStateInt(summary["productsN"], -1), report.ProductNodesN)
 		compareSummaryCount(&report.SummaryMismatches, "actorsN", parseStateInt(summary["actorsN"], -1), report.ActorNodesN)
-		compareSummaryCount(&report.SummaryMismatches, "transformsN", parseStateInt(summary["transformsN"], -1), report.TransformEdgesN)
+		compareSummaryCount(&report.SummaryMismatches, "transformsN", parseStateInt(summary["transformsN"], -1), report.TransformEdgesN+report.AssemblyEdgesN)
 		compareSummaryCount(&report.SummaryMismatches, "derivedPathsN", parseStateInt(summary["derivedPathsN"], -1), report.DerivedPathKeysN)
 		compareSummaryCount(&report.SummaryMismatches, "openGapsN", parseStateInt(summary["openGapsN"], -1), len(report.OpenGaps))
 		compareSummaryCount(&report.SummaryMismatches, "primaryBranchesN", parseStateInt(summary["primaryBranchesN"], -1), report.PrimaryBranchesN)
@@ -292,7 +294,7 @@ func enrichSupplyChainQualityReport(report *SupplyChainAssemblyDiagnosticReport,
 	if report == nil || parsed == nil {
 		return
 	}
-	totalEdges := len(parsed.SupplyEdges) + len(parsed.TransformEdges) + len(parsed.AssemblyEdges)
+	totalEdges := len(parsed.SupplyEdges) + report.TransformEdgesN + report.AssemblyEdgesN
 	if parsed.Coverage != nil && totalEdges > 0 {
 		report.NoiseRatio = float64(parsed.Coverage.NoiseEdgesN) / float64(totalEdges)
 		if opts.MaxNoiseRatio > 0 && report.NoiseRatio > opts.MaxNoiseRatio {

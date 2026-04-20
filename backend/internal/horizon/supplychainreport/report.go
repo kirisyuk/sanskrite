@@ -527,7 +527,7 @@ func summarizePath(artifact *horizonmodels.MaterializedArtifact, parsed *horizon
 		summary.LegNarratives = append(summary.LegNarratives, legText)
 	}
 	for _, edge := range parsed.Edges {
-		kind := strings.TrimSpace(firstNonEmpty(edge.Relation, edge.Role, edge.Type))
+		kind := strings.TrimSpace(firstNonEmpty(string(edge.Relation)))
 		if kind != "" {
 			relationCounts[kind]++
 		}
@@ -656,7 +656,7 @@ func collectRelationSummaries(input *Input) []relationSummary {
 			continue
 		}
 		for _, edge := range parsed.Edges {
-			key := strings.TrimSpace(firstNonEmpty(edge.Relation, edge.Role, edge.Type))
+			key := strings.TrimSpace(firstNonEmpty(string(edge.Relation)))
 			if key != "" {
 				counts[key]++
 			}

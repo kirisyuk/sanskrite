@@ -387,20 +387,27 @@ func addSyntheticArtifactEdges(
 			if sourceFrag == nil || targetFrag == nil || sourceFrag.ID == "" || targetFrag.ID == "" {
 				continue
 			}
-			key := sourceFrag.ID + "|" + targetFrag.ID + "|" + strings.TrimSpace(edge.Type) + "|artifact:" + strings.TrimSpace(artifact.CanonicalKey)
+			rel := strings.TrimSpace(string(edge.Relation))
+			key := sourceFrag.ID + "|" + targetFrag.ID + "|" + rel + "|artifact:" + strings.TrimSpace(artifact.CanonicalKey)
 			if _, ok := seenEdges[key]; ok {
 				continue
 			}
 			seenEdges[key] = struct{}{}
+			pathRole := ""
+			if edge.Qualifiers != nil {
+				if r, ok := edge.Qualifiers["role"].(string); ok {
+					pathRole = strings.TrimSpace(r)
+				}
+			}
 			allEdges = append(allEdges, map[string]interface{}{
-				"id":                      fmt.Sprintf("artifact:%s:%d:%s", artifact.ID, derefInt(edge.SegmentIndex), strings.TrimSpace(edge.Type)),
+				"id":                      fmt.Sprintf("artifact:%s:%d:%s", artifact.ID, derefInt(edge.SegmentIndex), rel),
 				"sourceFragmentId":        sourceFrag.ID,
 				"targetFragmentId":        targetFrag.ID,
-				"type":                    edge.Type,
+				"type":                    rel,
 				"materialized":            true,
 				"artifactCanonicalKey":    strings.TrimSpace(artifact.CanonicalKey),
 				"artifactId":              strings.TrimSpace(artifact.ID),
-				"pathRole":                strings.TrimSpace(edge.Role),
+				"pathRole":                pathRole,
 				"segmentIndex":            edge.SegmentIndex,
 				"supplyLinkCanonicalPath": strings.TrimSpace(edge.SupplyLinkCanonicalPath),
 				"supplyLinkId":            strings.TrimSpace(edge.SupplyLinkID),

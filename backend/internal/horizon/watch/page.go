@@ -9,6 +9,7 @@ import (
 	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 const defaultWatchPageFreshnessWindow = 24 * time.Hour
@@ -1007,7 +1008,7 @@ func buildWatchPageReach(
 	for _, assembly := range assemblies {
 		for _, node := range append(append([]horizonmodels.SupplyChainAssemblyNode{}, assembly.Parsed.ActorNodes...), assembly.Parsed.ProductNodes...) {
 			kind := "assembly_actor"
-			if strings.EqualFold(strings.TrimSpace(node.Type), "product") || strings.HasPrefix(strings.TrimSpace(node.Ref), "/product/") {
+			if node.Class == ah.FragmentClassProduct || strings.HasPrefix(strings.TrimSpace(node.Ref), "/product/") {
 				kind = "assembly_product"
 			}
 			add(node.Ref, node.Name, kind, "Resolved in the supply-chain assembly graph attached to this lens.", assembly.Artifact.ID)
@@ -1089,16 +1090,22 @@ func buildWatchPageProducts(
 			entry.backing = compactUnique(append(entry.backing, assembly.Artifact.ID))
 			entry.score += maxFloat(0.5, edge.RouteCriticality) + maxFloat(0.2, edge.Confidence/2)
 		}
-		for _, edge := range assembly.Parsed.TransformEdges {
-			from := ensure(edge.FromProductRef, productLabels[strings.TrimSpace(edge.FromProductRef)])
-			to := ensure(edge.ToProductRef, productLabels[strings.TrimSpace(edge.ToProductRef)])
-			if from != nil && to != nil {
-				from.transformedInto = compactUnique(append(from.transformedInto, to.label))
-				to.transformedFrom = compactUnique(append(to.transformedFrom, from.label))
-				from.backing = compactUnique(append(from.backing, assembly.Artifact.ID))
-				to.backing = compactUnique(append(to.backing, assembly.Artifact.ID))
-				from.score += maxFloat(0.35, edge.DecisionValueScore)
-				to.score += maxFloat(0.25, edge.DecisionValueScore/2)
+		for _, an := range assembly.Parsed.ActorNodes {
+			for _, st := range an.SiteTransforms {
+				for _, inRef := range st.InputProducts {
+					for _, outRef := range st.OutputProducts {
+						from := ensure(inRef, productLabels[strings.TrimSpace(inRef)])
+						to := ensure(outRef, productLabels[strings.TrimSpace(outRef)])
+						if from != nil && to != nil {
+							from.transformedInto = compactUnique(append(from.transformedInto, to.label))
+							to.transformedFrom = compactUnique(append(to.transformedFrom, from.label))
+							from.backing = compactUnique(append(from.backing, assembly.Artifact.ID))
+							to.backing = compactUnique(append(to.backing, assembly.Artifact.ID))
+							from.score += maxFloat(0.35, st.Confidence)
+							to.score += maxFloat(0.25, st.Confidence/2)
+						}
+					}
+				}
 			}
 		}
 	}

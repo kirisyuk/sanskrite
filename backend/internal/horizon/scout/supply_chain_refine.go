@@ -374,7 +374,8 @@ func buildSupplyChainAssemblyState(job *models.ScoutingJob, result *pathbuilder.
 		totalEdges := result.Coverage.RouteBoundPrimaryEdgesN + result.Coverage.NoiseEdgesN
 		if result.Artifact != nil {
 			if parsed, err := models.ParseSupplyChainAssemblyGraphPayload(result.Artifact.Payload); err == nil && parsed != nil {
-				totalEdges = len(parsed.SupplyEdges) + len(parsed.TransformEdges) + len(parsed.AssemblyEdges)
+				tN, aN := models.AssemblyGraphSiteTransformCounts(parsed)
+				totalEdges = len(parsed.SupplyEdges) + tN + aN
 				summary["primaryBranches"] = parsed.PrimaryBranches
 				summary["secondaryBranches"] = parsed.SecondaryBranches
 				summary["topRoutes"] = parsed.TopRoutes
@@ -437,8 +438,6 @@ func (e *ScoutEngine) updateAssemblyArtifactContinuationMetadata(ctx context.Con
 		ProductNodes:                    parsed.ProductNodes,
 		ActorNodes:                      parsed.ActorNodes,
 		SupplyEdges:                     parsed.SupplyEdges,
-		TransformEdges:                  parsed.TransformEdges,
-		AssemblyEdges:                   parsed.AssemblyEdges,
 		RouteBindings:                   parsed.RouteBindings,
 		Coverage:                        parsed.Coverage,
 		OpenGaps:                        parsed.OpenGaps,
@@ -506,8 +505,6 @@ func applyPreferredDirectPathKeysToAssembly(job *models.ScoutingJob, result *pat
 		ProductNodes:                    parsed.ProductNodes,
 		ActorNodes:                      parsed.ActorNodes,
 		SupplyEdges:                     parsed.SupplyEdges,
-		TransformEdges:                  parsed.TransformEdges,
-		AssemblyEdges:                   parsed.AssemblyEdges,
 		RouteBindings:                   parsed.RouteBindings,
 		Coverage:                        parsed.Coverage,
 		OpenGaps:                        parsed.OpenGaps,
