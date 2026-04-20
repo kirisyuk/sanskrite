@@ -13,7 +13,7 @@ import (
 	appcache "github.com/igorkirisyuk/sanskrite/internal/cache"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathquery"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	redis "github.com/redis/go-redis/v9"
 )
@@ -317,12 +317,15 @@ func (h *HorizonHandlers) GetSupplyChainsByLens(w http.ResponseWriter, r *http.R
 	}
 
 	const limit = 100
-	scopedChains, discoveredChains, err := h.collectSupplyChainsForLens(r, lens, limit)
+	scopedChains, discoveredChains, err := pathquery.CollectSupplyChainsForLens(r.Context(), h.materializedArtifactsRepo, lens, limit)
 	if err != nil {
 		http.Error(w, "Failed to fetch supply chains", http.StatusInternalServerError)
 		return
 	}
 	chains := append(scopedChains, discoveredChains...)
+	for _, a := range chains {
+		annotateSupplyChainTraceArtifact(a, "")
+	}
 	annotateSupplyChainArtifactRiskOverlays(chains)
 	annotateSupplyChainFamilyArtifacts(chains)
 
@@ -338,222 +341,12 @@ func (h *HorizonHandlers) GetSupplyChainsByLens(w http.ResponseWriter, r *http.R
 	})
 }
 
-type supplyChainLensContext struct {
-	NodeRefs         []string
-	FlowRefs         []string
-	ZoneRefs         []string
-	AffectedZoneRefs []string
-	ArtifactKeys     []string
-}
-
-func (h *HorizonHandlers) collectSupplyChainsForLens(r *http.Request, lens *horizonmodels.Lens, limit int) ([]*horizonmodels.MaterializedArtifact, []*horizonmodels.MaterializedArtifact, error) {
-	ctx := r.Context()
-	tenantID := strings.TrimSpace(lens.TenantID)
-	if tenantID == "" {
-		tenantID = "global"
-	}
-	contextRefs := buildSupplyChainLensContext(lens)
-	selected := make(map[string]*horizonmodels.MaterializedArtifact, limit*2)
-	scopedIDs := make(map[string]struct{}, limit)
-
-	appendArtifact := func(artifact *horizonmodels.MaterializedArtifact, pinned bool, source string, matched []string, overlapScore float64) {
-		if artifact == nil || artifact.Kind != horizonmodels.MaterializedKindSupplyChainPath {
-			return
-		}
-		horizonmodels.PopulateSupplyChainPathIndexes(artifact)
-		if existing := selected[artifact.ID]; existing != nil {
-			if pinned && !existing.IsPinned {
-				existing.IsPinned = true
-				existing.DiscoverySource = "scoped"
-				existing.DiscoveryReason = "attached to lens scope"
-			}
-			if overlapScore > existing.OverlapScore {
-				existing.OverlapScore = overlapScore
-				existing.MatchedRefs = append([]string(nil), matched...)
-				if !existing.IsPinned {
-					existing.DiscoverySource = source
-					existing.DiscoveryReason = describeSupplyChainDiscovery(source, matched)
-				}
-			}
-			return
-		}
-		copyArtifact := *artifact
-		copyArtifact.IsPinned = pinned
-		copyArtifact.MatchedRefs = append([]string(nil), matched...)
-		copyArtifact.OverlapScore = overlapScore
-		if pinned {
-			copyArtifact.DiscoverySource = "scoped"
-			copyArtifact.DiscoveryReason = "attached to lens scope"
-		} else {
-			copyArtifact.DiscoverySource = source
-			copyArtifact.DiscoveryReason = describeSupplyChainDiscovery(source, matched)
-		}
-		annotateSupplyChainTraceArtifact(&copyArtifact, "")
-		selected[copyArtifact.ID] = &copyArtifact
-		if pinned {
-			scopedIDs[copyArtifact.ID] = struct{}{}
-		}
-	}
-
-	legacyScoped, err := h.materializedArtifactsRepo.ListByLens(ctx, lens.ID, limit)
-	if err != nil {
-		return nil, nil, err
-	}
-	for _, artifact := range legacyScoped {
-		appendArtifact(artifact, true, "scoped", nil, 1)
-	}
-	for _, artKey := range contextRefs.ArtifactKeys {
-		artifact, err := h.materializedArtifactsRepo.GetByCanonicalKeyAnyKind(ctx, tenantID, artKey)
-		if err == nil && artifact != nil {
-			if artifact.Kind == horizonmodels.MaterializedKindSupplyChainAssemblyGraph {
-				pinnedPathKeys := extractPreferredAssemblyPathKeys(artifact)
-				for _, pathKey := range pinnedPathKeys {
-					pathArtifact, err := h.materializedArtifactsRepo.GetByCanonicalKeyAnyKind(ctx, tenantID, pathKey)
-					if err == nil && pathArtifact != nil {
-						appendArtifact(pathArtifact, true, "scoped", nil, 1)
-					}
-				}
-				continue
-			}
-			appendArtifact(artifact, true, "scoped", nil, 1)
-		}
-	}
-
-	discoveredLimit := limit * 2
-	discoveredQueries := []struct {
-		refs   []string
-		source string
-		find   func([]string) ([]*horizonmodels.MaterializedArtifact, error)
-	}{
-		{
-			refs:   contextRefs.NodeRefs,
-			source: "node_overlap",
-			find: func(refs []string) ([]*horizonmodels.MaterializedArtifact, error) {
-				return h.materializedArtifactsRepo.FindByNodeRefsAny(ctx, tenantID, refs, horizonmodels.MaterializedKindSupplyChainPath, discoveredLimit)
-			},
-		},
-		{
-			refs:   contextRefs.FlowRefs,
-			source: "flow_overlap",
-			find: func(refs []string) ([]*horizonmodels.MaterializedArtifact, error) {
-				return h.materializedArtifactsRepo.FindByFlowRefsAny(ctx, tenantID, refs, horizonmodels.MaterializedKindSupplyChainPath, discoveredLimit)
-			},
-		},
-		{
-			refs:   contextRefs.ZoneRefs,
-			source: "zone_overlap",
-			find: func(refs []string) ([]*horizonmodels.MaterializedArtifact, error) {
-				return h.materializedArtifactsRepo.FindByZoneRefsAny(ctx, tenantID, refs, horizonmodels.MaterializedKindSupplyChainPath, discoveredLimit)
-			},
-		},
-		{
-			refs:   contextRefs.AffectedZoneRefs,
-			source: "affected_zone_overlap",
-			find: func(refs []string) ([]*horizonmodels.MaterializedArtifact, error) {
-				return h.materializedArtifactsRepo.FindByAffectedZoneRefsAny(ctx, tenantID, refs, horizonmodels.MaterializedKindSupplyChainPath, discoveredLimit)
-			},
-		},
-	}
-
-	if len(scopedIDs) == 0 {
-		for _, query := range discoveredQueries {
-			if len(query.refs) == 0 {
-				continue
-			}
-			artifacts, err := query.find(query.refs)
-			if err != nil {
-				return nil, nil, err
-			}
-			for _, artifact := range artifacts {
-				score, matched := scoreSupplyChainOverlap(artifact, contextRefs)
-				if score <= 0 {
-					continue
-				}
-				appendArtifact(artifact, false, query.source, matched, score)
-			}
-		}
-	}
-
-	scoped := make([]*horizonmodels.MaterializedArtifact, 0, len(scopedIDs))
-	discovered := make([]*horizonmodels.MaterializedArtifact, 0, len(selected))
-	for _, artifact := range selected {
-		if _, ok := scopedIDs[artifact.ID]; ok {
-			scoped = append(scoped, artifact)
-			continue
-		}
-		discovered = append(discovered, artifact)
-	}
-	if len(scoped) > 0 {
-		sortSupplyChainArtifacts(scoped)
-		if len(scoped) > limit {
-			scoped = scoped[:limit]
-		}
-		return scoped, nil, nil
-	}
-	sortSupplyChainArtifacts(scoped)
-	sortSupplyChainArtifacts(discovered)
-	if len(scoped) > limit {
-		scoped = scoped[:limit]
-	}
-	remaining := limit - len(scoped)
-	if remaining < 0 {
-		remaining = 0
-	}
-	if len(discovered) > remaining {
-		discovered = discovered[:remaining]
-	}
-	return scoped, discovered, nil
-}
-
-func extractPreferredAssemblyPathKeys(artifact *horizonmodels.MaterializedArtifact) []string {
-	if artifact == nil || artifact.Kind != horizonmodels.MaterializedKindSupplyChainAssemblyGraph {
-		return nil
-	}
-	parsed, err := horizonmodels.ParseSupplyChainAssemblyGraphPayload(artifact.Payload)
-	if err != nil || parsed == nil {
-		return nil
-	}
-	keys := append([]string(nil), parsed.DirectPathKeys...)
-	if len(keys) == 0 {
-		keys = append(keys, parsed.DerivedPathKeys...)
-	}
-	return mergeUniqueStrings(nil, keys)
-}
-
 func (h *HorizonHandlers) searchSupplyChainCandidates(r *http.Request, tenantID string, req supplyChainSearchRequest) ([]*horizonmodels.MaterializedArtifact, error) {
-	if strings.TrimSpace(req.LensID) != "" && h.lensItemsHandler != nil && h.lensItemsHandler.lensesRepo != nil {
-		lens, err := h.lensItemsHandler.lensesRepo.Get(r.Context(), strings.TrimSpace(req.LensID))
-		if err == nil && lens != nil {
-			scoped, discovered, cerr := h.collectSupplyChainsForLens(r, lens, max(req.Limit*3, 50))
-			if cerr == nil {
-				return filterSupplyChainCandidates(append(scoped, discovered...), req.Anchors), nil
-			}
-		}
+	var lenses pathquery.LensGetter
+	if h.lensItemsHandler != nil {
+		lenses = h.lensItemsHandler.lensesRepo
 	}
-	if hasSupplyLinkAnchor(req.Anchors) {
-		artifacts, err := h.materializedArtifactsRepo.ListByTenantAndKind(r.Context(), tenantID, horizonmodels.MaterializedKindSupplyChainPath, 10000)
-		if err != nil {
-			return nil, err
-		}
-		if len(artifacts) == 0 && tenantID != "global" {
-			artifacts, err = h.materializedArtifactsRepo.ListByTenantAndKind(r.Context(), "global", horizonmodels.MaterializedKindSupplyChainPath, 10000)
-			if err != nil {
-				return nil, err
-			}
-		}
-		return filterSupplyChainCandidates(artifacts, req.Anchors), nil
-	}
-	artifacts, err := h.materializedArtifactsRepo.FindByNodeRef(r.Context(), tenantID, req.Anchors[0], horizonmodels.MaterializedKindSupplyChainPath)
-	if err != nil {
-		return nil, err
-	}
-	if len(artifacts) == 0 && tenantID != "global" {
-		artifacts, err = h.materializedArtifactsRepo.FindByNodeRef(r.Context(), "global", req.Anchors[0], horizonmodels.MaterializedKindSupplyChainPath)
-		if err != nil {
-			return nil, err
-		}
-	}
-	return filterSupplyChainCandidates(artifacts, req.Anchors), nil
+	return pathquery.SearchSupplyChainAnchors(r.Context(), h.materializedArtifactsRepo, lenses, tenantID, req.Anchors, req.LensID, req.Limit)
 }
 
 func filterSupplyChainCandidates(artifacts []*horizonmodels.MaterializedArtifact, anchors []string) []*horizonmodels.MaterializedArtifact {
@@ -919,64 +712,6 @@ func getSupplyChainSearchRedis() *redis.Client {
 	return supplyChainSearchRedis
 }
 
-func buildSupplyChainLensContext(lens *horizonmodels.Lens) supplyChainLensContext {
-	out := supplyChainLensContext{}
-	if lens == nil {
-		return out
-	}
-	out.NodeRefs = mergeUniqueStrings(out.NodeRefs, workscope.LensSupplyChainNodeRefs(lens))
-	for artKey, ref := range lens.ScopeArtifacts {
-		if strings.TrimSpace(artKey) != "" {
-			out.ArtifactKeys = append(out.ArtifactKeys, artKey)
-		}
-		out.NodeRefs = mergeUniqueStrings(out.NodeRefs, ref.NodeRefs)
-		out.FlowRefs = mergeUniqueStrings(out.FlowRefs, ref.FlowRefs)
-		out.ZoneRefs = mergeUniqueStrings(out.ZoneRefs, ref.ZoneRefs)
-		out.AffectedZoneRefs = mergeUniqueStrings(out.AffectedZoneRefs, ref.AffectedZoneRefs)
-	}
-	sort.Strings(out.ArtifactKeys)
-	return out
-}
-
-func scoreSupplyChainOverlap(artifact *horizonmodels.MaterializedArtifact, ctx supplyChainLensContext) (float64, []string) {
-	if artifact == nil {
-		return 0, nil
-	}
-	horizonmodels.PopulateSupplyChainPathIndexes(artifact)
-	nodeMatches := intersectCount(artifact.NodeRefs, ctx.NodeRefs)
-	flowMatches := intersectCount(artifact.FlowRefs, ctx.FlowRefs)
-	zoneMatches := intersectCount(artifact.ZoneRefs, ctx.ZoneRefs)
-	affectedMatches := intersectCount(artifact.AffectedZoneRefs, ctx.AffectedZoneRefs)
-	score := float64(nodeMatches)*1.0 + float64(flowMatches)*0.75 + float64(zoneMatches)*0.6 + float64(affectedMatches)*0.9
-	if score <= 0 {
-		return 0, nil
-	}
-	matched := make([]string, 0, 8)
-	matched = append(matched, firstIntersect(artifact.NodeRefs, ctx.NodeRefs, 4)...)
-	matched = append(matched, firstIntersect(artifact.FlowRefs, ctx.FlowRefs, 2)...)
-	matched = append(matched, firstIntersect(artifact.ZoneRefs, ctx.ZoneRefs, 2)...)
-	matched = append(matched, firstIntersect(artifact.AffectedZoneRefs, ctx.AffectedZoneRefs, 2)...)
-	return score, mergeUniqueStrings(nil, matched)
-}
-
-func describeSupplyChainDiscovery(source string, matched []string) string {
-	switch source {
-	case "node_overlap":
-		return "discovered from overlapping graph entities"
-	case "flow_overlap":
-		return "discovered from overlapping route bindings"
-	case "zone_overlap":
-		return "discovered from overlapping zone bindings"
-	case "affected_zone_overlap":
-		return "discovered from overlapping affected-zone bindings"
-	default:
-		if len(matched) > 0 {
-			return "discovered from lens context overlap"
-		}
-		return ""
-	}
-}
-
 func sortSupplyChainArtifacts(artifacts []*horizonmodels.MaterializedArtifact) {
 	sort.SliceStable(artifacts, func(i, j int) bool {
 		left := artifacts[i]
@@ -1297,6 +1032,19 @@ func fragmentTraceFragmentLabel(fragment *horizonmodels.HorizonFragment) string 
 	return naming.BestEffortLabelFromCanonicalPath(strings.TrimSpace(fragment.CanonicalPath))
 }
 
+func traceContainsString(values []string, target string) bool {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return false
+	}
+	for _, value := range values {
+		if strings.TrimSpace(value) == target {
+			return true
+		}
+	}
+	return false
+}
+
 func classifySupplyChainTraceRole(artifact *horizonmodels.MaterializedArtifact, centerCanonicalPath string) string {
 	centerCanonicalPath = strings.TrimSpace(centerCanonicalPath)
 	switch {
@@ -1422,57 +1170,6 @@ func artifactPathStressScore(artifact *horizonmodels.MaterializedArtifact) float
 		return parsed.Stress.PathScore
 	}
 	return 0
-}
-
-func intersectCount(left, right []string) int {
-	if len(left) == 0 || len(right) == 0 {
-		return 0
-	}
-	set := make(map[string]struct{}, len(right))
-	for _, value := range right {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			set[value] = struct{}{}
-		}
-	}
-	count := 0
-	for _, value := range left {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := set[value]; ok {
-			count++
-		}
-	}
-	return count
-}
-
-func firstIntersect(left, right []string, limit int) []string {
-	if len(left) == 0 || len(right) == 0 || limit <= 0 {
-		return nil
-	}
-	set := make(map[string]struct{}, len(right))
-	for _, value := range right {
-		value = strings.TrimSpace(value)
-		if value != "" {
-			set[value] = struct{}{}
-		}
-	}
-	out := make([]string, 0, limit)
-	for _, value := range left {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		if _, ok := set[value]; ok {
-			out = append(out, value)
-			if len(out) >= limit {
-				break
-			}
-		}
-	}
-	return out
 }
 
 func mergeUniqueStrings(dst []string, values []string) []string {

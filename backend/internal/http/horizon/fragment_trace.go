@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathquery"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 )
@@ -628,81 +629,14 @@ func (h *HorizonHandlers) collectFragmentTraceSupplyChains(ctx context.Context, 
 	if h.materializedArtifactsRepo == nil || frag == nil {
 		return nil, nil
 	}
-	tenantID := strings.TrimSpace(frag.TenantID)
-	if tenantID == "" {
-		tenantID = "global"
-	}
 	cp := strings.TrimSpace(frag.CanonicalPath)
-	selected := make(map[string]*horizonmodels.MaterializedArtifact)
-	appendArtifact := func(artifact *horizonmodels.MaterializedArtifact, pinned bool, source string, matched []string, overlapScore float64) {
-		if artifact == nil || artifact.Kind != horizonmodels.MaterializedKindSupplyChainPath {
-			return
-		}
-		horizonmodels.PopulateSupplyChainPathIndexes(artifact)
-		if existing := selected[artifact.ID]; existing != nil {
-			if pinned && !existing.IsPinned {
-				existing.IsPinned = true
-				existing.DiscoverySource = "scoped"
-				existing.DiscoveryReason = "attached to lens scope"
-			}
-			if overlapScore > existing.OverlapScore {
-				existing.OverlapScore = overlapScore
-				existing.MatchedRefs = append([]string(nil), matched...)
-				if !existing.IsPinned {
-					existing.DiscoverySource = source
-					existing.DiscoveryReason = describeSupplyChainDiscovery(source, matched)
-				}
-			}
-			return
-		}
-		copyArtifact := *artifact
-		copyArtifact.IsPinned = pinned
-		copyArtifact.MatchedRefs = append([]string(nil), matched...)
-		copyArtifact.OverlapScore = overlapScore
-		if pinned {
-			copyArtifact.DiscoverySource = "scoped"
-			copyArtifact.DiscoveryReason = "attached to lens scope"
-		} else {
-			copyArtifact.DiscoverySource = source
-			copyArtifact.DiscoveryReason = describeSupplyChainDiscovery(source, matched)
-		}
-		selected[copyArtifact.ID] = &copyArtifact
+	var lenses pathquery.LensGetter
+	if h.lensItemsHandler != nil {
+		lenses = h.lensItemsHandler.lensesRepo
 	}
-	if cp != "" {
-		if items, err := h.materializedArtifactsRepo.FindByNodeRef(ctx, tenantID, cp, horizonmodels.MaterializedKindSupplyChainPath); err == nil {
-			for _, artifact := range items {
-				appendArtifact(artifact, false, "node_overlap", []string{cp}, 1.0)
-			}
-		}
-		if horizonmodels.ClassSubtypeAffectedZone.MatchesFragment(frag) {
-			if items, err := h.materializedArtifactsRepo.FindByAffectedZoneRefsAny(ctx, tenantID, []string{cp}, horizonmodels.MaterializedKindSupplyChainPath, 50); err == nil {
-				for _, artifact := range items {
-					appendArtifact(artifact, false, "affected_zone_overlap", []string{cp}, 0.9)
-				}
-			}
-		}
-	}
-	if lensID != "" && h.lensItemsHandler != nil && h.lensItemsHandler.lensesRepo != nil {
-		if lens, err := h.lensItemsHandler.lensesRepo.Get(ctx, lensID); err == nil && lens != nil {
-			scoped, discovered, err := h.collectSupplyChainsForLens(&http.Request{Method: http.MethodGet}, lens, 100)
-			if err == nil {
-				for _, artifact := range append(scoped, discovered...) {
-					if artifact == nil {
-						continue
-					}
-					horizonmodels.PopulateSupplyChainPathIndexes(artifact)
-					if cp != "" {
-						if traceContainsString(artifact.NodeRefs, cp) || traceContainsString(artifact.AffectedZoneRefs, cp) || traceContainsString(artifact.ZoneRefs, cp) {
-							appendArtifact(artifact, artifact.IsPinned, artifact.DiscoverySource, artifact.MatchedRefs, artifact.OverlapScore)
-						}
-					}
-				}
-			}
-		}
-	}
-	out := make([]*horizonmodels.MaterializedArtifact, 0, len(selected))
-	for _, artifact := range selected {
-		out = append(out, artifact)
+	out, err := pathquery.CollectFragmentTraceSupplyChains(ctx, h.materializedArtifactsRepo, lenses, frag, lensID)
+	if err != nil || len(out) == 0 {
+		return out, err
 	}
 	resolvedFragments := loadSupplyChainTraceFragments(ctx, h.service.Fragments(), out)
 	for _, artifact := range out {
@@ -852,17 +786,4 @@ func traceEdgeSemanticDirection(centerID, sourceID, targetID, edgeType string) s
 		return "upstream"
 	}
 	return "downstream"
-}
-
-func traceContainsString(values []string, target string) bool {
-	target = strings.TrimSpace(target)
-	if target == "" {
-		return false
-	}
-	for _, value := range values {
-		if strings.TrimSpace(value) == target {
-			return true
-		}
-	}
-	return false
 }

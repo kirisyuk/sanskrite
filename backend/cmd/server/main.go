@@ -72,6 +72,7 @@ import (
 	horizonmetriccore "github.com/igorkirisyuk/sanskrite/internal/horizon/metriccore"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonpathbuilder "github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
+	horizonpathquery "github.com/igorkirisyuk/sanskrite/internal/horizon/pathquery"
 	horizonpolicy "github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	horizonproductdict "github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	horizonprofile "github.com/igorkirisyuk/sanskrite/internal/horizon/profile"
@@ -526,6 +527,7 @@ func main() {
 	var bigqueryAIService *services.BigQueryAIService
 	var horizonService *horizon.HorizonService
 	var horizonHandlers *horizonhttp.HorizonHandlers
+	var horizonPathqueryService *horizonpathquery.Service
 	var oneHopDownstreamService *horizonsupplychain.OneHopDownstreamService
 	var profilesHandler *horizonhttp.ProfilesHandler
 	var profileGenerator *horizonprofile.Generator
@@ -3076,6 +3078,13 @@ func main() {
 					WithPathFamilyProjectionsRepository(horizonPathFamilyProjectionsRepo).
 					WithCompiledWatchSubjectsRepository(horizonCompiledWatchSubjectsRepo).
 					WithWatchSubjectsRepository(horizonWatchSubjectsRepo)
+				horizonPathqueryService = horizonpathquery.NewService(
+					horizonFragmentsRepo,
+					horizonEdgesRepo,
+					horizonMaterializedArtifactsRepo,
+					fsClient.Client(),
+					supplyChainPathBuilder,
+				).WithExposurePaths(horizonExposurePathsRepo)
 				scoutEngine.WithSupplyChainPathBuilder(supplyChainPathBuilder)
 				scoutEngine.WithServiceChainPathBuilder(
 					horizonpathbuilder.NewSupplyChainPathBuilder(
@@ -3386,6 +3395,7 @@ func main() {
 
 			// Create HTTP handlers
 			horizonHandlers = horizonhttp.NewHorizonHandlers(horizonService).
+				WithPathqueryService(horizonPathqueryService).
 				WithLensItemsHandler(horizonLensItemsHandler).
 				WithScoutRuntimeExecutor(scoutRuntimeExecutor).
 				WithMergeFragmentsRepo(horizonFragmentsMergeRepo).

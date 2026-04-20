@@ -1,4 +1,4 @@
-package horizon
+package pathquery
 
 import (
 	"testing"
@@ -32,11 +32,11 @@ func TestExtractPreferredAssemblyPathKeys_PrefersDirectPaths(t *testing.T) {
 		"/supply-chain/global/direct/b",
 	}
 	artifact := &horizonmodels.MaterializedArtifact{
-		Kind: horizonmodels.MaterializedKindSupplyChainAssemblyGraph,
+		Kind:    horizonmodels.MaterializedKindSupplyChainAssemblyGraph,
 		Payload: payload,
 	}
 
-	got := extractPreferredAssemblyPathKeys(artifact)
+	got := ExtractPreferredAssemblyPathKeys(artifact)
 	want := []string{
 		"/supply-chain/global/direct/a",
 		"/supply-chain/global/direct/b",
@@ -74,11 +74,11 @@ func TestExtractPreferredAssemblyPathKeys_FallsBackToDerivedPaths(t *testing.T) 
 		nil,
 	)
 	artifact := &horizonmodels.MaterializedArtifact{
-		Kind: horizonmodels.MaterializedKindSupplyChainAssemblyGraph,
+		Kind:    horizonmodels.MaterializedKindSupplyChainAssemblyGraph,
 		Payload: payload,
 	}
 
-	got := extractPreferredAssemblyPathKeys(artifact)
+	got := ExtractPreferredAssemblyPathKeys(artifact)
 	want := []string{
 		"/supply-chain/global/derived/a",
 		"/supply-chain/global/derived/b",

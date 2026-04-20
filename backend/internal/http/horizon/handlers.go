@@ -13,6 +13,7 @@ import (
 	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	horizonscout "github.com/igorkirisyuk/sanskrite/internal/horizon/scout"
 	horizonscoutbridge "github.com/igorkirisyuk/sanskrite/internal/horizon/scoutbridge"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathquery"
 	horizonsupplychain "github.com/igorkirisyuk/sanskrite/internal/horizon/supplychain"
 	horizonwatch "github.com/igorkirisyuk/sanskrite/internal/horizon/watch"
 	horizonwatchruntime "github.com/igorkirisyuk/sanskrite/internal/horizon/watchruntime"
@@ -66,6 +67,8 @@ type HorizonHandlers struct {
 	watchService     *horizonwatch.Service
 	watchRuntime     *horizonwatchruntime.Service
 	scoutExecutor    *horizonscoutbridge.Executor
+
+	pathqueryService *pathquery.Service
 }
 
 // NewHorizonHandlers создает новые handlers
@@ -281,6 +284,12 @@ func (h *HorizonHandlers) WithWatchRuntime(svc *horizonwatchruntime.Service) *Ho
 	return h
 }
 
+// WithPathqueryService wires the centralized pathquery read service (P8).
+func (h *HorizonHandlers) WithPathqueryService(svc *pathquery.Service) *HorizonHandlers {
+	h.pathqueryService = svc
+	return h
+}
+
 // RegisterRoutes регистрирует все routes для Horizon API
 func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func(http.Handler) http.Handler) {
 	// Intent precheck (NL -> taxonomy-aligned intent)
@@ -304,6 +313,8 @@ func (h *HorizonHandlers) RegisterRoutes(mux *http.ServeMux, authMiddleware func
 	mux.Handle("/api/horizon/supply-chains/by-node", authMiddleware(http.HandlerFunc(h.GetSupplyChainsByNode)))
 	mux.Handle("/api/horizon/supply-chains/by-lens", authMiddleware(http.HandlerFunc(h.GetSupplyChainsByLens)))
 	mux.Handle("/api/horizon/supply-chains/search", authMiddleware(http.HandlerFunc(h.SearchSupplyChains)))
+	mux.Handle("/api/horizon/pathquery", authMiddleware(http.HandlerFunc(h.GetPathquery)))
+	mux.Handle("/api/v1/horizon/pathquery", authMiddleware(http.HandlerFunc(h.GetPathquery)))
 	mux.Handle("/api/horizon/products/prefetch", authMiddleware(http.HandlerFunc(h.GetProductPrefetch)))
 	mux.Handle("/api/horizon/products/stream", authMiddleware(http.HandlerFunc(h.GetProductStream)))
 	mux.Handle("/api/horizon/products/producers", authMiddleware(http.HandlerFunc(h.GetProductProducers)))

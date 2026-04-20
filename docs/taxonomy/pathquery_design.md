@@ -64,40 +64,56 @@ Carries everything that must participate in cache keying and runtime filtering b
 
 ```go
 type SearchContext struct {
-	LensID    string    // optional; empty = global / no lens filter
-	Scope     string    // optional opaque scope key (e.g. serialized filter fingerprint)
-	AsOf      time.Time // optional; zero = “now” / latest
-	ProjectID string    // duplicate of Query.Project if needed for nested calls; may stay empty
+	LensID string    // optional; empty = global / no lens filter
+	Scope  string    // optional opaque scope key (e.g. serialized filter fingerprint)
+	AsOf   time.Time // optional; zero = "now" / latest
 }
 ```
+
+Tenant and project live on `Query`, not here — `SearchContext` never overrides them (avoids two sources of truth for authz).
 
 **Cache key:** includes `LensID`, `Scope` (normalized), and **as-of date** (see §5.1). If `AsOf` is zero, the key uses a sentinel `"live"` or RFC3339 of truncated “today” UTC — **decision for approver:** prefer **date-only UTC** (`2006-01-02`) for stability within a day, or full timestamp if sub-day cache correctness is required.
 
 ### 3.3. Query
 
-Aligned with REMAINING_WORK_SPEC §4.3; `Context` added as above.
+Aligned with REMAINING_WORK_SPEC §4.3. Two deliberate deviations from the literal spec, called out explicitly:
+
+- `To` is `*Endpoint` (pointer), not `Endpoint` — spec text says `nil means "any downstream"`, which is impossible on a struct value in Go. Pointer is the canonical encoding.
+- Cache control is split into `CacheTTL` + `CacheMode` to resolve the self-contradictory "zero = default" / "0 = disable" language in the spec (see §9.5).
 
 ```go
 type Query struct {
 	Tenant        string
 	Project       string
 	From          Endpoint
-	To            *Endpoint              // nil = any downstream
-	ProductAxis   string               // optional canonical product path filter
-	MaxHops       int                  // default 8 when zero
-	RelationKinds []ah.RelationName    // default {supplies, produces, leg_connects} when nil/empty
+	To            *Endpoint           // nil = "any downstream" (bounded multi-target)
+	ProductAxis   string              // optional canonical product path filter
+	MaxHops       int                 // default 8 when <= 0
+	RelationKinds []ah.RelationName   // default {supplies, produces, leg_connects} when nil/empty
 	IncludeStress bool
 	IncludeGeo    bool
-	CacheTTL      time.Duration        // default 24h; 0 = disable cache read/write; -1 = force refresh (miss + overwrite)
+	CacheMode     CacheMode           // Default | Disabled | Refresh
+	CacheTTL      time.Duration       // used only when CacheMode == Default; zero → DefaultCacheTTL
 	Context       SearchContext
 }
+
+type CacheMode uint8
+
+const (
+	CacheModeDefault  CacheMode = iota // read-through + write-through using CacheTTL (or DefaultCacheTTL if zero)
+	CacheModeDisabled                  // skip cache entirely (no read, no write)
+	CacheModeRefresh                   // skip cache read; overwrite on write (forced refresh)
+)
+
+const DefaultCacheTTL = 24 * time.Hour
 ```
 
 **Defaults (implementation contract):**
 
 - `MaxHops`: `8` if `<= 0`.
 - `RelationKinds`: `[]ah.RelationName{ah.RelationNameSupplies, ah.RelationNameProduces, ah.RelationNameLegConnects}` if nil/empty.
-- `CacheTTL`: `24 * time.Hour` if zero and caching is enabled; `0` disables cache; `-1` forces refresh.
+- `CacheMode`: zero value `CacheModeDefault` — regular read-through + write-through behavior.
+- `CacheTTL` (only when `CacheMode == CacheModeDefault`): `DefaultCacheTTL` (24h) if zero; any positive value overrides. Negative values are rejected (return error).
 
 ### 3.4. Diagnostics
 
@@ -173,6 +189,7 @@ On `QueryPaths`:
 - **Input tuple** (normalized, stable ordering):  
   `(tenant, project, fromKind, fromValue, toPresent, toKind, toValue, productAxis, maxHops, relationKinds sorted lexicographically, lensId, scope, asOfKey, includeStress, includeGeo)`  
   where `toPresent` is bool, `asOfKey` is date or timestamp per §3.2 decision.
+- **Explicitly NOT in the key:** `CacheMode`, `CacheTTL`. These control cache *behavior*, not cached *identity*. Two concurrent queries with different TTLs must collapse to the same doc; the later writer’s TTL wins (last-write-wins on `expiresAt`).
 - **Serialization:** canonical JSON (sorted keys) or explicit delimiter-separated string; then **SHA-256**, hex-encode, prefix **`pq_`**.  
   Example: `pq_a1b2c3...` (64 hex chars after prefix).
 
@@ -217,6 +234,8 @@ Document id: **use `cacheKey` as document ID** (Firestore id = `pq_...`) to make
 - `relations`: comma-separated `ah.RelationName` values.
 - Response: JSON mirroring `Result`, with `paths` projected to existing **`SupplyChainPathPayload`** wire shape for each element.
 
+**Payload-rewrite ordering note:** P8 ships while `SupplyChainPathPayload` still carries the legacy (pre-P9) payload shape. `pathquery` stores `MaterializedArtifact` documents as-is and projects to the wire format at the HTTP boundary. When P9 rewrites the payload schema in place, `pathquery` does **not** need changes — the new shape flows through automatically because the service returns artifacts verbatim and the HTTP projector reads whichever schema the document carries. Consumers of `/api/v1/horizon/pathquery` that parse `paths[*]` will see the schema flip at P9; that is intended.
+
 ---
 
 ## 8. Observability (P8.08)
@@ -231,10 +250,12 @@ Counters in `metriccore` (names from spec):
 
 ## 9. Open points for explicit approval
 
-1. **`AsOf` in cache key:** date-only UTC vs full timestamp (§3.2).
-2. **`IncludeStress` / `IncludeGeo`:** exclude from cache key (post-process only) vs include (§4).
-3. **`To == nil`:** max number of paths / max BFS frontier to avoid abuse (suggested default cap, e.g. 32 paths, 10k node visits — **numbers for approver**).
-4. **Document ID strategy:** Firestore doc id = `cacheKey` vs random id (§5.2).
+1. **`AsOf` in cache key:** date-only UTC vs full timestamp (§3.2). Recommendation: **date-only UTC**.
+2. **`IncludeStress` / `IncludeGeo`:** exclude from cache key (post-process only) vs include (§4). Recommendation: **include** — stress/geo enrichers mutate the payload, so they must enter identity.
+3. **`To == nil`:** max number of paths / max BFS frontier to avoid abuse. Recommendation: **32 paths, 10k node visits, soft-fail with `Diagnostics.TruncatedResultCap=true`**.
+4. **Document ID strategy:** Firestore doc id = `cacheKey` vs random id (§5.2). Recommendation: **doc id = cacheKey** (O(1) get/put, no composite index needed for primary lookup).
+5. **Cache control semantics:** spec §4.3 said `CacheTTL: 0 disables, -1 refreshes`. This design replaced that with an explicit `CacheMode` enum + positive-only `CacheTTL` (§3.3). Confirm the enum is preferred over overloaded-sentinel semantics.
+6. **`To *Endpoint` vs `To Endpoint`:** pointer is required to express the "any downstream" case; spec text used `nil` but a value type. Confirm the pointer form is acceptable.
 
 ---
 

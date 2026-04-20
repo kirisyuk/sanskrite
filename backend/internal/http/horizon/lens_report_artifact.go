@@ -15,6 +15,7 @@ import (
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathquery"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/simscope"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/supplychainreport"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
@@ -188,11 +189,14 @@ func (h *HorizonHandlers) buildLensSupplyChainReportData(ctx context.Context, r 
 	allMaterialized := workscope.CollectMaterializedArtifacts(ctx, h.materializedArtifactsRepo, resolved, simscope.Profile{})
 
 	const chainLimit = 160
-	scopedChains, discoveredChains, err := h.collectSupplyChainsForLens(r, lens, chainLimit)
+	scopedChains, discoveredChains, err := pathquery.CollectSupplyChainsForLens(ctx, h.materializedArtifactsRepo, lens, chainLimit)
 	if err != nil {
 		return nil, err
 	}
 	chains := dedupeSupplyChainArtifacts(append(append([]*horizonmodels.MaterializedArtifact{}, scopedChains...), discoveredChains...))
+	for _, a := range chains {
+		annotateSupplyChainTraceArtifact(a, "")
+	}
 	for _, artifact := range allMaterialized {
 		if artifact == nil || artifact.Kind != horizonmodels.MaterializedKindSupplyChainPath {
 			continue
