@@ -4,19 +4,18 @@ import (
 	"testing"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestExtractPreferredAssemblyPathKeys_PrefersDirectPaths(t *testing.T) {
 	payload := horizonmodels.BuildSupplyChainAssemblyGraphPayload(
 		[]string{"/product/component/mechanical/manufacturing/oilfield-spare-parts"},
 		[]horizonmodels.SupplyChainAssemblyNode{
-			{Type: "product", Ref: "/product/component/mechanical/manufacturing/oilfield-spare-parts"},
+			{Class: ah.FragmentClassProduct, Ref: "/product/component/mechanical/manufacturing/oilfield-spare-parts"},
 		},
 		[]horizonmodels.SupplyChainAssemblyNode{
-			{Type: "fac", Ref: "/fac/ae/jebel-ali-logistics-center", Role: "supplier"},
+			{Class: ah.FragmentClassSite, Ref: "/fac/ae/jebel-ali-logistics-center", Role: "supplier"},
 		},
-		nil,
-		nil,
 		nil,
 		nil,
 		&horizonmodels.SupplyChainAssemblyCoverage{ProductsN: 1, ActorsN: 1, DerivedPathsN: 2},
@@ -55,13 +54,11 @@ func TestExtractPreferredAssemblyPathKeys_FallsBackToDerivedPaths(t *testing.T) 
 	payload := horizonmodels.BuildSupplyChainAssemblyGraphPayload(
 		[]string{"/product/component/mechanical/manufacturing/oilfield-spare-parts"},
 		[]horizonmodels.SupplyChainAssemblyNode{
-			{Type: "product", Ref: "/product/component/mechanical/manufacturing/oilfield-spare-parts"},
+			{Class: ah.FragmentClassProduct, Ref: "/product/component/mechanical/manufacturing/oilfield-spare-parts"},
 		},
 		[]horizonmodels.SupplyChainAssemblyNode{
-			{Type: "fac", Ref: "/fac/ae/jebel-ali-logistics-center", Role: "supplier"},
+			{Class: ah.FragmentClassSite, Ref: "/fac/ae/jebel-ali-logistics-center", Role: "supplier"},
 		},
-		nil,
-		nil,
 		nil,
 		nil,
 		&horizonmodels.SupplyChainAssemblyCoverage{ProductsN: 1, ActorsN: 1, DerivedPathsN: 2},

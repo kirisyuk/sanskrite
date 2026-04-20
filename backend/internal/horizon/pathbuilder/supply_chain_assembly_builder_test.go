@@ -43,20 +43,27 @@ func TestBuildAssemblyPayloadFromInputs_UsesProductRelationDictionaryBeforeHeuri
 	}
 
 	found := false
-	for _, edge := range append(parsed.TransformEdges, parsed.AssemblyEdges...) {
-		if edge.FromProductRef == "/product/finished/mechanical/assembly/mri-scanner" &&
-			edge.ToProductRef == "/product/finished/mechanical/assembly/helium" {
-			t.Fatalf("found reversed edge in payload: %+v", edge)
-		}
-		if edge.FromProductRef == "/product/finished/mechanical/assembly/helium" &&
-			edge.ToProductRef == "/product/finished/mechanical/assembly/mri-scanner" {
-			found = true
-			if edge.Relation != string(DependencyTypeUsedIn) {
-				t.Fatalf("relation=%q, want USED_IN", edge.Relation)
+	helium := "/product/finished/mechanical/assembly/helium"
+	scanner := "/product/finished/mechanical/assembly/mri-scanner"
+	checkTransforms := func(nodes []models.SupplyChainAssemblyNode) {
+		for _, an := range nodes {
+			for _, st := range an.SiteTransforms {
+				for _, in := range st.InputProducts {
+					for _, out := range st.OutputProducts {
+						if in == scanner && out == helium {
+							t.Fatalf("found reversed siteTransform in payload: %+v", st)
+						}
+						if in == helium && out == scanner {
+							found = true
+						}
+					}
+				}
 			}
 		}
 	}
+	checkTransforms(parsed.ActorNodes)
+	checkTransforms(parsed.ProductNodes)
 	if !found {
-		t.Fatalf("expected helium -> mri-scanner edge in assembly payload")
+		t.Fatalf("expected helium -> mri-scanner siteTransform in assembly payload")
 	}
 }

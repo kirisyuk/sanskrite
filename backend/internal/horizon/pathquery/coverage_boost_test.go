@@ -216,7 +216,7 @@ func TestCollectFragmentTraceSupplyChains_affectedZone(t *testing.T) {
 
 func TestCollectFragmentTraceSupplyChains_withLensPinned(t *testing.T) {
 	leg := horizonmodels.SupplyChainPathLeg{Index: 0, SupplierRef: "/org/x", CustomerRef: "/org/y"}
-	nodes := []horizonmodels.SupplyChainPathNode{{Type: "org", Ref: "/org/x"}}
+	nodes := []horizonmodels.SupplyChainPathNode{{Class: ah.FragmentClassOrg, Ref: "/org/x"}}
 	pinned := &horizonmodels.MaterializedArtifact{
 		ID:       "pinned",
 		Kind:     horizonmodels.MaterializedKindSupplyChainPath,

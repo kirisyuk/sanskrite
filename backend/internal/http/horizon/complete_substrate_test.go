@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestBuildGroundedCompletionPromptUsesWideMapSlice(t *testing.T) {
@@ -86,9 +87,9 @@ func TestExactArtifactGapForSupplyLinkRequiresMatchingProduct(t *testing.T) {
 		ProductAxis:  "/product/component/electronic/photomask-set",
 		Payload: horizonmodels.BuildSupplyChainPathPayload(
 			[]horizonmodels.SupplyChainPathNode{
-				{Type: "org", Ref: "/org/de/carl-zeiss-smt-gmbh"},
-				{Type: "product", Ref: "/product/component/electronic/photomask-set"},
-				{Type: "org", Ref: "/org/nl/asml-holding-nv"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/de/carl-zeiss-smt-gmbh"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/component/electronic/photomask-set"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/nl/asml-holding-nv"},
 			},
 			nil,
 			[]horizonmodels.SupplyChainPathLeg{
@@ -126,9 +127,9 @@ func TestExactArtifactGapForSupplyLinkPrefersExactLinkAndProduct(t *testing.T) {
 			ProductAxis:    "/product/component/optics/euv-projection-optics",
 			Payload: horizonmodels.BuildSupplyChainPathPayload(
 				[]horizonmodels.SupplyChainPathNode{
-					{Type: "org", Ref: "/org/de/carl-zeiss-smt-gmbh"},
-					{Type: "product", Ref: "/product/component/optics/euv-projection-optics"},
-					{Type: "org", Ref: "/org/nl/asml-holding-nv"},
+					{Class: ah.FragmentClassOrg, Ref: "/org/de/carl-zeiss-smt-gmbh"},
+					{Class: ah.FragmentClassProduct, Ref: "/product/component/optics/euv-projection-optics"},
+					{Class: ah.FragmentClassOrg, Ref: "/org/nl/asml-holding-nv"},
 				},
 				nil,
 				[]horizonmodels.SupplyChainPathLeg{
@@ -151,9 +152,9 @@ func TestExactArtifactGapForSupplyLinkPrefersExactLinkAndProduct(t *testing.T) {
 			ProductAxis:    "/product/component/optics/euv-projection-optics",
 			Payload: horizonmodels.BuildSupplyChainPathPayload(
 				[]horizonmodels.SupplyChainPathNode{
-					{Type: "org", Ref: "/org/de/carl-zeiss-smt-gmbh"},
-					{Type: "product", Ref: "/product/component/optics/euv-projection-optics"},
-					{Type: "org", Ref: "/org/nl/asml-holding-nv"},
+					{Class: ah.FragmentClassOrg, Ref: "/org/de/carl-zeiss-smt-gmbh"},
+					{Class: ah.FragmentClassProduct, Ref: "/product/component/optics/euv-projection-optics"},
+					{Class: ah.FragmentClassOrg, Ref: "/org/nl/asml-holding-nv"},
 				},
 				nil,
 				[]horizonmodels.SupplyChainPathLeg{
@@ -201,9 +202,9 @@ func TestExactArtifactGapForSupplyLinkReturnsContextualSurrogateSeparately(t *te
 		ProductAxis:    "/product/component/optics/optical-column",
 		Payload: horizonmodels.BuildSupplyChainPathPayload(
 			[]horizonmodels.SupplyChainPathNode{
-				{Type: "org", Ref: "/org/de/carl-zeiss-smt-gmbh"},
-				{Type: "product", Ref: "/product/component/optics/optical-column"},
-				{Type: "org", Ref: "/org/nl/asml-holding-nv"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/de/carl-zeiss-smt-gmbh"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/component/optics/optical-column"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/nl/asml-holding-nv"},
 			},
 			nil,
 			[]horizonmodels.SupplyChainPathLeg{

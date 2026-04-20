@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestMaterializedArtifact_Validate(t *testing.T) {
@@ -21,9 +23,9 @@ func TestMaterializedArtifact_Validate(t *testing.T) {
 				Payload: map[string]interface{}{
 					"v": float64(1), // JSON unmarshal uses float64 for numbers
 					"nodes": []interface{}{
-						map[string]interface{}{"type": "org", "ref": "/org/catl"},
-						map[string]interface{}{"type": "product", "ref": "/product/component/electronic/manufacturing/battery-cell"},
-						map[string]interface{}{"type": "org", "ref": "/org/bmw"},
+						map[string]interface{}{"class": "org", "ref": "/org/catl"},
+						map[string]interface{}{"class": "product", "ref": "/product/component/electronic/manufacturing/battery-cell"},
+						map[string]interface{}{"class": "org", "ref": "/org/bmw"},
 					},
 				},
 				Status:    "active",
@@ -40,13 +42,13 @@ func TestMaterializedArtifact_Validate(t *testing.T) {
 				CanonicalKey: "/supply-chain/bmw/test-built-path",
 				Payload: BuildSupplyChainPathPayload(
 					[]SupplyChainPathNode{
-						{Type: "org", Ref: "/org/catl"},
-						{Type: "product", Ref: "/product/component/electronic/manufacturing/battery-cell"},
-						{Type: "org", Ref: "/org/bmw"},
+						{Class: ah.FragmentClassOrg, Ref: "/org/catl"},
+						{Class: ah.FragmentClassProduct, Ref: "/product/component/electronic/manufacturing/battery-cell"},
+						{Class: ah.FragmentClassOrg, Ref: "/org/bmw"},
 					},
 					[]SupplyChainPathEdge{
 						{
-							Type:                    "SUPPLY_LINK",
+							Relation:                ah.RelationNameSupplies,
 							From:                    0,
 							To:                      2,
 							ViaProductIndex:         intPtr(1),
@@ -55,7 +57,7 @@ func TestMaterializedArtifact_Validate(t *testing.T) {
 							SupplyLinkCanonicalPath: "/supply-link/bmw/org-catl/product-component-electronic-manufacturing-battery-cell/org-bmw",
 							SegmentIndex:            intPtr(0),
 							CarriesProduct:          true,
-							Role:                    "product_flow",
+							Qualifiers:              map[string]interface{}{"role": "product_flow"},
 						},
 					},
 					nil,
@@ -120,13 +122,13 @@ func TestMaterializedArtifact_Validate(t *testing.T) {
 
 func TestBuildSupplyChainPathPayload(t *testing.T) {
 	nodes := []SupplyChainPathNode{
-		{Type: "org", Ref: "/org/catl"},
-		{Type: "product", Ref: "/product/.../battery-cell"},
-		{Type: "org", Ref: "/org/bmw"},
+		{Class: ah.FragmentClassOrg, Ref: "/org/catl"},
+		{Class: ah.FragmentClassProduct, Ref: "/product/.../battery-cell"},
+		{Class: ah.FragmentClassOrg, Ref: "/org/bmw"},
 	}
 	edges := []SupplyChainPathEdge{
 		{
-			Type:                    "SUPPLY_LINK",
+			Relation:                ah.RelationNameSupplies,
 			From:                    0,
 			To:                      2,
 			ViaProductIndex:         intPtr(1),
@@ -135,7 +137,7 @@ func TestBuildSupplyChainPathPayload(t *testing.T) {
 			SupplyLinkCanonicalPath: "/supply-link/bmw/org-catl/product-battery-cell/org-bmw",
 			SegmentIndex:            intPtr(0),
 			CarriesProduct:          true,
-			Role:                    "product_flow",
+			Qualifiers:              map[string]interface{}{"role": "product_flow"},
 		},
 	}
 	notes := map[string]interface{}{
@@ -168,7 +170,7 @@ func TestBuildSupplyChainPathPayload(t *testing.T) {
 
 func TestBuildSupplyChainPathPayloadWithSufficiency(t *testing.T) {
 	payload := BuildSupplyChainPathPayloadWithSufficiency(
-		[]SupplyChainPathNode{{Type: "org", Ref: "/org/catl"}},
+		[]SupplyChainPathNode{{Class: ah.FragmentClassOrg, Ref: "/org/catl"}},
 		nil,
 		nil,
 		nil,
@@ -193,7 +195,7 @@ func TestBuildSupplyChainPathPayloadWithSufficiency(t *testing.T) {
 
 func TestBuildSupplyChainPathPayloadDetailed_WithFamily(t *testing.T) {
 	payload := BuildSupplyChainPathPayloadDetailed(
-		[]SupplyChainPathNode{{Type: "org", Ref: "/org/catl"}},
+		[]SupplyChainPathNode{{Class: ah.FragmentClassOrg, Ref: "/org/catl"}},
 		nil,
 		nil,
 		nil,
@@ -221,7 +223,7 @@ func TestBuildSupplyChainPathPayloadDetailed_WithFamily(t *testing.T) {
 
 func TestBuildSupplyChainPathPayloadDetailed_IncludesMetricSummary(t *testing.T) {
 	payload := BuildSupplyChainPathPayloadDetailed(
-		[]SupplyChainPathNode{{Type: "org", Ref: "/org/us/slb"}},
+		[]SupplyChainPathNode{{Class: ah.FragmentClassOrg, Ref: "/org/us/slb"}},
 		nil,
 		[]SupplyChainPathLeg{{Index: 0, BindingConfidence: 0.72}},
 		&SupplyChainPathStress{
@@ -249,7 +251,7 @@ func TestPopulateMaterializedArtifactIndexesSetsPathMetricIndexes(t *testing.T) 
 	artifact := &MaterializedArtifact{
 		Kind: MaterializedKindSupplyChainPath,
 		Payload: BuildSupplyChainPathPayloadDetailed(
-			[]SupplyChainPathNode{{Type: "org", Ref: "/org/us/slb"}},
+			[]SupplyChainPathNode{{Class: ah.FragmentClassOrg, Ref: "/org/us/slb"}},
 			nil,
 			[]SupplyChainPathLeg{{Index: 0, BindingConfidence: 0.66}},
 			&SupplyChainPathStress{
@@ -281,13 +283,13 @@ func TestParseSupplyChainPathPayload(t *testing.T) {
 	payload := map[string]interface{}{
 		"v": float64(1), // JSON unmarshal uses float64
 		"nodes": []interface{}{
-			map[string]interface{}{"type": "org", "ref": "/org/catl"},
-			map[string]interface{}{"type": "product", "ref": "/product/.../battery-cell"},
-			map[string]interface{}{"type": "org", "ref": "/org/bmw"},
+			map[string]interface{}{"class": "org", "ref": "/org/catl"},
+			map[string]interface{}{"class": "product", "ref": "/product/.../battery-cell"},
+			map[string]interface{}{"class": "org", "ref": "/org/bmw"},
 		},
 		"edges": []interface{}{
 			map[string]interface{}{
-				"type":                    "SUPPLY_LINK",
+				"relation":                "supplies",
 				"from":                    float64(0),
 				"to":                      float64(2),
 				"viaProductIndex":         float64(1),
@@ -296,7 +298,7 @@ func TestParseSupplyChainPathPayload(t *testing.T) {
 				"supplyLinkCanonicalPath": "/supply-link/bmw/org-catl/product-battery-cell/org-bmw",
 				"segmentIndex":            float64(0),
 				"carriesProduct":          true,
-				"role":                    "product_flow",
+				"qualifiers":              map[string]interface{}{"role": "product_flow"},
 			},
 		},
 		"stress": map[string]interface{}{
@@ -338,12 +340,12 @@ func TestParseSupplyChainPathPayload(t *testing.T) {
 	t.Run("typed arrays from builder", func(t *testing.T) {
 		builtPayload := BuildSupplyChainPathPayload(
 			[]SupplyChainPathNode{
-				{Type: "org", Ref: "/org/catl"},
-				{Type: "product", Ref: "/product/.../battery-cell"},
-				{Type: "org", Ref: "/org/bmw"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/catl"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/.../battery-cell"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/bmw"},
 			},
 			[]SupplyChainPathEdge{
-				{Type: "SUPPLY_LINK", From: 0, To: 2, ViaProductIndex: intPtr(1), ProductNodeIndex: intPtr(1), ProductRef: "/product/.../battery-cell", CarriesProduct: true, Role: "product_flow"},
+				{Relation: ah.RelationNameSupplies, From: 0, To: 2, ViaProductIndex: intPtr(1), ProductNodeIndex: intPtr(1), ProductRef: "/product/.../battery-cell", SupplyLinkCanonicalPath: "/supply-link/bmw/org-catl/product-battery-cell/org-bmw", SegmentIndex: intPtr(0), CarriesProduct: true, Qualifiers: map[string]interface{}{"role": "product_flow"}},
 			},
 			nil,
 			nil,
@@ -373,12 +375,12 @@ func TestValidateSupplyChainPathStructure(t *testing.T) {
 		{
 			name: "valid path",
 			nodes: []SupplyChainPathNode{
-				{Type: "org", Ref: "/org/catl"},
-				{Type: "product", Ref: "/product/.../battery-cell"},
-				{Type: "org", Ref: "/org/bmw"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/catl"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/.../battery-cell"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/bmw"},
 			},
 			edges: []SupplyChainPathEdge{
-				{Type: "SUPPLY_LINK", From: 0, To: 2, ViaProductIndex: intPtr(1), ProductNodeIndex: intPtr(1), ProductRef: "/product/.../battery-cell"},
+				{Relation: ah.RelationNameSupplies, From: 0, To: 2, ViaProductIndex: intPtr(1), ProductNodeIndex: intPtr(1), ProductRef: "/product/.../battery-cell"},
 			},
 			wantErr: false,
 		},
@@ -391,32 +393,32 @@ func TestValidateSupplyChainPathStructure(t *testing.T) {
 		{
 			name: "edge out of range",
 			nodes: []SupplyChainPathNode{
-				{Type: "org", Ref: "/org/catl"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/catl"},
 			},
 			edges: []SupplyChainPathEdge{
-				{Type: "SUPPLY_LINK", From: 0, To: 5},
+				{Relation: ah.RelationNameSupplies, From: 0, To: 5},
 			},
 			wantErr: true,
 		},
 		{
 			name: "viaProductIndex points to non-product",
 			nodes: []SupplyChainPathNode{
-				{Type: "org", Ref: "/org/catl"},
-				{Type: "org", Ref: "/org/bmw"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/catl"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/bmw"},
 			},
 			edges: []SupplyChainPathEdge{
-				{Type: "SUPPLY_LINK", From: 0, To: 1, ViaProductIndex: intPtr(0)},
+				{Relation: ah.RelationNameSupplies, From: 0, To: 1, ViaProductIndex: intPtr(0)},
 			},
 			wantErr: true,
 		},
 		{
 			name: "productNodeIndex points to non-product",
 			nodes: []SupplyChainPathNode{
-				{Type: "org", Ref: "/org/catl"},
-				{Type: "org", Ref: "/org/bmw"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/catl"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/bmw"},
 			},
 			edges: []SupplyChainPathEdge{
-				{Type: "LOGISTICS", From: 0, To: 1, ProductNodeIndex: intPtr(0), ProductRef: "/product/.../battery-cell"},
+				{Relation: ah.RelationNameLegConnects, From: 0, To: 1, ProductNodeIndex: intPtr(0), ProductRef: "/product/.../battery-cell"},
 			},
 			wantErr: true,
 		},
@@ -439,14 +441,14 @@ func TestRepairSupplyChainPathLinkage_InferLegacySegmentIndex(t *testing.T) {
 		CanonicalKey: "/supply-chain/global/org-a/product-b/org-c",
 		Payload: BuildSupplyChainPathPayload(
 			[]SupplyChainPathNode{
-				{Type: "org", Ref: "/org/a"},
-				{Type: "product", Ref: "/product/component/test/widget"},
-				{Type: "fac", Ref: "/fac/port"},
-				{Type: "org", Ref: "/org/c"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/a"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/component/test/widget"},
+				{Class: ah.FragmentClassSite, Ref: "/fac/port"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/c"},
 			},
 			[]SupplyChainPathEdge{
 				{
-					Type:                    "SUPPLY_LINK",
+					Relation:                ah.RelationNameSupplies,
 					From:                    0,
 					To:                      3,
 					ProductNodeIndex:        intPtr(1),
@@ -454,7 +456,7 @@ func TestRepairSupplyChainPathLinkage_InferLegacySegmentIndex(t *testing.T) {
 					SupplyLinkCanonicalPath: "/supply-link/global/org-a/product-component-test-widget/org-c",
 				},
 				{
-					Type:                    "LOGISTICS",
+					Relation:                ah.RelationNameLegConnects,
 					From:                    0,
 					To:                      2,
 					ProductNodeIndex:        intPtr(1),
@@ -462,7 +464,7 @@ func TestRepairSupplyChainPathLinkage_InferLegacySegmentIndex(t *testing.T) {
 					SupplyLinkCanonicalPath: "/supply-link/global/org-a/product-component-test-widget/org-c",
 				},
 				{
-					Type:                    "LOGISTICS",
+					Relation:                ah.RelationNameLegConnects,
 					From:                    2,
 					To:                      3,
 					ProductNodeIndex:        intPtr(1),
@@ -507,11 +509,8 @@ func TestRepairSupplyChainPathLinkage_InferLegacySegmentIndex(t *testing.T) {
 		if edge.SegmentIndex == nil || *edge.SegmentIndex != 0 {
 			t.Fatalf("edge[%d] missing inferred segmentIndex: %+v", i, edge)
 		}
-		if edge.Type == "SUPPLY_LINK" && edge.Role != "product_flow" {
-			t.Fatalf("edge[%d] missing inferred role: %+v", i, edge)
-		}
-		if edge.Type == "LOGISTICS" && edge.Role != "logistics_leg" {
-			t.Fatalf("edge[%d] missing inferred role: %+v", i, edge)
+		if edge.Relation != ah.RelationNameSupplies && edge.Relation != ah.RelationNameLegConnects {
+			t.Fatalf("edge[%d] unexpected relation: %+v", i, edge)
 		}
 	}
 	if err := artifact.Validate(); err != nil {
@@ -520,50 +519,49 @@ func TestRepairSupplyChainPathLinkage_InferLegacySegmentIndex(t *testing.T) {
 }
 
 func TestRepairSupplyChainPathLinkage_SynthesizesLegacyLegs(t *testing.T) {
+	nodes := []SupplyChainPathNode{
+		{Class: ah.FragmentClassOrg, Ref: "/org/a"},
+		{Class: ah.FragmentClassProduct, Ref: "/product/component/test/input"},
+		{
+			Class: ah.FragmentClassOrg,
+			Ref:   "/org/b",
+			SiteTransforms: []SiteTransform{
+				{
+					Kind:           "processing",
+					InputProducts:  []string{"/product/component/test/input"},
+					OutputProducts: []string{"/product/component/test/output"},
+				},
+			},
+		},
+		{Class: ah.FragmentClassProduct, Ref: "/product/component/test/output"},
+		{Class: ah.FragmentClassOrg, Ref: "/org/c"},
+	}
+	edges := []SupplyChainPathEdge{
+		{
+			Relation:                ah.RelationNameSupplies,
+			From:                    0,
+			To:                      2,
+			ViaProductIndex:         intPtr(1),
+			ProductRef:              "/product/component/test/input",
+			SupplyLinkCanonicalPath: "/supply-link/global/org-a/product-component-test-input/org-b",
+		},
+		{
+			Relation:                ah.RelationNameSupplies,
+			From:                    2,
+			To:                      4,
+			ViaProductIndex:         intPtr(3),
+			ProductRef:              "/product/component/test/output",
+			SupplyLinkCanonicalPath: "/supply-link/global/org-b/product-component-test-output/org-c",
+		},
+	}
 	artifact := &MaterializedArtifact{
 		TenantID:     "global",
 		Kind:         MaterializedKindSupplyChainPath,
 		CanonicalKey: "/supply-chain/global/org-a/product-b/org-c",
-		Payload: map[string]interface{}{
-			"v": 1,
-			"nodes": []SupplyChainPathNode{
-				{Type: "org", Ref: "/org/a"},
-				{Type: "product", Ref: "/product/component/test/input"},
-				{Type: "org", Ref: "/org/b"},
-				{Type: "product", Ref: "/product/component/test/output"},
-				{Type: "org", Ref: "/org/c"},
-			},
-			"edges": []SupplyChainPathEdge{
-				{
-					Type:                    "SUPPLY_LINK",
-					From:                    0,
-					To:                      2,
-					ViaProductIndex:         intPtr(1),
-					ProductRef:              "/product/component/test/input",
-					SupplyLinkCanonicalPath: "/supply-link/global/org-a/product-component-test-input/org-b",
-				},
-				{
-					Type:             "ONTOLOGY",
-					From:             1,
-					To:               3,
-					FromProductIndex: intPtr(1),
-					ToProductIndex:   intPtr(3),
-					Relation:         "TRANSFORMS_INTO",
-					Mode:             "optional",
-				},
-				{
-					Type:                    "SUPPLY_LINK",
-					From:                    2,
-					To:                      4,
-					ViaProductIndex:         intPtr(3),
-					ProductRef:              "/product/component/test/output",
-					SupplyLinkCanonicalPath: "/supply-link/global/org-b/product-component-test-output/org-c",
-				},
-			},
-		},
-		Status:    "active",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		Payload:      BuildSupplyChainPathPayload(nodes, edges, nil, nil, nil),
+		Status:       "active",
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
 	}
 
 	summary, err := RepairSupplyChainPathLinkage(artifact, nil)
@@ -582,14 +580,11 @@ func TestRepairSupplyChainPathLinkage_SynthesizesLegacyLegs(t *testing.T) {
 		t.Fatalf("expected 2 synthesized legs, got %d", len(parsed.Legs))
 	}
 	for i, edge := range parsed.Edges {
-		if edge.Type != "SUPPLY_LINK" {
+		if edge.Relation != ah.RelationNameSupplies {
 			continue
 		}
 		if edge.SegmentIndex == nil {
 			t.Fatalf("edge[%d] missing segmentIndex after repair: %+v", i, edge)
-		}
-		if edge.Role != "product_flow" {
-			t.Fatalf("edge[%d] missing role after repair: %+v", i, edge)
 		}
 	}
 	if err := artifact.Validate(); err != nil {
@@ -601,12 +596,26 @@ func TestBuildSupplyChainAssemblyGraphPayload_ParseAndValidate(t *testing.T) {
 	payload := BuildSupplyChainAssemblyGraphPayload(
 		[]string{"/product/device/electronics/smartphone"},
 		[]SupplyChainAssemblyNode{
-			{Type: "product", Ref: "/product/material/lithium"},
-			{Type: "product", Ref: "/product/device/electronics/smartphone"},
+			{Class: ah.FragmentClassProduct, Ref: "/product/material/lithium"},
+			{Class: ah.FragmentClassProduct, Ref: "/product/device/electronics/smartphone"},
 		},
 		[]SupplyChainAssemblyNode{
-			{Type: "org", Ref: "/org/global/battery-maker", Role: "supplier"},
-			{Type: "fac", Ref: "/fac/cn/shenzhen/port-yantian", Role: "route"},
+			{
+				Class: ah.FragmentClassOrg,
+				Ref:   "/org/global/battery-maker",
+				Role:  "supplier",
+				SiteTransforms: []SiteTransform{
+					{Kind: "processing", InputProducts: []string{"/product/material/lithium"}, OutputProducts: []string{"/product/device/electronics/smartphone"}},
+				},
+			},
+			{
+				Class: ah.FragmentClassSite,
+				Ref:   "/fac/cn/shenzhen/port-yantian",
+				Role:  "route",
+				SiteTransforms: []SiteTransform{
+					{Kind: "assembly", InputProducts: []string{"/product/component/battery-pack"}, OutputProducts: []string{"/product/device/electronics/smartphone"}},
+				},
+			},
 		},
 		[]SupplyChainAssemblySupplyEdge{
 			{
@@ -618,16 +627,10 @@ func TestBuildSupplyChainAssemblyGraphPayload_ParseAndValidate(t *testing.T) {
 				Confidence:              0.91,
 			},
 		},
-		[]SupplyChainAssemblyTransformEdge{
-			{FromProductRef: "/product/material/lithium", ToProductRef: "/product/device/electronics/smartphone", Relation: "TRANSFORMS_INTO", Status: "validated"},
-		},
-		[]SupplyChainAssemblyTransformEdge{
-			{FromProductRef: "/product/component/battery-pack", ToProductRef: "/product/device/electronics/smartphone", Relation: "ASSEMBLES_INTO", Status: "inferred"},
-		},
 		[]SupplyChainAssemblyRouteBinding{
 			{ProductRef: "/product/material/lithium", SupplyLinkCanonicalPath: "/supply-link/global/battery", ViaRefs: []string{"/fac/cn/shenzhen/port-yantian"}},
 		},
-		&SupplyChainAssemblyCoverage{ProductsN: 2, ActorsN: 2, SuppliersN: 1, TransformationsN: 1, DerivedPathsN: 3},
+		&SupplyChainAssemblyCoverage{ProductsN: 2, ActorsN: 2, SuppliersN: 1, TransformationsN: 2, DerivedPathsN: 3},
 		[]string{"camera_branch_missing"},
 		[]string{"/supply-chain/global/path-1"},
 		map[string]interface{}{"graphLayer": "assembly_graph"},
@@ -669,11 +672,17 @@ func TestReplaceCanonicalPathInArtifact_AssemblyGraph(t *testing.T) {
 		Payload: BuildSupplyChainAssemblyGraphPayload(
 			[]string{"/product/device/electronics/smartphone"},
 			[]SupplyChainAssemblyNode{
-				{Type: "product", Ref: "/product/component/battery-pack"},
-				{Type: "product", Ref: "/product/device/electronics/smartphone"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/component/battery-pack"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/device/electronics/smartphone"},
 			},
 			[]SupplyChainAssemblyNode{
-				{Type: "org", Ref: "/org/global/battery-maker"},
+				{
+					Class: ah.FragmentClassOrg,
+					Ref:   "/org/global/battery-maker",
+					SiteTransforms: []SiteTransform{
+						{Kind: "processing", InputProducts: []string{"/product/component/battery-pack"}, OutputProducts: []string{"/product/device/electronics/smartphone"}},
+					},
+				},
 			},
 			[]SupplyChainAssemblySupplyEdge{
 				{
@@ -683,10 +692,6 @@ func TestReplaceCanonicalPathInArtifact_AssemblyGraph(t *testing.T) {
 					SupplyLinkCanonicalPath: "/supply-link/global/battery",
 				},
 			},
-			[]SupplyChainAssemblyTransformEdge{
-				{FromProductRef: "/product/component/battery-pack", ToProductRef: "/product/device/electronics/smartphone", Relation: "TRANSFORMS_INTO"},
-			},
-			nil,
 			nil,
 			&SupplyChainAssemblyCoverage{ProductsN: 2},
 			nil,
@@ -709,14 +714,18 @@ func TestReplaceCanonicalPathInArtifact_AssemblyGraph(t *testing.T) {
 	if parsed.SupplyEdges[0].ProductRef != "/product/component/battery-module" {
 		t.Fatalf("supply edge product=%q, want replacement", parsed.SupplyEdges[0].ProductRef)
 	}
-	if parsed.TransformEdges[0].FromProductRef != "/product/component/battery-module" {
-		t.Fatalf("transform from=%q, want replacement", parsed.TransformEdges[0].FromProductRef)
+	if len(parsed.ActorNodes) != 1 || len(parsed.ActorNodes[0].SiteTransforms) != 1 {
+		t.Fatalf("actor siteTransforms=%+v", parsed.ActorNodes)
+	}
+	if parsed.ActorNodes[0].SiteTransforms[0].InputProducts[0] != "/product/component/battery-module" {
+		t.Fatalf("siteTransform input=%q, want replacement", parsed.ActorNodes[0].SiteTransforms[0].InputProducts[0])
 	}
 }
 
 func TestReplaceCanonicalPathInArtifact_SupplyChainPath(t *testing.T) {
 	oldPath := "/fac/us/old-terminal"
 	newPath := "/fac/us/new-terminal"
+	supplyLink := "/supply-link/tenant-a/org-us-supplier/product-component-x/org-us-customer"
 	artifact := &MaterializedArtifact{
 		TenantID:         "tenant-a",
 		Kind:             MaterializedKindSupplyChainPath,
@@ -736,17 +745,21 @@ func TestReplaceCanonicalPathInArtifact_SupplyChainPath(t *testing.T) {
 		},
 		Payload: BuildSupplyChainPathPayload(
 			[]SupplyChainPathNode{
-				{Type: "org", Ref: "/org/us/supplier"},
-				{Type: "facility", Ref: oldPath},
-				{Type: "org", Ref: "/org/us/customer"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/us/supplier"},
+				{Class: ah.FragmentClassSite, Ref: oldPath},
+				{Class: ah.FragmentClassOrg, Ref: "/org/us/customer"},
 			},
 			[]SupplyChainPathEdge{
 				{
-					Type:                    "SUPPLY_LINK",
+					Relation:                ah.RelationNameSupplies,
 					From:                    0,
 					To:                      2,
-					SupplyLinkCanonicalPath: oldPath,
+					ViaProductIndex:         intPtr(1),
+					ProductNodeIndex:        intPtr(1),
 					ProductRef:              "/product/component/x",
+					SupplyLinkCanonicalPath: supplyLink,
+					SegmentIndex:            intPtr(0),
+					CarriesProduct:          true,
 				},
 			},
 			[]SupplyChainPathLeg{
@@ -755,7 +768,7 @@ func TestReplaceCanonicalPathInArtifact_SupplyChainPath(t *testing.T) {
 					SupplierRef:             "/org/us/supplier",
 					CustomerRef:             "/org/us/customer",
 					ProductRef:              "/product/component/x",
-					SupplyLinkCanonicalPath: oldPath,
+					SupplyLinkCanonicalPath: supplyLink,
 					TransportViaRefs:        []string{oldPath},
 					GeoRefs:                 []string{"/loc/us/texas"},
 					FlowRefs:                []string{oldPath},
@@ -796,11 +809,11 @@ func TestReplaceCanonicalPathInArtifact_SupplyChainPath(t *testing.T) {
 	if parsed.Nodes[1].Ref != newPath {
 		t.Fatalf("node ref=%q, want replacement", parsed.Nodes[1].Ref)
 	}
-	if parsed.Edges[0].SupplyLinkCanonicalPath != newPath {
-		t.Fatalf("edge supplyLinkCanonicalPath=%q, want replacement", parsed.Edges[0].SupplyLinkCanonicalPath)
+	if parsed.Edges[0].SupplyLinkCanonicalPath != supplyLink {
+		t.Fatalf("edge supplyLinkCanonicalPath=%q, want unchanged supply link path", parsed.Edges[0].SupplyLinkCanonicalPath)
 	}
-	if parsed.Legs[0].SupplyLinkCanonicalPath != newPath {
-		t.Fatalf("leg supplyLinkCanonicalPath=%q, want replacement", parsed.Legs[0].SupplyLinkCanonicalPath)
+	if parsed.Legs[0].SupplyLinkCanonicalPath != supplyLink {
+		t.Fatalf("leg supplyLinkCanonicalPath=%q, want unchanged supply link path", parsed.Legs[0].SupplyLinkCanonicalPath)
 	}
 	if len(parsed.Legs[0].TransportViaRefs) != 1 || parsed.Legs[0].TransportViaRefs[0] != newPath {
 		t.Fatalf("leg transportViaRefs=%v, want %q", parsed.Legs[0].TransportViaRefs, newPath)
@@ -822,10 +835,10 @@ func TestReplaceCanonicalPathInArtifact_SupplyChainPath(t *testing.T) {
 func TestParseSupplyChainPathPayload_NormalizesRouteOverlays(t *testing.T) {
 	payload := BuildSupplyChainPathPayloadDetailed(
 		[]SupplyChainPathNode{
-			{Type: "org", Ref: "/org/us/supplier"},
-			{Type: "fac", Ref: "/fac/ae/jebel-ali-port"},
-			{Type: "fac", Ref: "/fac/za/cape-of-good-hope-terminal"},
-			{Type: "org", Ref: "/org/io/customer"},
+			{Class: ah.FragmentClassOrg, Ref: "/org/us/supplier"},
+			{Class: ah.FragmentClassSite, Ref: "/fac/ae/jebel-ali-port"},
+			{Class: ah.FragmentClassSite, Ref: "/fac/za/cape-of-good-hope-terminal"},
+			{Class: ah.FragmentClassOrg, Ref: "/org/io/customer"},
 		},
 		nil,
 		[]SupplyChainPathLeg{

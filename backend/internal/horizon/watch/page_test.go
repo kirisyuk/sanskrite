@@ -122,20 +122,24 @@ func TestBuildWatchPageProductsCapturesConsumersAndTransforms(t *testing.T) {
 		Artifact: artifact,
 		Parsed: &horizonmodels.SupplyChainAssemblyGraphPayload{
 			ProductNodes: []horizonmodels.SupplyChainAssemblyNode{
-				{Ref: "/product/raw-sugar", Name: "Raw Sugar"},
-				{Ref: "/product/refined-sugar", Name: "Refined Sugar"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/raw-sugar", Name: "Raw Sugar"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/refined-sugar", Name: "Refined Sugar"},
 			},
 			ActorNodes: []horizonmodels.SupplyChainAssemblyNode{
-				{Ref: "/org/sa/refinery", Name: "Jeddah Refinery"},
-				{Ref: "/fac/ye/hodeidah-plant", Name: "Hodeidah Plant"},
-				{Ref: "/org/ye/retail-network", Name: "Yemen Retail Network"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/sa/refinery", Name: "Jeddah Refinery"},
+				{
+					Class: ah.FragmentClassSite,
+					Ref:   "/fac/ye/hodeidah-plant",
+					Name:  "Hodeidah Plant",
+					SiteTransforms: []horizonmodels.SiteTransform{
+						{Kind: "processing", InputProducts: []string{"/product/raw-sugar"}, OutputProducts: []string{"/product/refined-sugar"}},
+					},
+				},
+				{Class: ah.FragmentClassOrg, Ref: "/org/ye/retail-network", Name: "Yemen Retail Network"},
 			},
 			SupplyEdges: []horizonmodels.SupplyChainAssemblySupplyEdge{
 				{SupplierRef: "/org/sa/refinery", ProductRef: "/product/raw-sugar", CustomerRef: "/fac/ye/hodeidah-plant"},
 				{SupplierRef: "/fac/ye/hodeidah-plant", ProductRef: "/product/refined-sugar", CustomerRef: "/org/ye/retail-network"},
-			},
-			TransformEdges: []horizonmodels.SupplyChainAssemblyTransformEdge{
-				{FromProductRef: "/product/raw-sugar", ToProductRef: "/product/refined-sugar"},
 			},
 		},
 	}}

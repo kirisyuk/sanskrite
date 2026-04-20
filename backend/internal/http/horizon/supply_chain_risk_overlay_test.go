@@ -6,6 +6,7 @@ import (
 	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestBuildSupplyChainPathRiskOverlay_ExtractsMechanismsAndLegDetails(t *testing.T) {
@@ -21,19 +22,21 @@ func TestBuildSupplyChainPathRiskOverlay_ExtractsMechanismsAndLegDetails(t *test
 		UpdatedAt:    time.Now(),
 		Payload: horizonmodels.BuildSupplyChainPathPayload(
 			[]horizonmodels.SupplyChainPathNode{
-				{Type: "fac", Ref: "/fac/ae/jebel-ali-logistics-center"},
-				{Type: "product", Ref: "/product/component/mechanical/manufacturing/oilfield-spare-parts"},
-				{Type: "fac", Ref: "/fac/ru/slb-tyumen-factory"},
+				{Class: ah.FragmentClassSite, Ref: "/fac/ae/jebel-ali-logistics-center"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/component/mechanical/manufacturing/oilfield-spare-parts"},
+				{Class: ah.FragmentClassSite, Ref: "/fac/ru/slb-tyumen-factory"},
 			},
 			[]horizonmodels.SupplyChainPathEdge{
 				{
-					Type:                   "SUPPLY_LINK",
-					From:                   0,
-					To:                     2,
-					ProductRef:             "/product/component/mechanical/manufacturing/oilfield-spare-parts",
+					Relation:                ah.RelationNameSupplies,
+					From:                    0,
+					To:                      2,
+					ViaProductIndex:         overlayIntPtr(1),
+					ProductNodeIndex:        overlayIntPtr(1),
+					ProductRef:              "/product/component/mechanical/manufacturing/oilfield-spare-parts",
 					SupplyLinkCanonicalPath: "/supply-link/global/spares-1",
-					SegmentIndex:           overlayIntPtr(0),
-					Role:                   "product_flow",
+					SegmentIndex:            overlayIntPtr(0),
+					CarriesProduct: true,
 					Metrics: map[string]horizonmodels.MetricValue{
 						"lead_time_days": {Value: 30, Unit: &unitDays},
 						"inventory_cover_days_at_destination": {Value: 7, Unit: &unitDays},
@@ -44,10 +47,11 @@ func TestBuildSupplyChainPathRiskOverlay_ExtractsMechanismsAndLegDetails(t *test
 						"supply_chain_criticality": {Value: 0.91},
 					},
 					Qualifiers: map[string]interface{}{
-						"primaryRiskMechanism": "inventory_vulnerability",
-						"riskFlags":            []interface{}{"inventory_vulnerability", "low_substitutability", "sole_source_lock_in"},
+						"role":                   "product_flow",
+						"primaryRiskMechanism":   "inventory_vulnerability",
+						"riskFlags":              []interface{}{"inventory_vulnerability", "low_substitutability", "sole_source_lock_in"},
 						"service_contract_required": true,
-						"export_license_required":  true,
+						"export_license_required":   true,
 					},
 				},
 			},

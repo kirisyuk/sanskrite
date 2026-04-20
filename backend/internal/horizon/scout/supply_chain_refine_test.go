@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestBuildScopedContinuationChainContext_FiltersToAssemblyScope(t *testing.T) {
@@ -21,11 +22,11 @@ func TestBuildScopedContinuationChainContext_FiltersToAssemblyScope(t *testing.T
 	}
 	parsed := &models.SupplyChainAssemblyGraphPayload{
 		ProductNodes: []models.SupplyChainAssemblyNode{
-			{Type: "product", Ref: "/product/device/electronics/smartphone"},
+			{Class: ah.FragmentClassProduct, Ref: "/product/device/electronics/smartphone"},
 		},
 		ActorNodes: []models.SupplyChainAssemblyNode{
-			{Type: "org", Ref: "/org/kz/meloman-marwin"},
-			{Type: "fac", Ref: "/fac/kz/almaty/distribution-center"},
+			{Class: ah.FragmentClassOrg, Ref: "/org/kz/meloman-marwin"},
+			{Class: ah.FragmentClassSite, Ref: "/fac/kz/almaty/distribution-center"},
 		},
 	}
 
@@ -47,10 +48,10 @@ func TestBuildScopedContinuationChainContext_FiltersToAssemblyScope(t *testing.T
 func TestBuildSupplyChainAssemblyScopeRefs_MergesFrontiers(t *testing.T) {
 	parsed := &models.SupplyChainAssemblyGraphPayload{
 		ProductNodes: []models.SupplyChainAssemblyNode{
-			{Type: "product", Ref: "/product/device/electronics/smartphone"},
+			{Class: ah.FragmentClassProduct, Ref: "/product/device/electronics/smartphone"},
 		},
 		ActorNodes: []models.SupplyChainAssemblyNode{
-			{Type: "org", Ref: "/org/kz/meloman-marwin"},
+			{Class: ah.FragmentClassOrg, Ref: "/org/kz/meloman-marwin"},
 		},
 	}
 

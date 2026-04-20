@@ -6,6 +6,7 @@ import (
 	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestFilterAndPrioritizeFindingsNormalizesAndScopes(t *testing.T) {
@@ -241,6 +242,7 @@ func TestApplyFindingToFragmentUpdatesRiskMetricsAndQualifiers(t *testing.T) {
 func TestApplyFindingToArtifactUpdatesLegEdgeAndIndexes(t *testing.T) {
 	now := time.Date(2026, 3, 19, 12, 30, 0, 0, time.UTC)
 	segmentIndex := 0
+	productIdx := 1
 	artifact := &horizonmodels.MaterializedArtifact{
 		ID:           "artifact-1",
 		TenantID:     "global",
@@ -251,21 +253,23 @@ func TestApplyFindingToArtifactUpdatesLegEdgeAndIndexes(t *testing.T) {
 		BindingScore: 0.77,
 		Payload: horizonmodels.BuildSupplyChainPathPayloadDetailed(
 			[]horizonmodels.SupplyChainPathNode{
-				{Type: "org", Ref: "/org/global/supplier-a"},
-				{Type: "product", Ref: "/product/material/lithium"},
-				{Type: "org", Ref: "/org/global/customer-b"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/global/supplier-a"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/material/lithium"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/global/customer-b"},
 			},
 			[]horizonmodels.SupplyChainPathEdge{
 				{
-					Type:                    "SUPPLY_LINK",
+					Relation:                ah.RelationNameSupplies,
 					From:                    0,
 					To:                      2,
+					ViaProductIndex:         &productIdx,
+					ProductNodeIndex:        &productIdx,
 					ProductRef:              "/product/material/lithium",
 					SupplyLinkID:            "edge-1",
 					SupplyLinkCanonicalPath: "/supply-link/global/supplier-a/product-material-lithium/customer-b",
 					SegmentIndex:            &segmentIndex,
 					CarriesProduct:          true,
-					Role:                    "product_flow",
+					Qualifiers:              map[string]interface{}{"role": "product_flow"},
 				},
 			},
 			[]horizonmodels.SupplyChainPathLeg{
@@ -356,9 +360,9 @@ func TestBindFindingToScopeReplacesMismatchedArtifactWithMatchingPathLeg(t *test
 		ProductAxis:  "/product/component/electronic/manufacturing/logic-wafer",
 		Payload: horizonmodels.BuildSupplyChainPathPayload(
 			[]horizonmodels.SupplyChainPathNode{
-				{Type: "org", Ref: "/org/nl/asml-holding-nv"},
-				{Type: "product", Ref: "/product/component/electronic/manufacturing/logic-wafer"},
-				{Type: "org", Ref: "/org/us/nvidia-corp"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/nl/asml-holding-nv"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/component/electronic/manufacturing/logic-wafer"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/us/nvidia-corp"},
 			},
 			nil,
 			[]horizonmodels.SupplyChainPathLeg{
@@ -379,9 +383,9 @@ func TestBindFindingToScopeReplacesMismatchedArtifactWithMatchingPathLeg(t *test
 		ProductAxis:  "/product/finished/mechanical/assembly/euv-lithography-system",
 		Payload: horizonmodels.BuildSupplyChainPathPayload(
 			[]horizonmodels.SupplyChainPathNode{
-				{Type: "org", Ref: "/org/nl/asml-holding-nv"},
-				{Type: "product", Ref: "/product/finished/mechanical/assembly/euv-lithography-system"},
-				{Type: "org", Ref: "/org/tw/taiwan-semiconductor-manufacturing-co-ltd"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/nl/asml-holding-nv"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/finished/mechanical/assembly/euv-lithography-system"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/tw/taiwan-semiconductor-manufacturing-co-ltd"},
 			},
 			nil,
 			[]horizonmodels.SupplyChainPathLeg{

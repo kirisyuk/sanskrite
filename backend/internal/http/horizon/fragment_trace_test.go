@@ -5,6 +5,7 @@ import (
 	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestAnnotateSupplyChainTraceArtifact_DirectAnchorAndStress(t *testing.T) {
@@ -14,20 +15,20 @@ func TestAnnotateSupplyChainTraceArtifact_DirectAnchorAndStress(t *testing.T) {
 		Kind:      horizonmodels.MaterializedKindSupplyChainPath,
 		Status:    "active",
 		UpdatedAt: time.Now(),
-		NodeRefs:  []string{"/fac/qa/ras-laffan-industrial-city", "/market/int/global-lng-market"},
+		NodeRefs:  []string{"/fac/qa/ras-laffan-industrial-city", "/org/int/global-lng-buyer"},
 		FlowRefs:  []string{"flow:strait-of-hormuz"},
 		Payload: horizonmodels.BuildSupplyChainPathPayload(
 			[]horizonmodels.SupplyChainPathNode{
-				{Type: "fac", Ref: "/fac/qa/ras-laffan-industrial-city"},
-				{Type: "product", Ref: "/product/lng"},
-				{Type: "market", Ref: "/market/int/global-lng-market"},
+				{Class: ah.FragmentClassSite, Ref: "/fac/qa/ras-laffan-industrial-city"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/lng"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/int/global-lng-buyer"},
 			},
 			nil,
 			[]horizonmodels.SupplyChainPathLeg{
 				{
 					Index:             0,
 					SupplierRef:       "/fac/qa/ras-laffan-industrial-city",
-					CustomerRef:       "/market/int/global-lng-market",
+					CustomerRef:       "/org/int/global-lng-buyer",
 					BindingConfidence: 0.82,
 				},
 			},
@@ -70,9 +71,9 @@ func TestHydrateSupplyChainTraceEndpoints_ResolvesCounterpartNames(t *testing.T)
 		AnchorCustomer: "/org/de/basf-pharma-distribution",
 		Payload: horizonmodels.BuildSupplyChainPathPayload(
 			[]horizonmodels.SupplyChainPathNode{
-				{Type: "fac", Ref: "/fac/de/ludwigshafen-pharma-ingredients"},
-				{Type: "product", Ref: "/product/excipients"},
-				{Type: "org", Ref: "/org/de/basf-pharma-distribution"},
+				{Class: ah.FragmentClassSite, Ref: "/fac/de/ludwigshafen-pharma-ingredients"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/excipients"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/de/basf-pharma-distribution"},
 			},
 			nil,
 			[]horizonmodels.SupplyChainPathLeg{

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestDiagnoseSupplyChainAssembly_PassesForConvergingAssembly(t *testing.T) {
@@ -23,24 +24,23 @@ func TestDiagnoseSupplyChainAssembly_PassesForConvergingAssembly(t *testing.T) {
 			ResolvedAnchors: []string{"/product/device/electronics/smartphone"},
 			AnchorProducts:  []string{"/product/device/electronics/smartphone"},
 			ProductNodes: []models.SupplyChainAssemblyNode{
-				{Type: "product", Ref: "/product/component/battery-pack"},
-				{Type: "product", Ref: "/product/component/application-processor"},
-				{Type: "product", Ref: "/product/device/electronics/smartphone"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/component/battery-pack"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/component/application-processor"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/device/electronics/smartphone"},
 			},
 			ActorNodes: []models.SupplyChainAssemblyNode{
-				{Type: "fac", Ref: "/fac/global/assembly-plant"},
+				{
+					Class: ah.FragmentClassSite,
+					Ref:   "/fac/global/assembly-plant",
+					SiteTransforms: []models.SiteTransform{
+						{Kind: "processing", InputProducts: []string{"/product/component/battery-pack"}, OutputProducts: []string{"/product/device/electronics/smartphone"}},
+						{Kind: "processing", InputProducts: []string{"/product/component/application-processor"}, OutputProducts: []string{"/product/device/electronics/smartphone"}},
+					},
+				},
 			},
 			SupplyEdges: []models.SupplyChainAssemblySupplyEdge{
 				{SupplierRef: "/org/global/battery-maker", ProductRef: "/product/component/battery-pack", CustomerRef: "/fac/global/assembly-plant", SupplyLinkCanonicalPath: "/supply-link/global/battery", BranchClass: "component_chain", PriorityTier: "primary", PrimaryBranchID: "branch-battery", TransportViaRefs: []string{"/fac/cn/shenzhen/port-yantian"}},
 				{SupplierRef: "/org/global/chip-fab", ProductRef: "/product/component/application-processor", CustomerRef: "/fac/global/assembly-plant", SupplyLinkCanonicalPath: "/supply-link/global/chip", BranchClass: "component_chain", PriorityTier: "primary", PrimaryBranchID: "branch-chip"},
-			},
-			TransformEdges: []models.SupplyChainAssemblyTransformEdge{
-				{FromProductRef: "/product/component/battery-pack", ToProductRef: "/product/device/electronics/smartphone", Relation: "TRANSFORMS_INTO", BranchClass: "component_chain", PriorityTier: "primary", PrimaryBranchID: "branch-battery"},
-				{FromProductRef: "/product/component/application-processor", ToProductRef: "/product/device/electronics/smartphone", Relation: "TRANSFORMS_INTO", BranchClass: "component_chain", PriorityTier: "primary", PrimaryBranchID: "branch-chip"},
-			},
-			AssemblyEdges: []models.SupplyChainAssemblyTransformEdge{
-				{FromProductRef: "/product/component/battery-pack", ToProductRef: "/product/device/electronics/smartphone", Relation: "ASSEMBLES_INTO", BranchClass: "component_chain", PriorityTier: "primary", PrimaryBranchID: "branch-battery"},
-				{FromProductRef: "/product/component/application-processor", ToProductRef: "/product/device/electronics/smartphone", Relation: "ASSEMBLES_INTO", BranchClass: "component_chain", PriorityTier: "primary", PrimaryBranchID: "branch-chip"},
 			},
 			TopRoutes:          []string{"/fac/cn/shenzhen/port-yantian"},
 			TopProductFamilies: []string{"battery pack", "application processor"},
@@ -103,17 +103,21 @@ func TestDiagnoseSupplyChainAssembly_FailsWhenDerivedPathMissing(t *testing.T) {
 		Payload: models.BuildSupplyChainAssemblyGraphPayload(
 			[]string{"/product/device/electronics/smartphone"},
 			[]models.SupplyChainAssemblyNode{
-				{Type: "product", Ref: "/product/component/battery-pack"},
-				{Type: "product", Ref: "/product/device/electronics/smartphone"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/component/battery-pack"},
+				{Class: ah.FragmentClassProduct, Ref: "/product/device/electronics/smartphone"},
 			},
-			nil,
+			[]models.SupplyChainAssemblyNode{
+				{
+					Class: ah.FragmentClassOrg,
+					Ref:   "/org/global/assembler",
+					SiteTransforms: []models.SiteTransform{
+						{Kind: "processing", InputProducts: []string{"/product/component/battery-pack"}, OutputProducts: []string{"/product/device/electronics/smartphone"}},
+					},
+				},
+			},
 			[]models.SupplyChainAssemblySupplyEdge{
 				{SupplierRef: "/org/global/battery-maker", ProductRef: "/product/component/battery-pack", CustomerRef: "/org/global/assembler", SupplyLinkCanonicalPath: "/supply-link/global/battery"},
 			},
-			[]models.SupplyChainAssemblyTransformEdge{
-				{FromProductRef: "/product/component/battery-pack", ToProductRef: "/product/device/electronics/smartphone", Relation: "TRANSFORMS_INTO"},
-			},
-			nil,
 			nil,
 			&models.SupplyChainAssemblyCoverage{ProductsN: 2, TransformationsN: 1, DerivedPathsN: 1},
 			nil,
@@ -148,8 +152,8 @@ func TestDiagnoseSupplyChainAssembly_FailsWhenNoPrimaryBranches(t *testing.T) {
 			SourceAnchors:   []string{"/org/kz/meloman-marwin"},
 			ResolvedAnchors: []string{"/org/kz/meloman-marwin"},
 			ActorNodes: []models.SupplyChainAssemblyNode{
-				{Type: "org", Ref: "/org/kz/meloman-marwin"},
-				{Type: "fac", Ref: "/fac/kz/astana/distribution-center"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/kz/meloman-marwin"},
+				{Class: ah.FragmentClassSite, Ref: "/fac/kz/astana/distribution-center"},
 			},
 			TopDistributionNodes: []string{"/fac/kz/astana/distribution-center"},
 			Coverage:             &models.SupplyChainAssemblyCoverage{ActorsN: 2, SupportBranchesN: 1},

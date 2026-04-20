@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestPathToMaterializedPayload_IncludesViaNodesAndLegs(t *testing.T) {
@@ -39,9 +40,10 @@ func TestPathToMaterializedPayload_IncludesViaNodesAndLegs(t *testing.T) {
 	foundRouteEdge := false
 	foundProductCarryingLogistics := false
 	for _, edge := range edges {
-		if edge.Type == "LOGISTICS" {
+		if edge.Relation == ah.RelationNameLegConnects {
 			foundRouteEdge = true
-			if edge.CarriesProduct && edge.ProductRef == "/product/raw/hydrocarbon/distribution/lng" && edge.Role == "logistics_leg" {
+			role, _ := edge.Qualifiers["role"].(string)
+			if edge.CarriesProduct && edge.ProductRef == "/product/raw/hydrocarbon/distribution/lng" && role == "logistics_leg" {
 				foundProductCarryingLogistics = true
 			}
 		}
@@ -54,7 +56,7 @@ func TestPathToMaterializedPayload_IncludesViaNodesAndLegs(t *testing.T) {
 	}
 	foundQualifiedEdge := false
 	for _, edge := range edges {
-		if edge.Type != "LOGISTICS" || edge.Qualifiers == nil {
+		if edge.Relation != ah.RelationNameLegConnects || edge.Qualifiers == nil {
 			continue
 		}
 		if edge.Qualifiers["flow_refs"] != nil && edge.Qualifiers["binding_confidence"] != nil && edge.Qualifiers["path_stress_score"] != nil {
@@ -260,7 +262,7 @@ func TestPathToMaterializedPayload_PreservesOptionalVesselType(t *testing.T) {
 	}
 	found := false
 	for _, edge := range edges {
-		if edge.Type != "LOGISTICS" || edge.Qualifiers == nil {
+		if edge.Relation != ah.RelationNameLegConnects || edge.Qualifiers == nil {
 			continue
 		}
 		if edge.Qualifiers["vesselType"] == "tanker" {

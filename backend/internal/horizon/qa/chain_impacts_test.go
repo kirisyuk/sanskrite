@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestComputeChainImpacts_PathStressAndBindings(t *testing.T) {
@@ -14,9 +15,9 @@ func TestComputeChainImpacts_PathStressAndBindings(t *testing.T) {
 		NodeRefs:     []string{"/org/qa/qatarenergy", "/fac/qa/ras-laffan", "/fac/nl/port-of-rotterdam"},
 		Payload: horizonmodels.BuildSupplyChainPathPayload(
 			[]horizonmodels.SupplyChainPathNode{
-				{Type: "org", Ref: "/org/qa/qatarenergy"},
-				{Type: "fac", Ref: "/fac/qa/ras-laffan"},
-				{Type: "fac", Ref: "/fac/nl/port-of-rotterdam"},
+				{Class: ah.FragmentClassOrg, Ref: "/org/qa/qatarenergy"},
+				{Class: ah.FragmentClassSite, Ref: "/fac/qa/ras-laffan"},
+				{Class: ah.FragmentClassSite, Ref: "/fac/nl/port-of-rotterdam"},
 			},
 			nil,
 			[]horizonmodels.SupplyChainPathLeg{

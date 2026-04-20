@@ -5,17 +5,18 @@ import (
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestBuildRelationsGraphPayload_RoundTrip(t *testing.T) {
 	nodes := []models.RelationsGraphNode{
-		{Type: "org", Ref: "/org/gazprom", Name: "Gazprom"},
-		{Type: "facility", Ref: "/facility/nordstream-2", Name: "Nord Stream 2"},
-		{Type: "geo", Ref: "/geo/turkey", Name: "Turkey"},
+		{Class: ah.FragmentClassOrg, Ref: "/org/gazprom", Name: "Gazprom"},
+		{Class: ah.FragmentClassSite, Ref: "/facility/nordstream-2", Name: "Nord Stream 2"},
+		{Class: ah.FragmentClassGeo, Ref: "/geo/turkey", Name: "Turkey"},
 	}
 	edges := []models.RelationsGraphEdge{
-		{From: 0, To: 1, Relation: "OWNS"},
-		{From: 1, To: 2, Relation: "OPERATES_IN"},
+		{From: 0, To: 1, Relation: ah.RelationNameOperates},
+		{From: 1, To: 2, Relation: ah.RelationNameConstrainedBy},
 	}
 	payload := models.BuildRelationsGraphPayload(nodes, edges, "governance", "/org/gazprom", nil)
 
@@ -46,7 +47,7 @@ func TestRelationsGraphPayload_Validation(t *testing.T) {
 		{
 			"valid",
 			models.BuildRelationsGraphPayload(
-				[]models.RelationsGraphNode{{Type: "org", Ref: "/org/test"}},
+				[]models.RelationsGraphNode{{Class: ah.FragmentClassOrg, Ref: "/org/test"}},
 				nil, "governance", "/org/test", nil,
 			),
 			false,
@@ -66,7 +67,7 @@ func TestRelationsGraphPayload_Validation(t *testing.T) {
 			map[string]interface{}{
 				"v": 1,
 				"nodes": []interface{}{
-					map[string]interface{}{"type": "org"},
+					map[string]interface{}{"class": "org"},
 				},
 			},
 			true,
@@ -76,10 +77,10 @@ func TestRelationsGraphPayload_Validation(t *testing.T) {
 			map[string]interface{}{
 				"v": 1,
 				"nodes": []interface{}{
-					map[string]interface{}{"type": "org", "ref": "/org/test"},
+					map[string]interface{}{"class": "org", "ref": "/org/test"},
 				},
 				"edges": []interface{}{
-					map[string]interface{}{"from": 0, "to": 5, "relation": "OWNS"},
+					map[string]interface{}{"from": 0, "to": 5, "relation": "operates"},
 				},
 			},
 			true,
@@ -173,11 +174,11 @@ func TestIsAllowedEdge(t *testing.T) {
 
 func TestGenerateVectorText_GovernanceChain(t *testing.T) {
 	nodes := []models.RelationsGraphNode{
-		{Type: "org", Ref: "/org/gazprom", Name: "Gazprom"},
-		{Type: "person", Ref: "/person/miller", Name: "Alexei Miller"},
+		{Class: ah.FragmentClassOrg, Ref: "/org/gazprom", Name: "Gazprom"},
+		{Class: ah.FragmentClassPerson, Ref: "/person/miller", Name: "Alexei Miller"},
 	}
 	edges := []models.RelationsGraphEdge{
-		{From: 1, To: 0, Relation: "EMPLOYED_BY"},
+		{From: 1, To: 0, Relation: ah.RelationNameManagedBy},
 	}
 	payload := models.BuildRelationsGraphPayload(nodes, edges, "governance", "/org/gazprom", nil)
 
@@ -194,7 +195,7 @@ func TestGenerateVectorText_GovernanceChain(t *testing.T) {
 	if !containsSubstring(text, "Gazprom Governance") {
 		t.Error("should contain display name")
 	}
-	if !containsSubstring(text, "EMPLOYED_BY") {
+	if !containsSubstring(text, "managed_by") {
 		t.Error("should contain relation type")
 	}
 }
