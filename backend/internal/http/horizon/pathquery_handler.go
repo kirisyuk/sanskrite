@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathquery"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
@@ -109,12 +110,12 @@ func (h *HorizonHandlers) GetPathquery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pathPayloads := make([]map[string]interface{}, 0, len(res.Paths))
+	pathArtifacts := make([]*horizonmodels.MaterializedArtifact, 0, len(res.Paths))
 	for _, a := range res.Paths {
 		if a == nil || a.Payload == nil {
 			continue
 		}
-		pathPayloads = append(pathPayloads, a.Payload)
+		pathArtifacts = append(pathArtifacts, a)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -123,7 +124,7 @@ func (h *HorizonHandlers) GetPathquery(w http.ResponseWriter, r *http.Request) {
 		"generatedAt": res.GeneratedAt,
 		"cacheKey":    res.CacheKey,
 		"diagnostics": res.Diagnostics,
-		"paths":       pathPayloads,
+		"paths":       pathArtifacts,
 	})
 }
 

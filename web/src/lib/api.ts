@@ -134,6 +134,19 @@ export interface SupplyChainArtifactResponse {
   [key: string]: any;
 }
 
+/** GET /api/horizon/pathquery diagnostics block (mirrors backend pathquery.Diagnostics). */
+export interface HorizonPathqueryDiagnostics {
+  materializedHits?: number;
+  bfsExpandedNodes?: number;
+  pathbuilderRuns?: number;
+  exposurePathFamilies?: number;
+  truncatedMaxHops?: boolean;
+  truncatedResultCap?: boolean;
+  productAxisFiltered?: boolean;
+  relationFilterApplied?: boolean;
+  warnings?: string[];
+}
+
 export interface HorizonLensReportArtifactResponse {
   artifactId: string;
   shareToken: string;
@@ -3943,6 +3956,56 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
       return response.data;
     } catch (error: any) {
       console.error(`[API] getSupplyChainsByLens error:`, error);
+      throw error;
+    }
+  }
+
+  /**
+   * GET /api/horizon/pathquery (and /api/v1/horizon/pathquery)
+   * Centralized supply-path read; `paths` entries are full materialized artifacts (id, kind, payload, …).
+   */
+  async queryHorizonPaths(params: {
+    from: string;
+    to?: string;
+    productAxis?: string;
+    maxHops?: number;
+    lensId?: string;
+    scope?: string;
+    project?: string;
+    relations?: string[];
+    includeStress?: boolean;
+    includeGeo?: boolean;
+    cacheMode?: 'default' | 'disabled' | 'refresh';
+    cacheTtl?: string;
+    asOf?: string;
+  }): Promise<{
+    fromCache: boolean;
+    generatedAt?: string;
+    cacheKey?: string;
+    diagnostics?: HorizonPathqueryDiagnostics;
+    paths: SupplyChainArtifactResponse[];
+  }> {
+    const query: Record<string, string | number | boolean> = {
+      from: params.from,
+    };
+    if (params.to) query.to = params.to;
+    if (params.productAxis) query.productAxis = params.productAxis;
+    if (params.maxHops != null && params.maxHops > 0) query.maxHops = params.maxHops;
+    if (params.lensId) query.lensId = params.lensId;
+    if (params.scope) query.scope = params.scope;
+    if (params.project) query.project = params.project;
+    if (params.relations?.length) query.relations = params.relations.join(',');
+    if (params.includeStress) query.includeStress = true;
+    if (params.includeGeo) query.includeGeo = true;
+    if (params.cacheMode === 'disabled') query.cacheMode = 'disabled';
+    if (params.cacheMode === 'refresh') query.cacheMode = 'refresh';
+    if (params.cacheTtl) query.cacheTtl = params.cacheTtl;
+    if (params.asOf) query.asOf = params.asOf;
+    try {
+      const response = await this.client.get('/api/horizon/pathquery', { params: query });
+      return response.data;
+    } catch (error: any) {
+      console.error(`[API] queryHorizonPaths error:`, error);
       throw error;
     }
   }

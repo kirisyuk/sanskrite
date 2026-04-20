@@ -66,6 +66,13 @@ func TestGetPathquery_jsonShape(t *testing.T) {
 	if len(paths) != 1 {
 		t.Fatalf("paths=%v", body["paths"])
 	}
+	first, _ := paths[0].(map[string]interface{})
+	if first == nil || first["id"] != "m1" {
+		t.Fatalf("expected materialized artifact with id m1, got %v", paths[0])
+	}
+	if first["kind"] != string(horizonmodels.MaterializedKindSupplyChainPath) {
+		t.Fatalf("kind=%v", first["kind"])
+	}
 }
 
 func TestGetPathquery_badMethod(t *testing.T) {

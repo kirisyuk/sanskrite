@@ -34,7 +34,12 @@ import {
   type TransportFlowFeature,
   type TransportFlowMode,
 } from '../lib/staticTransportFlows';
-import { api, type HorizonSimulationOverlayItem, type IdentifyStressVisibleRelation } from '../lib/api';
+import {
+  api,
+  type HorizonSimulationOverlayItem,
+  type IdentifyStressVisibleRelation,
+  type SupplyChainArtifactResponse,
+} from '../lib/api';
 import type { MaterializedArtifact } from './SupplyChainOverlay';
 import type { GeoMarkerSelection } from '../hooks/useGeoMarkerLayer';
 import { humanizeCanonicalPath, humanizeSlug } from '../lib/uiUtils';
@@ -137,7 +142,13 @@ const normalizeSupplyAnchorEntities = (entities: HorizonSearchEntity[]): Horizon
     return String(left?.name || left?.canonicalPath || '').localeCompare(String(right?.name || right?.canonicalPath || ''));
   });
 };
-type SupplyChainSearchResult = Awaited<ReturnType<typeof api.searchSupplyChains>>['results'][number];
+type SupplyChainSearchResult = {
+  artifact: SupplyChainArtifactResponse;
+  previewPayload?: any;
+  match?: any;
+  score?: number;
+  supplyLinkCoverage?: any;
+};
 type ScopeTargetMode = 'new' | 'existing';
 type DirectedExploreDirection = 'upstream' | 'downstream';
 type DockPanel = 'filter' | null;
@@ -2893,14 +2904,25 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({
       }
       setSupplyAnchorA(anchorA);
       if (anchorB) setSupplyAnchorB(anchorB);
-      const response = await api.searchSupplyChains({
-        anchors: [anchorA.canonicalPath, ...(anchorB?.canonicalPath ? [anchorB.canonicalPath] : [])],
-        maxLegs: supplyMaxLegs,
-        limit: 12,
+      const pq = await api.queryHorizonPaths({
+        from: anchorA.canonicalPath,
+        to: anchorB?.canonicalPath,
+        maxHops: supplyMaxLegs,
         lensId: scope?.lensId,
+        includeStress: true,
       });
-      setSupplySearchResults(Array.isArray(response?.results) ? response.results : []);
-      if (!response?.results?.length) {
+      const paths = Array.isArray(pq?.paths) ? pq.paths : [];
+      const limit = 12;
+      const results: SupplyChainSearchResult[] = paths.slice(0, limit).map((artifact, idx) => ({
+        artifact,
+        previewPayload: artifact.payload,
+        score: 1000 - idx,
+        match: anchorB?.canonicalPath
+          ? { directedMatch: true, anchorIndexes: [0, 1] }
+          : { anchorIndexes: [0] },
+      }));
+      setSupplySearchResults(results);
+      if (!results.length) {
         setSupplySearchError('No supply-chain paths matched these anchors.');
       }
     } catch (error: any) {
