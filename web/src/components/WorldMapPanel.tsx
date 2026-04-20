@@ -2913,14 +2913,24 @@ export const WorldMapPanel: React.FC<WorldMapPanelProps> = ({
       });
       const paths = Array.isArray(pq?.paths) ? pq.paths : [];
       const limit = 12;
-      const results: SupplyChainSearchResult[] = paths.slice(0, limit).map((artifact, idx) => ({
-        artifact,
-        previewPayload: artifact.payload,
-        score: 1000 - idx,
-        match: anchorB?.canonicalPath
-          ? { directedMatch: true, anchorIndexes: [0, 1] }
-          : { anchorIndexes: [0] },
-      }));
+      const results: SupplyChainSearchResult[] = paths.slice(0, limit).map((item, idx) => {
+        const artifact: SupplyChainArtifactResponse = {
+          id: item.id,
+          kind: item.kind,
+          payload: item.payload,
+          displayName: item.displayName,
+          nodeRefs: item.nodeRefs,
+          riskOverlay: item.riskOverlay,
+        };
+        return {
+          artifact,
+          previewPayload: item.payload,
+          score: 1000 - idx,
+          match: anchorB?.canonicalPath
+            ? { directedMatch: true, anchorIndexes: [0, 1] }
+            : { anchorIndexes: [0] },
+        };
+      });
       setSupplySearchResults(results);
       if (!results.length) {
         setSupplySearchError('No supply-chain paths matched these anchors.');

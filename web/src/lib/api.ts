@@ -147,6 +147,16 @@ export interface HorizonPathqueryDiagnostics {
   warnings?: string[];
 }
 
+/** One path in GET /api/horizon/pathquery — stable wire DTO (not full MaterializedArtifact). */
+export interface HorizonPathqueryPathItem {
+  id: string;
+  kind: string;
+  payload: Record<string, unknown>;
+  displayName?: string;
+  nodeRefs?: string[];
+  riskOverlay?: SupplyChainPathRiskOverlay;
+}
+
 export interface HorizonLensReportArtifactResponse {
   artifactId: string;
   shareToken: string;
@@ -3962,7 +3972,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
 
   /**
    * GET /api/horizon/pathquery (and /api/v1/horizon/pathquery)
-   * Centralized supply-path read; `paths` entries are full materialized artifacts (id, kind, payload, …).
+   * `paths` entries are HorizonPathqueryPathItem (id, kind, payload, optional display/nodeRefs/risk).
    */
   async queryHorizonPaths(params: {
     from: string;
@@ -3983,7 +3993,7 @@ Return ONLY the SQL query text, nothing else. No markdown, no backticks.`;
     generatedAt?: string;
     cacheKey?: string;
     diagnostics?: HorizonPathqueryDiagnostics;
-    paths: SupplyChainArtifactResponse[];
+    paths: HorizonPathqueryPathItem[];
   }> {
     const query: Record<string, string | number | boolean> = {
       from: params.from,

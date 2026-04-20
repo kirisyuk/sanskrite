@@ -232,9 +232,12 @@ Document id: **use `cacheKey` as document ID** (Firestore id = `pq_...`) to make
 
 - `from` / `to`: canonical path or `id:` prefix for fragment id — exact encoding **TBD in implementation** (document in README when coding).
 - `relations`: comma-separated `ah.RelationName` values.
-- Response: JSON mirroring `Result`, with `paths` projected to existing **`SupplyChainPathPayload`** wire shape for each element.
+- Response: JSON mirroring `Result`, with `paths` as an array of **path items** (stable HTTP DTO, not a full `MaterializedArtifact`):
+  - `id`, `kind`
+  - `payload` — the existing **`SupplyChainPathPayload`** map for that path (same schema as inside a materialized artifact)
+  - optional: `displayName`, `nodeRefs`, `riskOverlay` when present on the source artifact
 
-**Payload-rewrite ordering note:** P8 ships while `SupplyChainPathPayload` still carries the legacy (pre-P9) payload shape. `pathquery` stores `MaterializedArtifact` documents as-is and projects to the wire format at the HTTP boundary. When P9 rewrites the payload schema in place, `pathquery` does **not** need changes — the new shape flows through automatically because the service returns artifacts verbatim and the HTTP projector reads whichever schema the document carries. Consumers of `/api/v1/horizon/pathquery` that parse `paths[*]` will see the schema flip at P9; that is intended.
+**Payload-rewrite ordering note:** P8 ships while `SupplyChainPathPayload` still carries the legacy (pre-P9) payload shape. The service still works with full `MaterializedArtifact` internally; the HTTP handler **projects** each result to the path item above so clients do not depend on persistence fields (`tenantId`, `createdAt`, …). When P9 rewrites the payload schema in place, `paths[*].payload` reflects the new shape automatically.
 
 ---
 

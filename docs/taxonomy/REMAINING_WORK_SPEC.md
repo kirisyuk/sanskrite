@@ -720,9 +720,13 @@ everywhere, render subtypes, use `pathquery` in inspectors, drop the hand-mainta
 **P12.05 — pathquery integration**
 - Replace every manual BFS + `/api/v1/horizon/supply-chains` call in inspectors with a single
   call to `/api/v1/horizon/pathquery?from=...&to=...&productAxis=...`.
-- Components affected: `HorizonEntityInspector.tsx`, `HorizonOnDemandDependencyResolverModal.tsx`,
-  `SignalFusionPanel.tsx`, `MonitoringBoard.tsx`, `LensCanvasCockpit.tsx`,
-  `CriticalChainPage.tsx`.
+- HTTP `paths[]` are **path items** (`id`, `kind`, `payload` = `SupplyChainPathPayload`, optional
+  `displayName` / `nodeRefs` / `riskOverlay`), not full `MaterializedArtifact` documents — see
+  `docs/taxonomy/pathquery_design.md` §7.
+- Components called out originally: `HorizonEntityInspector.tsx`,
+  `HorizonOnDemandDependencyResolverModal.tsx`, `SignalFusionPanel.tsx`, `MonitoringBoard.tsx`,
+  `LensCanvasCockpit.tsx`, `CriticalChainPage.tsx`. **Also:** map supply search in
+  `WorldMapPanel.tsx` (replaces `POST …/supply-chains/search` where anchored path lookup applies).
 - Commit: `web: route supply-chain inspectors through /api/v1/horizon/pathquery`.
 
 **P12.06 — Materialized payload readers**

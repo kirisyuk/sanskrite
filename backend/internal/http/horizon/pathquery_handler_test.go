@@ -68,10 +68,16 @@ func TestGetPathquery_jsonShape(t *testing.T) {
 	}
 	first, _ := paths[0].(map[string]interface{})
 	if first == nil || first["id"] != "m1" {
-		t.Fatalf("expected materialized artifact with id m1, got %v", paths[0])
+		t.Fatalf("expected pathquery path item with id m1, got %v", paths[0])
 	}
 	if first["kind"] != string(horizonmodels.MaterializedKindSupplyChainPath) {
 		t.Fatalf("kind=%v", first["kind"])
+	}
+	if first["payload"] == nil {
+		t.Fatalf("expected payload on path item, got %v", first)
+	}
+	if _, leaked := first["tenantId"]; leaked {
+		t.Fatalf("path item must not expose persistence fields, got tenantId")
 	}
 }
 
