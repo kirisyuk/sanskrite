@@ -2,12 +2,31 @@
 
 > **Purpose.** This is the single authoritative task list for finishing the AgentHorde (AH)
 > taxonomy migration after P0–P6. It is written for a fresh coding agent that has **no prior
-> context** about the migration. Execute phases strictly in the order P7 → P14. Do not reorder.
-> Do not skip. Do not merge phases.
+> context** about the migration. Execute phases strictly in the order P7 → P14 (skipping P10 and
+> P11 per the strategic decision below). Do not reorder. Do not merge phases.
 >
-> The user picked **Variant A** for `materialized-payload-rewrite`: writer-side rewrite first,
-> no dual-read compatibility shims, overlay layer is allowed to be temporarily blind on legacy
-> data until `migrate-run` fills it with AH-shape data. This decision is binding.
+> **Strategic decision — 2026-04-19 (supersedes earlier "Variant A" and migrate-cli plans).**
+> The user has decided **not to migrate legacy Firestore data**. Instead, a **new empty Firestore
+> project** is being provisioned; the old project is archived read-only. As a consequence:
+>
+> 1. **P10 (`migrate-cli`) is SKIPPED** — no in-place rewrite CLI will be built.
+> 2. **P11 (`migrate-run`) is SKIPPED** — no dry-run / apply / validate / rollback drill.
+> 3. **P9 (`materialized-payload-rewrite`) is simplified** — writer-side rewrite only. Legacy
+>    reader pathways can be **deleted in the same phase** because no legacy documents exist.
+>    "Variant A temporary blindness" concern is moot.
+> 4. **P13 (`cleanup-code`) is expanded** — every legacy-shape shim becomes dead code from day 1.
+>    Since no external API clients speak legacy UPPER_SNAKE (confirmed), the wire-boundary
+>    exemptions collapse: `NormalizeWireRelationStrict`, `LegacyFragmentTypeAliases`,
+>    `legacyRelationAliases`, `IsLegacyDomainFragment`, `IsLegacySupplyLink`, and the 3 `cmd/tools`
+>    wire-token literals all go.
+> 5. **Re-ingestion of the clean graph is DEFERRED.** It is out of scope for this plan. A minimal
+>    "bootstrap-clean" runbook placeholder lives in §7 as a reminder only.
+> 6. **`migration_map.yaml`, `field_inventory.yaml`, and `collections_map`** become historical
+>    artifacts — moved to `docs/archive/taxonomy-migration-2026/` in P14 (not deleted; they
+>    document the legacy→AH vocabulary and may be needed if legacy dumps ever resurface).
+>
+> The phase IDs P10 and P11 are preserved as empty stubs (§6, §7) so that cross-references from
+> commit history, transcripts, and inline comments continue to resolve.
 
 ---
 
@@ -36,9 +55,10 @@ otherwise invisible. Do not ask the user to re-state them.
 7. `docs/taxonomy/CODEGEN.md` — three-stage pipeline (py → json → go+ts) and how to regenerate.
 8. `docs/taxonomy/field_inventory.yaml` — every backend field’s disposition (keep / lift-to-
    attributes / drop / rename).
-9. `docs/taxonomy/migration_map.yaml` — every legacy enum value’s disposition with
-   `fragment_type_map`, `dependency_type_map`, and routing/heuristic blocks. **The migrate-cli
-   uses this file directly; every mapping is authoritative.**
+9. `docs/taxonomy/migration_map.yaml` — legacy→AH enum dispositions. **Now an archival
+   vocabulary reference** (migrate-cli was skipped per preamble); P14 moves it to
+   `docs/archive/taxonomy-migration-2026/`. Still consulted during P9 and P13 when deciding
+   how to rewrite stray legacy values found in code.
 10. `docs/taxonomy/cli_tools_inventory.yaml` — which `cmd/tools/*` packages survived the cleanup
     and why.
 
@@ -95,15 +115,18 @@ import” drift, no `__legacy_*` sentinels, no equality checks against collapsed
    **bounded** shims (package-local only). Phase 13 removes them.
 2. Three `cmd/tools/*` packages (`horizon_import_worldmonitor`, `horizon_supply_repair`,
    `horizon_smart_dedup`) still contain hardcoded legacy wire tokens like
-   `ah.RelationName("located_in")`. These reflect pre-migration Firestore state and will stop
-   being a problem after Phase 11 completes successfully.
-3. `models/supply_link_helpers.go` — TRANSITIONAL; removed in Phase 13 after Phase 11 succeeds.
+   `ah.RelationName("located_in")`. Under the new strategy these tools are **obsolete** (they
+   operated on pre-migration data) — P13 either deletes them outright or rewrites their queries
+   to AH relations, whichever is simpler.
+3. `models/supply_link_helpers.go` — deleted in P13. No deferral.
 4. `pathbuilder/legacy_helpers.go`, `domain/legacy_helpers.go`, `importance/legacy_helpers.go`,
    `scout/legacy_helpers.go`, `scout/agents/legacy_helpers.go`, `propagation/legacy_helpers.go`
-   — same story.
-5. Test data files in `focusobject/testdata/focus_legal_access_graph.json` still contain
-   UPPER_SNAKE relation strings **on purpose** (they exercise the `UnmarshalJSON` translation
-   path). Do not rewrite those fixtures.
+   — same story; deleted in P13.
+5. Test data file `focusobject/testdata/focus_legal_access_graph.json` still contains
+   UPPER_SNAKE relation strings that exercise `DependencyEdge.UnmarshalJSON` legacy translation.
+   With no external wire clients and no legacy data, the translation path itself is dead code.
+   P13 either rewrites this fixture to AH canonical relations (preferred) or deletes it along
+   with the translation logic.
 
 ---
 
@@ -168,8 +191,8 @@ Stop and surface the question to the user instead of guessing when any of the fo
 3. A behavioral choice with a user-visible consequence (e.g., URL shape, response field name,
    `MaterializedKind` rename).
 4. A test that fails for non-obvious reasons. Do not lower the threshold; surface it.
-5. Unrecoverable data shape ambiguity during migrate-cli design. Surface the cases, propose
-   options.
+5. A legacy enum value or payload shape encountered in code (fixtures, helpers, cmd/tools)
+   that has no mapping in `migration_map.yaml`. Surface it; do not silently normalize.
 6. `pathquery` HTTP shape — the user wants to see the proposed API before implementation.
 
 ---
@@ -297,8 +320,9 @@ obsolete; its ingestion responsibilities move to the scout ingestion path (if no
 Replace `backend/internal/http/criticalchain/handlers.go` with a new implementation that takes a
 `criticalchainview.Service` instead of `criticalchain.Service` + `pipeline.Runner`. Keep URL
 shapes exactly the same. The admin `/api/v1/criticalchain/admin/pipeline/run` endpoint returns
-`410 Gone` with a message pointing at `cmd/taxonomy_migrate`. Update `cmd/server/main.go`
-accordingly.
+`410 Gone` with a message stating the admin pipeline has been retired and data now flows through
+the general AH ingestion path (scout pipeline → `horizon_fragments`/`dependency_edges`).
+Update `cmd/server/main.go` accordingly.
 
 **P7.05 — Delete the package**
 
@@ -308,9 +332,11 @@ green.
 
 **P7.06 — Data side**
 
-The `criticalchain_*` Firestore collections are **not** touched by P7. Their migration lives
-inside P10 (`migrate-cli`); P10 reads them, emits AH fragments/edges into `horizon_fragments` +
-`dependency_edges`, and then deletes the legacy collections.
+The `criticalchain_*` Firestore collections are **not** touched by P7 and are **not** migrated
+(P10/P11 skipped per preamble). In the new Firestore project these collections simply do not
+exist; `criticalchainview` projects exclusively over `horizon_fragments` + `dependency_edges`
+with AH subtypes. The old collections, if they still linger in the archived read-only project,
+are ignored.
 
 ### 3.5. Acceptance
 
@@ -462,13 +488,14 @@ Key points:
 
 ---
 
-## 5. Phase P9 — `materialized-payload-rewrite` (Variant A)
+## 5. Phase P9 — `materialized-payload-rewrite`
 
 ### 5.1. Goal
 
-Rewrite the writer side of every `MaterializedArtifact.Payload` producer so that new documents
-carry AH-shaped payloads. Readers are **not** made backward-compatible. Legacy documents become
-invisible to the overlay layer until P11 (`migrate-run`) rewrites them.
+Rewrite every `MaterializedArtifact.Payload` producer so that new documents carry AH-shaped
+payloads, **and** delete all legacy reader pathways in the same phase. Since the new Firestore
+project starts empty (see strategic decision in the preamble), there is no legacy payload to
+read; any dual-shape code is immediately dead.
 
 ### 5.2. What changes in the payload shape
 
@@ -499,8 +526,7 @@ and string types for edges (`"SUPPLY_LINK"`, `"LOGISTICS"`, `"ONTOLOGY"` with
 
 - `MaterializedKind` enum values (`SUPPLY_CHAIN_PATH`, etc.) — stay as-is; they are the
   schema discriminator for Firestore collections and overlays.
-- Payload schema version (`v: 1`). Version is not bumped; the Variant A decision is that legacy
-  docs become invisible, not that we run two schemas concurrently.
+- Payload schema version (`v: 1`). Version is not bumped; there is only one live schema.
 - `MaterializedArtifact.Labels`, `NodeRefs`, `GeoRefs`, etc. — these already hold canonical
   paths, no shape change.
 
@@ -540,13 +566,17 @@ into `siteTransforms` on the appropriate site node.
   contains payload fixtures.
 - Any `testdata/*.json` fixture for materialized artifacts.
 
-**P9.04** — Remove the legacy reader pathways **after** writers are all updated:
-- Delete any `switch edge.Type { case "SUPPLY_LINK": ... }` branch that exists in readers.
-- Leave the `Payload map[string]interface{}` intact; readers decode into the new struct shapes
-  via the existing helper functions in `materialized_artifact_helpers.go`.
+**P9.04** — **Delete** every legacy reader pathway in the same phase:
+- Remove any `switch edge.Type { case "SUPPLY_LINK": ... }` branch in readers.
+- Remove any `node.Type == "org"|"fac"|"product"|"deposit"` check.
+- Delete dead helper functions in `materialized_artifact_helpers.go` that exist solely to decode
+  legacy `Type`/`Relation` string pairs.
+- The `Payload map[string]interface{}` field stays as the on-disk carrier, but everything that
+  decodes from it now expects AH-typed structs with no fallback.
 
-**P9.05** — Audit `go test ./internal/...` — any test that breaks because it reads legacy
-  payloads from an emulator seed needs its seed updated.
+**P9.05** — Audit `go test ./internal/...` — any test that breaks because its seed or fixture
+  uses the legacy payload shape gets the seed/fixture rewritten to AH. No test retains a legacy
+  payload as a "should-still-parse" case.
 
 **P9.06** — Update `docs/taxonomy/materialized_payload.md` (new file) that documents the new
   payload shape, with examples for each Kind. This becomes the reference for P12 (frontend).
@@ -554,12 +584,15 @@ into `siteTransforms` on the appropriate site node.
 ### 5.5. Acceptance
 
 - `go build ./... && go vet ./... && go test ./internal/...` all clean.
-- Zero `Type: "(org|fac|product|deposit)"` literals in non-test backend code outside
-  `models/graph_intent.go` (wire boundary) and `models/fragment_class.go` (alias map).
-- Zero `Type: "(SUPPLY_LINK|LOGISTICS|ONTOLOGY)"` literals in writer code.
-- Every writer produces `SupplyChainPathNode`, `SupplyChainPathEdge`,
-  `SupplyChainAssemblyNode`, `SupplyChainAssemblySupplyEdge`, `RelationsGraphNode`,
-  `RelationsGraphEdge` with AH-typed fields.
+- **Zero `Type:` fields on any materialized payload struct** (`SupplyChainPathNode`,
+  `SupplyChainPathEdge`, assembly/relations-graph variants). Only `Class`/`Subtype`/`Relation`.
+- Zero `"SUPPLY_LINK"`, `"LOGISTICS"`, `"ONTOLOGY"` string literals anywhere in
+  `backend/internal/horizon/{models,pathbuilder,scout,supplychainreport,watchruntime,repo}/**`.
+- Zero `"org"`, `"fac"`, `"product"`, `"deposit"` string literals as discriminator values in
+  payload construction code (exemption: human-readable labels in logs are fine).
+- Every writer produces AH-shape payload structs with typed `ah.FragmentClass` / `ah.RelationName`.
+- Legacy reader helpers in `materialized_artifact_helpers.go` removed (check: grep for
+  `case "SUPPLY_LINK"`, `case "org"` in reader code returns zero hits).
 - `docs/taxonomy/materialized_payload.md` committed.
 
 ### 5.6. Commits
@@ -569,240 +602,55 @@ into `siteTransforms` on the appropriate site node.
 3. `backend: rewrite supply-chain payload writers to AH shape`
 4. `backend: rewrite assembly graph writers; transforms move to siteTransforms`
 5. `backend: rewrite regulatory/governance/ecosystem payload writers to AH shape`
-6. `tests: update materialized payload fixtures to AH shape`
-7. `docs: materialized payload schema reference`
+6. `backend: delete legacy payload reader pathways`
+7. `tests: update materialized payload fixtures to AH shape`
+8. `docs: materialized payload schema reference`
 
 ---
 
-## 6. Phase P10 — `migrate-cli`
+## 6. Phase P10 — `migrate-cli` — **SKIPPED**
 
-### 6.1. Goal
+**Status: skipped per strategic decision 2026-04-19 (see preamble).**
 
-Build `backend/cmd/taxonomy_migrate` — a Go CLI that rewrites every legacy document in Firestore
-to AH shape, in place, with dry-run / apply / validate / rollback modes, guided by
-`docs/taxonomy/migration_map.yaml`.
+No `backend/cmd/taxonomy_migrate` CLI is built. No in-place rewrite of Firestore data occurs.
+The new Firestore project starts empty; re-ingestion is deferred (see §7).
 
-### 6.2. Scope (collections touched)
+The phase ID `P10` is preserved so that commit messages, transcripts, and inline comments that
+reference it still resolve. The original ~250-line plan (scope across 8 collections, CLI surface
+with 10 flags and 4 modes, design rules, file layout, P10.01–P10.09 steps, acceptance, 10
+commits) exists verbatim in git history on this file (see commit predating the strategy change)
+and will be extracted into `docs/archive/taxonomy-migration-2026/migrate_cli_plan.md` during P14.
 
-1. `horizon_fragments` — `Type` → `Class` + `Subtype`; canonicalPath rewrites; lift-to-attributes
-   fields; SUPPLY_LINK → site/supply_link; DOMAIN/SPHERE deletions (per map).
-2. `dependency_edges` — `Type` → `Relation`; qualifier rewrites; per-pair-routing fans; reverse
-   dispositions; `TRANSFORMS_INTO`/`ASSEMBLES_INTO` → `siteTransforms` on source site (edge
-   deleted); `SUPPLY_LINK` fragment → `supplies` edge + `leg_connects` chain (the fragment is
-   deleted after edge synthesis).
-3. `materialized_artifacts` — payload rewrites per §5.2.
-4. `horizon_lenses` — `viewConfig.filterRelTypes` / `excludeRelTypes` rewritten from UPPER_SNAKE
-   to snake_case AH.
-5. `ontology_facts` — relation name normalization in `subject`/`predicate` fields.
-6. `worldmonitor_*` — legacy fragment types updated via same map.
-7. `scout_jobs` / `scout_outbox` / `scout_batches` — no data shape change, but legacy relation
-   strings in queued payloads rewritten.
-8. `criticalchain_nodes` / `_edges` / `_conflict_zones` / `_sanctions` — read-only projection
-   into `horizon_fragments` + `dependency_edges` (see §3.6); originals deleted after migration.
-
-### 6.3. CLI surface
-
-```
-taxonomy_migrate \
-  --project=<gcp-project> \
-  --firestore-database=<name> \        # default "(default)"
-  --collections=<comma-separated>      # default: all scopes §6.2
-  --mode=<dryrun|apply|validate|rollback> \
-  --map=<path to migration_map.yaml>   # default docs/taxonomy/migration_map.yaml
-  --snapshot-dir=<dir>                 # required for apply+rollback
-  --batch-size=<n>                     # default 500
-  --parallel=<n>                       # default 8
-  --from-doc-id=<id>                   # resume marker
-  --ids-file=<file>                    # optional explicit id list
-  --report=<out.json>                  # machine-readable report
-  --log-level=<info|debug>
-```
-
-Modes:
-
-- `dryrun` — reads every affected document, simulates the rewrite, writes no changes, produces
-  a machine-readable report + human summary. Also asserts that every legacy value in the corpus
-  has a mapping in the YAML; fails otherwise.
-- `apply` — must be preceded by a `dryrun` that produced a clean report no older than 24 hours
-  (report is checksummed). Writes a **snapshot** of every affected document before writing
-  changes to `<snapshot-dir>/<timestamp>/<collection>/<id>.json`, then rewrites.
-- `validate` — re-reads every rewritten document and asserts: (a) no legacy enum values remain,
-  (b) every `HorizonFragment.Class` is known, (c) every `DependencyEdge.Relation` is known,
-  (d) materialized payloads pass the new validators (§5.1), (e) every canonical path follows
-  the AH pattern, (f) no orphan edges.
-- `rollback` — reads the snapshot directory and restores each document verbatim. Refuses to run
-  if the snapshot is older than 30 days or if the document has been touched after the snapshot
-  timestamp.
-
-### 6.4. Design rules
-
-- **Idempotency** — every per-document rewrite must be a no-op when applied to an already-
-  rewritten document. Use a sentinel attribute `attributes.__ah_migrated_at` (ISO timestamp)
-  on each migrated doc to skip on repeat runs.
-- **Atomicity** — per-document rewrites run in a Firestore transaction that touches only that
-  document plus any synthesized children (supply_link → edge + chain). Cross-collection writes
-  go through a write batch with bounded size.
-- **Resume-ability** — the CLI periodically writes progress (`last-processed-id` per
-  collection) to `<snapshot-dir>/<timestamp>/.progress.json`. On resume, picks up from there.
-- **Concurrency** — per-collection workers, shared rate limiter. Default 8 workers, 500 writes
-  per batch. Respects Firestore quota errors with exponential backoff.
-- **Never delete before writing the replacement** — for `SUPPLY_LINK` fragment collapse: write
-  the `supplies` edge and `leg_connects` chain first, verify round-trip, *then* delete the
-  fragment.
-- **Migration map as contract** — if a document has a legacy value that has no mapping in
-  `migration_map.yaml`, the CLI **fails hard** with a report of unmapped values. The user
-  decides whether to add the mapping (escalation §1.5) or delete the outlier.
-
-### 6.5. File layout
-
-```
-backend/cmd/taxonomy_migrate/
-  main.go                 # CLI flags + orchestration
-  README.md               # usage, runbook
-  migrator.go             # Migrator struct, collection dispatch
-  map_loader.go           # YAML → typed map
-  snapshot.go             # snapshot write/read
-  fragments_migrator.go   # horizon_fragments rewrite
-  edges_migrator.go       # dependency_edges rewrite
-  materialized_migrator.go # materialized_artifacts payload rewrite
-  lenses_migrator.go      # horizon_lenses rewrite
-  ontology_facts_migrator.go
-  worldmonitor_migrator.go
-  scout_queues_migrator.go
-  criticalchain_migrator.go  # reads criticalchain_* and projects into horizon_fragments + edges
-  validator.go            # validate mode
-  rollback.go             # rollback mode
-  report.go               # machine-readable reports
-  progress.go             # resume markers
-  testdata/
-    fixtures/<collection>/*.json
-  *_test.go               # emulator-backed tests per collection
-```
-
-### 6.6. Approach (step-by-step)
-
-**P10.01** — Scaffold CLI, flag parsing, config loading, migration-map parser. Unit tests.
-**P10.02** — Implement `fragments_migrator.go` with **dry-run only**. Include every
-  disposition from `fragment_type_map`. Tests against Firestore emulator with hand-crafted
-  fixtures.
-**P10.03** — Implement `edges_migrator.go` with dry-run only. Cover all dispositions:
-  `rename`, `reverse`, `rewrite_edge`, `fold_to_attributes` (for `TRANSFORMS_INTO` /
-  `ASSEMBLES_INTO` — these produce `siteTransforms` mutations on the source node), and
-  `per_pair_routing`.
-**P10.04** — Implement `materialized_migrator.go` — dry-run. Payload rewrites per §5.2.
-**P10.05** — Implement `lenses_migrator.go`, `ontology_facts_migrator.go`, `worldmonitor_migrator.go`,
-  `scout_queues_migrator.go`, `criticalchain_migrator.go` — all dry-run.
-**P10.06** — Implement `snapshot.go` + flip every migrator to `apply` mode.
-**P10.07** — Implement `validator.go` + `rollback.go`.
-**P10.08** — Reporting (`report.go`) + progress (`progress.go`) + emulator integration test
-  suite.
-**P10.09** — Runbook (`README.md`) with exact commands for P11.
-
-### 6.7. Acceptance
-
-- `go build ./cmd/taxonomy_migrate` clean.
-- Emulator test suite green: seed → dryrun → apply → validate → rollback → re-validate (seed).
-- Every disposition in `migration_map.yaml` has at least one emulator fixture exercising it.
-- Runbook exists.
-- `taxonomy_migrate --mode=dryrun --collections=horizon_fragments` against an empty emulator
-  exits zero with an empty report.
-
-### 6.8. Commits
-
-1. `cmd/taxonomy_migrate: scaffold CLI + migration map loader`
-2. `cmd/taxonomy_migrate: fragments dry-run`
-3. `cmd/taxonomy_migrate: dependency edges dry-run`
-4. `cmd/taxonomy_migrate: materialized artifacts dry-run`
-5. `cmd/taxonomy_migrate: lenses/ontology_facts/worldmonitor/scout_queues dry-run`
-6. `cmd/taxonomy_migrate: criticalchain projection dry-run`
-7. `cmd/taxonomy_migrate: snapshot + apply mode`
-8. `cmd/taxonomy_migrate: validate + rollback modes`
-9. `cmd/taxonomy_migrate: emulator-backed test suite`
-10. `docs: taxonomy_migrate runbook`
+**Do not execute any P10 work. Do not reconstruct the CLI from memory.** If the clean-recreate
+strategy is ever reversed, retrieve the plan from git history rather than improvising.
 
 ---
 
-## 7. Phase P11 — `migrate-run`
+## 7. Phase P11 — `migrate-run` — **SKIPPED**
 
-### 7.1. Goal
+**Status: skipped per strategic decision 2026-04-19 (see preamble).**
 
-Run `taxonomy_migrate` against the **test** Firestore environment first, collect reports, then
-(after explicit user green-light) against production. This phase is operational and must be
-driven by the user. The agent does not run `apply` against production unilaterally.
+No migration run is performed. The test and production Firestore projects are **not** rewritten.
+A new empty Firestore project is provisioned separately; the old project is archived read-only.
 
-### 7.2. Runbook (the agent follows these steps)
+The original P11 runbook (pre-flight export, dry-run, apply, validate, smoke tests, production
+approval flow, rollback drill) is preserved in git history at commit `29db8e68^` on this file
+and is not reproduced here.
 
-**P11.01 — Pre-flight (test env)**
+### 7.1. Bootstrap-clean (DEFERRED — separate decision)
 
-```bash
-gcloud config set project <test-project>
-gcloud firestore export gs://<backup-bucket>/pre-migration/$(date +%F) --collection-ids=horizon_fragments,dependency_edges,materialized_artifacts,horizon_lenses,ontology_facts,worldmonitor_fragments,scout_jobs,scout_outbox,scout_batches,criticalchain_nodes,criticalchain_edges,criticalchain_conflict_zones,criticalchain_sanctions
-```
+Populating the new empty project with data is **out of scope** for this plan. When that work
+is scheduled (separately from P7–P14), it will likely consist of:
 
-Commit the export URI + timestamp into `docs/taxonomy/migrate_run_log.md`.
+- provision a new GCP/Firestore project (IaC or `gcloud` snippet);
+- ensure `docs/taxonomy/taxonomy.generated.ts` and `internal/taxonomy/ah/taxonomy_generated.go`
+  are the SoT at the time of bootstrap;
+- optional minimal seed in `backend/cmd/bootstrap_seed` (taxonomy roots, test tenant);
+- re-ingestion via the existing AgentHorde scout pipeline on the current watch-subjects list;
+- smoke tests: inspectors round-trip, `/api/v1/horizon/pathquery` end-to-end, `criticalchainview`
+  renders, Tesla battery / Dubai CIT / Kazakhstan VAT scenarios green on the new data.
 
-**P11.02 — Dry-run (test env)**
-
-```bash
-cd backend && go run ./cmd/taxonomy_migrate \
-  --project=<test-project> \
-  --mode=dryrun \
-  --snapshot-dir=/tmp/migrate-test-$(date +%F) \
-  --report=/tmp/migrate-test-dryrun.json
-```
-
-If the dry-run reports unmapped values, escalate to user (§1.5). Otherwise commit the report
-into `docs/taxonomy/reports/test-dryrun-<date>.json`.
-
-**P11.03 — Apply (test env)**
-
-Only after dry-run report is clean:
-
-```bash
-cd backend && go run ./cmd/taxonomy_migrate \
-  --project=<test-project> \
-  --mode=apply \
-  --snapshot-dir=/tmp/migrate-test-snap-$(date +%F) \
-  --report=/tmp/migrate-test-apply.json
-```
-
-**P11.04 — Validate (test env)**
-
-```bash
-cd backend && go run ./cmd/taxonomy_migrate \
-  --project=<test-project> \
-  --mode=validate \
-  --report=/tmp/migrate-test-validate.json
-```
-
-Expected: zero errors. If any, rollback and escalate.
-
-**P11.05 — Smoke tests (test env)**
-
-Run the HTTP scenarios (Tesla battery, Dubai CIT, Kazakhstan VAT) against the test deployment.
-Compare overlay counts, path counts, focus-object scores against pre-migration snapshots
-(stored in `docs/horizon/scenarios/*/pre-migration-<date>.json`; create them during P11.01 if
-missing).
-
-**P11.06 — Production**
-
-User explicitly triggers. Repeat P11.01–P11.05 against production. Agent does not run
-`--mode=apply` on production without an explicit instruction message in the current chat.
-
-### 7.3. Acceptance
-
-- Test env `validate` report has zero errors.
-- Scenario smoke tests match pre-migration baselines within ±1% on aggregate counts.
-- `docs/taxonomy/migrate_run_log.md` contains timestamps, report paths, and user approvals for
-  every run.
-- Rollback drill: at least once during the test env run, execute a `rollback` and re-`apply`
-  cycle to prove the round-trip.
-
-### 7.4. Commits
-
-1. `docs: capture pre-migration test scenario baselines`
-2. `docs: test env dry-run + apply + validate reports`
-3. `docs: production migration log`
+**No agent work is authorized against this section until the user explicitly re-opens it.**
 
 ---
 
@@ -912,9 +760,11 @@ needed (`web: typecheck/test fallout from AH refactor`).
 
 ### 9.1. Goal
 
-Remove every shim, alias, helper, and fallback that was introduced for transition. After this
-phase, the codebase contains zero legacy taxonomy concepts except at explicit wire/Firestore
-boundaries.
+Remove every shim, alias, helper, and fallback introduced during the migration. Because data is
+being recreated clean (no legacy docs in the new Firestore project) and no external API clients
+speak legacy UPPER_SNAKE (confirmed 2026-04-19), **the wire-boundary exemption list collapses
+to empty**. After this phase the codebase contains zero legacy taxonomy concepts — no data
+shims, no wire shims, no fixture shims.
 
 ### 9.2. Targets (exact files)
 
@@ -964,69 +814,104 @@ backend/internal/horizon/pathbuilder/legacy_helpers.go
 backend/internal/horizon/domain/legacy_helpers.go
 ```
 
-**Legacy wire tokens still present in `cmd/tools/*`** (from P6 tech-debt note):
+**Legacy wire tokens in `cmd/tools/*`** (from P6 tech-debt note):
 - `backend/cmd/tools/horizon_import_worldmonitor/main.go`
 - `backend/cmd/tools/horizon_supply_repair/main.go`
 - `backend/cmd/tools/horizon_smart_dedup/main.go`
 
-After Phase 11 succeeded, data in Firestore is already AH-shape. These tools must switch their
-queries to AH relation names; remove the `ah.RelationName("located_in")`-style literals.
+These tools operated on pre-migration Firestore state. Under the clean-recreate strategy they
+are **obsolete**. Prefer outright deletion; if anything inside them is still wanted for the
+new project, extract the reusable logic into a generic helper and delete the legacy-wire
+callers. No `ah.RelationName("located_in")`-style literals remain after this phase.
 
-**`IsLegacy*` predicates on HorizonFragment** — audit each call site. If P11 succeeded, the
-data no longer contains legacy fragments; predicates always return false. Delete the
-predicates and their call sites. Exceptions: keep `IsLegacySupplyLink` in `models/fragment.go`
-as a one-line guard that always returns false with a comment explaining why (reduces risk of
-silent re-introduction).
+**Legacy translation layers in `models/`** — all removed:
+- `backend/internal/horizon/models/graph_intent.go` — `legacyRelationAliases` map and any
+  UPPER_SNAKE wire-input translation code deleted. `GraphIntent` speaks only AH snake_case.
+- `backend/internal/horizon/models/fragment_class.go` — `LegacyFragmentTypeAliases`,
+  `FragmentClassFromLegacyType`, `LegacyTypeForClass` and the `legacy_type` JSON alias branch
+  in `UnmarshalJSON` all removed.
+- `backend/internal/horizon/models/dependency_edge.go::UnmarshalJSON` — legacy decode path
+  stripped; wire uses canonical `relation` field only.
+- `backend/internal/horizon/models/transmission_qualifiers.go` — legacy qualifier keys
+  removed; only AH canonical keys remain (confirmed: no third-party integrations feed the
+  legacy keys).
+- `NormalizeWireRelationStrict` / `LegacyRelationDecode` helpers deleted wherever they exist.
 
-**Wire boundary exemptions** (keep):
-- `backend/internal/horizon/models/graph_intent.go` — accepts legacy wire input.
-- `backend/internal/horizon/models/fragment_class.go` — the `LegacyFragmentTypeAliases` map is
-  consumed by `migrate-cli` and by `UnmarshalJSON`; keep, but mark deprecated.
-- `backend/internal/horizon/models/dependency_edge.go::UnmarshalJSON` — wire decode.
-- `backend/internal/horizon/models/transmission_qualifiers.go` — legacy qualifier keys still
-  arrive from third-party integrations.
+**`IsLegacy*` predicates on HorizonFragment** — all call sites and definitions deleted:
+- `IsLegacySupplyLink` removed outright. The `__legacy_supply_link` identifier is removed
+  from every `Identifiers` constructor and from `scout_*_deduplicator.go`.
+- `isLegacyDomainFragment` in `internal/horizon/service.go` and everywhere else — deleted.
+- Any other `IsLegacy*` or `legacy*` predicate flagged by `rg '\bIs?Legacy|legacy_' backend/
+  internal/` — deleted.
+
+**Frontend legacy translators**:
+- `web/src/lib/taxonomy.ts::legacyRelationToAh` — deleted.
+- Any persisted user-preference shape that mentioned UPPER_SNAKE relation strings — schema
+  version bumped and loader rewritten to reject legacy input with a soft reset to defaults.
+
+**Test fixtures**:
+- `focusobject/testdata/focus_legal_access_graph.json` and any other fixture exercising the
+  legacy decode path — either rewritten to AH canonical relations or deleted alongside the
+  decode path it verified. Zero UPPER_SNAKE relation strings remain in any test fixture.
+
+**Archival tracking** (not removed — moved in P14):
+- `docs/taxonomy/migration_map.yaml`, `field_inventory.yaml`, and the YAML `collections_map`
+  stay intact as documentation of the legacy→AH vocabulary. P14 moves them to
+  `docs/archive/taxonomy-migration-2026/` with an archival `README.md`.
 
 ### 9.3. Approach
 
 **P13.01** — Delete legacy shim files one package at a time; for each, run `go build` +
   `go test` for that package and immediate dependents.
-**P13.02** — Delete legacy helpers; re-home the still-useful helpers into regular package
+**P13.02** — Delete legacy helpers; re-home any still-useful helpers into regular package
   files with non-legacy names.
-**P13.03** — Remove 3 `cmd/tools/*` wire-token literals; switch to AH relations.
-**P13.04** — Audit `IsLegacy*` predicates; delete or neuter per §9.2.
-**P13.05** — Run the legacy-string audit from §2; for each remaining hit, either justify with a
-  code comment (`// wire boundary: ...`) or remove.
-**P13.06** — Run `staticcheck ./...` (install via `go install honnef.co/go/tools/cmd/staticcheck@latest`);
+**P13.03** — Delete/rewrite the 3 `cmd/tools/*` legacy-wire callers (preferred: outright
+  deletion; only keep if there's a clear use against the new clean project).
+**P13.04** — Strip legacy translation layers in `models/` (`graph_intent.go`,
+  `fragment_class.go`, `dependency_edge.go::UnmarshalJSON`, `transmission_qualifiers.go`,
+  `NormalizeWireRelationStrict`, `LegacyRelationDecode`).
+**P13.05** — Delete every `IsLegacy*` predicate and its call sites (`IsLegacySupplyLink`,
+  `isLegacyDomainFragment`, `__legacy_supply_link` identifier everywhere).
+**P13.06** — Frontend: delete `legacyRelationToAh` in `web/src/lib/taxonomy.ts`; bump any
+  persisted user-preference schema version to refuse legacy input.
+**P13.07** — Test fixtures: rewrite or delete every fixture carrying UPPER_SNAKE relation
+  strings.
+**P13.08** — Run the legacy-string audit from §2; **zero unjustified hits** (no "wire boundary"
+  exemption comments survive — the exemption list is empty).
+**P13.09** — Run `staticcheck ./...` (install via `go install honnef.co/go/tools/cmd/staticcheck@latest`);
   zero unused symbols. `go vet ./...` clean.
-**P13.07** — Delete obsolete TODO comments about "remove after migration" that are now stale.
-**P13.08** — Frontend side: remove `legacyRelationToAh` fallback in
-  `web/src/lib/taxonomy.ts` (the console warning from P12.01 should not have fired during P11
-  smoke — confirm via browser devtools replay logs before deleting).
+**P13.10** — Delete obsolete TODO comments about "remove after migration".
 
 ### 9.4. Acceptance
 
 - `go build ./... && go vet ./... && go test ./internal/...` clean.
 - `staticcheck ./...` clean.
-- Legacy-string audit from §2 returns **zero** hits outside the explicit wire-boundary
-  exemption list.
+- Legacy-string audit from §2 returns **zero** hits. No exemptions.
 - No `legacy_aliases.go` or `legacy_helpers.go` files anywhere in `backend/internal/*`.
+- No `Legacy*`, `legacy*`, or `__legacy_*` identifiers in backend Go code.
 - Frontend: `npm run build && npm run typecheck && npm run lint && npm test` clean; no
   `legacyRelationToAh` in `web/src/`.
+- `rg -n 'UPPER_SNAKE_CASE_EXAMPLE|TRANSFORMS_INTO|ASSEMBLES_INTO|SUPPLY_LINK|DEPOSIT|PROGRAM_IMPLEMENTATION'
+  backend/ web/ --type go --type ts` returns matches only in archived docs under
+  `docs/archive/`.
 
 ### 9.5. Commits
 
-Group by package/surface. Minimum ~8–12 commits:
+Group by package/surface. Minimum ~10–14 commits:
 
 1. `cleanup: remove http/horizon legacy aliases`
-2. `cleanup: remove horizon/models/supply_link_helpers (transitional)`
-3. `cleanup: remove horizon/{scout,scout/agents,scout/pipeline,…} legacy shims` (can be split
-   further if diffs are big)
+2. `cleanup: remove horizon/models/supply_link_helpers + __legacy_supply_link identifier`
+3. `cleanup: remove horizon/{scout,scout/agents,scout/pipeline,…} legacy shims`
 4. `cleanup: remove horizon/{pathbuilder,pathbinding,propagation,…} legacy shims`
 5. `cleanup: remove horizon/{scenarios,discovery,workscope,…} legacy shims`
-6. `cleanup: switch cmd/tools/* to AH relations (post-migration)`
-7. `cleanup: remove IsLegacy* predicates — data is AH-native post migrate-run`
-8. `cleanup: frontend legacyRelationToAh fallback removed`
-9. `cleanup: staticcheck / vet zero-warning baseline`
+6. `cleanup: remove legacy translation layer from models/graph_intent.go`
+7. `cleanup: remove LegacyFragmentTypeAliases + FragmentClassFromLegacyType + UnmarshalJSON legacy branch`
+8. `cleanup: remove dependency_edge UnmarshalJSON legacy decode + transmission qualifier legacy keys`
+9. `cleanup: delete or rewrite cmd/tools/{horizon_import_worldmonitor,horizon_supply_repair,horizon_smart_dedup}`
+10. `cleanup: remove IsLegacy* predicates + isLegacyDomainFragment`
+11. `cleanup: frontend legacyRelationToAh + persisted-prefs schema bump`
+12. `cleanup: rewrite or delete UPPER_SNAKE test fixtures`
+13. `cleanup: staticcheck / vet zero-warning baseline`
 
 ---
 
@@ -1042,13 +927,16 @@ Reorganize `docs/` into a predictable shape, rewrite the roadmap, archive obsole
 ```
 docs/
   architecture/        # system-wide overviews (supply-chain, horizon, agentmesh, lens)
-  taxonomy/            # SoT: taxonomy.json, migration_map.yaml, field_inventory.yaml, CODEGEN.md, materialized_payload.md, pathquery_design.md, cli_tools_inventory.yaml, REMAINING_WORK_SPEC.md (this file), migrate_run_log.md
+  taxonomy/            # LIVE SoT: taxonomy.json, CODEGEN.md, materialized_payload.md, pathquery_design.md, cli_tools_inventory.yaml, REMAINING_WORK_SPEC.md (this file)
   agents/              # AgentHorde runtimes (vertex, azure), decision agent, benchmarking
   backend/             # per-package READMEs, API references
   frontend/            # component catalog, routing, state
-  operations/          # runbooks (migrate-cli, incident response, observability)
+  operations/          # runbooks (incident response, observability, bootstrap-clean when scheduled)
   roadmap/             # current roadmap + dated snapshots
-  archive/             # everything obsolete, with a stamped redirect README
+  archive/
+    taxonomy-migration-2026/  # migration_map.yaml, field_inventory.yaml, criticalchain_fold_inventory.md, former §6/§7 of this spec (migrate-cli + migrate-run plans), and README explaining these are historical
+    roadmap-<date>.md          # pre-rewrite roadmap
+    ...                         # other obsolete docs
   canonical_names_and_paths/  # unchanged; referenced from AGENTS.md
 ```
 
@@ -1057,10 +945,20 @@ docs/
 **P14.01** — Inventory every `.md` file under `docs/` today (~221 files per last count). Output
   to `docs/_inventory.md` with columns: path, last-edit, referenced-from, category. Commit.
 **P14.02** — Sort every file into the target structure. Moves happen via `git mv` (never
-  `rm` + `add`).
+  `rm` + `add`). Explicit moves to `docs/archive/taxonomy-migration-2026/`:
+  - `docs/taxonomy/migration_map.yaml`
+  - `docs/taxonomy/field_inventory.yaml`
+  - `docs/taxonomy/criticalchain_fold_inventory.md`
+  - The former §6 and §7 of this spec (migrate-cli + migrate-run plans) extracted from git
+    history and saved as `migrate_cli_plan.md` and `migrate_run_plan.md` for posterity.
+  - Add a `README.md` in that folder explaining: "These documents describe the in-place
+    migration plan that was SKIPPED on 2026-04-19 in favor of recreating data clean in a new
+    Firestore project. They are preserved for vocabulary reference only."
 **P14.03** — Rewrite `docs/roadmap/roadmap.md` (currently 3414 lines). New version:
   - Section "Completed" — condensed story of P0–P14 with one-line summaries per phase.
-  - Section "Current" — open items (post-migration feature work; user provides).
+    Explicitly note P10 and P11 as SKIPPED with strategy rationale.
+  - Section "Current" — open items (post-cleanup feature work, bootstrap-clean when scheduled;
+    user provides content).
   - Section "Archive" — link to `docs/archive/roadmap-<date>.md` with the full old content
     moved verbatim for provenance.
 **P14.04** — Every doc that references a moved file gets its link updated. `rg -n
@@ -1093,22 +991,28 @@ docs/
 
 ---
 
-## 11. Final acceptance (whole-migration oracle)
+## 11. Final acceptance (whole-effort oracle)
 
-When P7–P14 are all merged, the following assertions must hold simultaneously:
+When P7, P8, P9, P12, P13, P14 are all merged (P10 and P11 are SKIPPED per preamble), the
+following assertions must hold simultaneously:
 
 1. `cd backend && go build ./... && go vet ./... && go test ./internal/...` clean (minus the
    two pre-existing failures from §1.3 which are unrelated to taxonomy).
-2. `cd backend && staticcheck ./...` clean.
+2. `cd backend && staticcheck ./...` clean — zero unused symbols.
 3. Codegen guards all clean (§2).
 4. Frontend: `cd web && npm run build && npm run typecheck && npm run lint && npm test` clean.
-5. Legacy-string audit from §2 returns zero unjustified hits.
-6. `taxonomy_migrate --mode=validate` on the production Firestore returns zero errors.
-7. No package named `criticalchain` under `backend/internal/` except `criticalchainview`.
-8. No `legacy_aliases.go` / `legacy_helpers.go` anywhere in `backend/internal/*`.
-9. The taxonomy migration plan in `docs/roadmap/roadmap.md` is marked **Completed** with a
-   dated summary.
-10. `AGENTS.md` reflects the final doc structure.
+5. Legacy-string audit from §2 returns **zero** hits in live code (hits inside
+   `docs/archive/**` are expected and allowed).
+6. No package named `criticalchain` under `backend/internal/` except `criticalchainview`.
+7. No `legacy_aliases.go`, `legacy_helpers.go`, `Legacy*` constants, `__legacy_*` identifiers,
+   or `IsLegacy*` predicates anywhere in `backend/internal/*` or `backend/cmd/*`.
+8. No `legacyRelationToAh` or equivalent translator in `web/src/`.
+9. `migration_map.yaml`, `field_inventory.yaml`, and the former migrate-cli / migrate-run
+   plans live under `docs/archive/taxonomy-migration-2026/` with an explanatory README.
+10. The taxonomy work in `docs/roadmap/roadmap.md` is marked **Completed** with a dated
+    summary, explicitly noting P10/P11 as SKIPPED.
+11. `AGENTS.md` reflects the final doc structure and no longer references obsolete migration
+    tooling.
 
 ---
 
