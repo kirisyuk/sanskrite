@@ -1,4 +1,6 @@
 import type { Edge, Node } from 'reactflow';
+import { RELATION } from '../taxonomy.generated';
+import { normalizeEdgeType } from '../taxonomy';
 import type {
   GeoAnchorMeta,
   InfluenceActorRole,
@@ -41,8 +43,7 @@ const REGION_ALIASES: Record<string, string> = {
   americas: 'Americas',
 };
 
-export const normalizeEdgeType = (raw: unknown): string =>
-  String(raw || '').trim().toUpperCase() || 'OTHER';
+export { normalizeEdgeType };
 
 export const edgeTypeOf = (edge: Edge): string =>
   normalizeEdgeType((edge as any)?.data?.edgeType || (edge as any)?.data?.subkind || (edge as any)?.label || (edge as any)?.type);
@@ -151,22 +152,38 @@ export function classifyInfluenceActor(node: PositionableNode): {
 
 export function classifyInfluenceRelation(edgeType: string): InfluenceClass {
   const et = normalizeEdgeType(edgeType);
-  if (et === 'OWNS' || et === 'CONTROLS' || et === 'MANAGES' || et === 'INVESTS_IN' || et === 'PARENT_OF' || et === 'SUBSIDIARY_OF') {
+  const rawU = String(edgeType || '').trim().toUpperCase();
+  if (
+    et === RELATION.BeneficiallyOwns ||
+    et === RELATION.ControlsVia ||
+    et === RELATION.ManagedBy ||
+    et === RELATION.InvestedIn ||
+    et === RELATION.SubsidiaryOf
+  ) {
     return 'ownership-control';
   }
-  if (et === 'BOARD_MEMBER_OF' || et === 'EXECUTIVE_OF' || et === 'EMPLOYED_BY' || et === 'FOUNDED') {
+  if (et === RELATION.HoldsBoardSeat || rawU === 'EMPLOYED_BY' || rawU === 'FOUNDED') {
     return 'board-executive';
   }
-  if (et === 'REGULATES' || et === 'ADMINISTERS' || et === 'CONTROLS_ACCESS' || et === 'IMPOSES_CONDITION' || et === 'GATEKEEPS_DECISION') {
-    return et === 'CONTROLS_ACCESS' || et === 'GATEKEEPS_DECISION' ? 'political-access' : 'regulatory-leverage';
+  if (et === RELATION.Regulates || et === RELATION.Operates || et === RELATION.Imposes || et === RELATION.Gatekeeps) {
+    return et === RELATION.Imposes || et === RELATION.Gatekeeps ? 'political-access' : 'regulatory-leverage';
   }
-  if (et === 'SUPPLIES_TO' || et === 'DEPENDS_ON' || et === 'REQUIRES' || et === 'USES' || et === 'NEEDS') {
+  if (et === RELATION.Supplies || et === RELATION.RequiresCapability) {
     return 'commercial-dependence';
   }
-  if (et === 'MEMBER_OF' || et === 'AFFILIATED_WITH' || et === 'HAS_SUBGROUP' || et === 'RELATIVE_OF') {
+  if (rawU === 'PARTNERS_WITH' || rawU === 'COOPERATES_WITH') {
+    return 'influence-general';
+  }
+  if (
+    et === RELATION.MemberOf ||
+    rawU === 'AFFILIATED_WITH' ||
+    rawU === 'ASSOCIATED_WITH' ||
+    rawU === 'HAS_SUBGROUP' ||
+    rawU === 'RELATIVE_OF'
+  ) {
     return 'family-community';
   }
-  if (et === 'INFLUENCES' || et === 'AFFECTS' || et === 'IMPACTS' || et === 'SUPPORTS' || et === 'PARTNERS_WITH') {
+  if (et === RELATION.Influences || et === RELATION.Disrupts || et === RELATION.SupportedBy) {
     return 'influence-general';
   }
   return 'other';
@@ -193,8 +210,8 @@ export function classifySupplyFlowNode(node: PositionableNode, incidentEdgeTypes
     type === 'GOV' ||
     type === 'GOVERNMENT' ||
     type === 'GOVERNMENT_AGENCY' ||
-    edgeTypes.has('REGULATES') ||
-    edgeTypes.has('ADMINISTERS') ||
+    edgeTypes.has(RELATION.Regulates) ||
+    edgeTypes.has(RELATION.Operates) ||
     cp.startsWith('/gov/');
   const transitLike =
     cp.startsWith('/loc/') ||
@@ -204,11 +221,11 @@ export function classifySupplyFlowNode(node: PositionableNode, incidentEdgeTypes
     cp.startsWith('/deposit/') ||
     cp.startsWith('/product/') ||
     /material|commodity|feedstock|ore|mineral|lng|gas|oil|spare|part|wafer|metal/.test(`${cp} ${label}`) ||
-    edgeTypes.has('EXTRACTS_FROM');
+    edgeTypes.has(RELATION.Produces);
   const destinationLike =
     cp.startsWith('/market/') ||
     /customer|buyer|operator|utility|airline|carrier|consumer|market/.test(label);
-  const hasTransform = edgeTypes.has('TRANSFORMS_INTO') || edgeTypes.has('PRODUCES');
+  const hasTransform = edgeTypes.has(RELATION.Produces);
 
   let stage: SupplyFlowStage = 'transformation';
   let role: SupplyFlowRole = 'transformer';
@@ -266,12 +283,21 @@ export function classifySupplyFlowRelation(edgeType: string, criticality?: numbe
   variant: SupplyFlowRouteFamily;
 } {
   const et = normalizeEdgeType(edgeType);
+  const rawU = String(edgeType || '').trim().toUpperCase();
   let flowClass: 'material-input' | 'product-transformation' | 'logistics-leg' | 'jurisdiction' | 'corporate-context' | 'route-support' = 'route-support';
-  if (et === 'TRANSFORMS_INTO' || et === 'PRODUCES') flowClass = 'product-transformation';
-  else if (et === 'SUPPLIES_TO' || et === 'EXTRACTS_FROM' || et === 'CONSUMES') flowClass = 'material-input';
-  else if (et === 'LOCATED_IN' || et === 'OPERATES_IN' || et === 'BASED_IN' || et === 'HEADQUARTERED_IN' || et === 'REGULATES' || et === 'ADMINISTERS') flowClass = 'jurisdiction';
-  else if (et === 'OWNS' || et === 'CONTROLS' || et === 'MANAGES' || et === 'INVESTS_IN') flowClass = 'corporate-context';
-  else if (et === 'DEPENDS_ON' || et === 'REQUIRES' || et === 'USES' || et === 'NEEDS') flowClass = 'route-support';
+  if (et === RELATION.Produces) {
+    flowClass = rawU === 'EXTRACTS_FROM' ? 'material-input' : 'product-transformation';
+  } else if (et === RELATION.Supplies) flowClass = 'material-input';
+  else if (et === RELATION.IncorporatedIn || et === RELATION.Operates || et === RELATION.Regulates) {
+    flowClass = 'jurisdiction';
+  } else if (
+    et === RELATION.BeneficiallyOwns ||
+    et === RELATION.ControlsVia ||
+    et === RELATION.ManagedBy ||
+    et === RELATION.InvestedIn
+  ) {
+    flowClass = 'corporate-context';
+  } else if (et === RELATION.RequiresCapability) flowClass = 'route-support';
   else flowClass = 'logistics-leg';
 
   const crit = typeof criticality === 'number' && Number.isFinite(criticality) ? criticality : 0;
@@ -319,11 +345,11 @@ export function classifyValueChainNode(node: PositionableNode, incidentEdgeTypes
     stage = 'integration';
     role = 'facility';
     supportRail = false;
-  } else if (/operator|service|carrier|provider|constellation|mission/.test(label) || edgeTypes.has('USES')) {
+  } else if (/operator|service|carrier|provider|constellation|mission/.test(label) || edgeTypes.has(RELATION.RequiresCapability)) {
     stage = 'operators';
     role = /service|provider/.test(label) ? 'service' : 'operator';
     supportRail = false;
-  } else if (cp.startsWith('/market/') || type === 'MARKET' || edgeTypes.has('TRADED_IN') || edgeTypes.has('PARTICIPATES_IN')) {
+  } else if (cp.startsWith('/market/') || type === 'MARKET' || edgeTypes.has(RELATION.ListedOn) || edgeTypes.has(RELATION.MemberOf)) {
     stage = 'markets';
     role = 'market';
     supportRail = false;
@@ -336,9 +362,9 @@ export function classifyValueChainNode(node: PositionableNode, incidentEdgeTypes
     role = 'country';
     supportRail = true;
   } else if (cp.startsWith('/org/') || type === 'ORGANIZATION') {
-    stage = edgeTypes.has('TRANSFORMS_INTO') || edgeTypes.has('PRODUCES')
+    stage = edgeTypes.has(RELATION.Produces)
       ? 'integration'
-      : edgeTypes.has('SUPPLIES_TO')
+      : edgeTypes.has(RELATION.Supplies)
         ? 'operators'
         : 'support';
     role = 'company';
@@ -365,10 +391,14 @@ export function classifyValueChainNode(node: PositionableNode, incidentEdgeTypes
 
 export function classifyValueChainRelation(edgeType: string): ValueChainValueClass {
   const et = normalizeEdgeType(edgeType);
-  if (et === 'TRANSFORMS_INTO') return 'transforms-into';
-  if (et === 'SUPPLIES_TO' || et === 'PRODUCES' || et === 'EXTRACTS_FROM') return 'supplies-input';
-  if (et === 'DEPENDS_ON' || et === 'REQUIRES' || et === 'USES' || et === 'NEEDS') return 'enables';
-  if (et === 'REGULATES' || et === 'ADMINISTERS' || et === 'LOCATED_IN' || et === 'OPERATES_IN' || et === 'BASED_IN' || et === 'HEADQUARTERED_IN') {
+  const rawU = String(edgeType || '').trim().toUpperCase();
+  if (et === RELATION.Produces) {
+    if (rawU === 'TRANSFORMS_INTO') return 'transforms-into';
+    return 'supplies-input';
+  }
+  if (et === RELATION.Supplies) return 'supplies-input';
+  if (et === RELATION.RequiresCapability) return 'enables';
+  if (et === RELATION.Regulates || et === RELATION.Operates || et === RELATION.IncorporatedIn) {
     return 'governance-context';
   }
   return 'sells-into';

@@ -1,4 +1,5 @@
 import type { Edge, Node } from 'reactflow';
+import { RELATION } from '../taxonomy.generated';
 import {
   canonicalPathOf,
   classifyGeoAnchor,
@@ -248,15 +249,14 @@ export function buildInfluenceProjection<T = any>(
 
   const ownershipPriority = (edgeType: string): number => {
     switch (edgeType) {
-      case 'OWNS':
-      case 'PARENT_OF':
-      case 'SUBSIDIARY_OF':
+      case RELATION.BeneficiallyOwns:
+      case RELATION.SubsidiaryOf:
         return 1;
-      case 'CONTROLS':
+      case RELATION.ControlsVia:
         return 2;
-      case 'MANAGES':
+      case RELATION.ManagedBy:
         return 3;
-      case 'INVESTS_IN':
+      case RELATION.InvestedIn:
         return 4;
       default:
         return 99;
@@ -265,8 +265,13 @@ export function buildInfluenceProjection<T = any>(
 
   const directionForOwnership = (edgeType: string, source: string, target: string): { parentId: string; childId: string } | null => {
     if (!source || !target) return null;
-    if (edgeType === 'SUBSIDIARY_OF') return { parentId: target, childId: source };
-    if (edgeType === 'OWNS' || edgeType === 'PARENT_OF' || edgeType === 'CONTROLS' || edgeType === 'MANAGES' || edgeType === 'INVESTS_IN') {
+    if (edgeType === RELATION.SubsidiaryOf) return { parentId: target, childId: source };
+    if (
+      edgeType === RELATION.BeneficiallyOwns ||
+      edgeType === RELATION.ControlsVia ||
+      edgeType === RELATION.ManagedBy ||
+      edgeType === RELATION.InvestedIn
+    ) {
       return { parentId: source, childId: target };
     }
     return null;

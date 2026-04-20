@@ -1,4 +1,6 @@
 import type { Edge, Node } from 'reactflow';
+import { RELATION } from '../taxonomy.generated';
+import { normalizeEdgeType } from '../taxonomy';
 import { recalculateInfluenceHandles, recalculateSupplyFlowHandles, recalculateValueChainHandles } from './handles';
 import { layoutInfluenceNetwork, layoutSupplyFlow, layoutValueChain } from './layouts';
 import {
@@ -315,7 +317,7 @@ const hierarchicalController: GraphViewController<any> = {
     const edgeTypes = Array.isArray(context.hierarchicalEdgeTypes) ? context.hierarchicalEdgeTypes : [];
     const mergedEdgeTypes =
       context.isMarket && edgeTypes.length > 0
-        ? Array.from(new Set([...edgeTypes, 'PARTICIPATES_IN', 'TRADED_IN', 'DOMINATES']))
+        ? Array.from(new Set([...edgeTypes, RELATION.MemberOf, RELATION.ListedOn, RELATION.Influences]))
         : edgeTypes;
     const usesFilteredExpansion = mergedEdgeTypes.length > 0;
     return {
@@ -414,25 +416,19 @@ const influenceNetworkController: GraphViewController<any> = {
   getExpansionPolicy() {
     return {
       edgeTypes: [
-        'OWNS',
-        'CONTROLS',
-        'MANAGES',
-        'INVESTS_IN',
-        'BOARD_MEMBER_OF',
-        'EXECUTIVE_OF',
-        'EMPLOYED_BY',
-        'MEMBER_OF',
-        'AFFILIATED_WITH',
-        'HAS_SUBGROUP',
-        'RELATIVE_OF',
-        'REGULATES',
-        'ADMINISTERS',
-        'INFLUENCES',
-        'AFFECTS',
-        'IMPACTS',
-        'SUPPLIES_TO',
-        'DEPENDS_ON',
-        'REQUIRES',
+        RELATION.BeneficiallyOwns,
+        RELATION.ControlsVia,
+        RELATION.ManagedBy,
+        RELATION.InvestedIn,
+        RELATION.HoldsBoardSeat,
+        RELATION.MemberOf,
+        RELATION.JointVentureWith,
+        RELATION.Regulates,
+        RELATION.Operates,
+        RELATION.Influences,
+        RELATION.Disrupts,
+        RELATION.Supplies,
+        RELATION.RequiresCapability,
       ],
       usesFilteredExpansion: true,
       direction: 'both',
@@ -479,22 +475,14 @@ const valueChainController: GraphViewController<any> = {
   getExpansionPolicy() {
     return {
       edgeTypes: [
-        'EXTRACTS_FROM',
-        'PRODUCES',
-        'TRANSFORMS_INTO',
-        'SUPPLIES_TO',
-        'CONSUMES',
-        'DEPENDS_ON',
-        'REQUIRES',
-        'NEEDS',
-        'USES',
-        'LOCATED_IN',
-        'OPERATES_IN',
-        'BASED_IN',
-        'HEADQUARTERED_IN',
-        'PARTICIPATES_IN',
-        'TRADED_IN',
-        'DOMINATES',
+        RELATION.Produces,
+        RELATION.Supplies,
+        RELATION.RequiresCapability,
+        RELATION.IncorporatedIn,
+        RELATION.Operates,
+        RELATION.MemberOf,
+        RELATION.ListedOn,
+        RELATION.Influences,
       ],
       usesFilteredExpansion: true,
       direction: 'both',
@@ -526,28 +514,26 @@ export function getGraphViewController(view: GraphViewId): GraphViewController<a
 function filterControlEdgeDuplicates(edges: Edge[], context: GraphViewVisibleEdgeContext): Edge[] {
   const paneByKey = context.paneByKey;
   if (!paneByKey || paneByKey.size === 0) return edges;
-  const CONTROLISH = new Set([
-    'OWNS',
-    'PARENT_OF',
-    'SUBSIDIARY_OF',
-    'INVESTS_IN',
-    'CONTROLS',
-    'MANAGES',
-    'BOARD_MEMBER_OF',
-    'EXECUTIVE_OF',
-    'EMPLOYED_BY',
-    'FOUNDED',
+  const CONTROLISH = new Set<string>([
+    RELATION.BeneficiallyOwns,
+    RELATION.SubsidiaryOf,
+    RELATION.InvestedIn,
+    RELATION.ControlsVia,
+    RELATION.ManagedBy,
+    RELATION.HoldsBoardSeat,
+    RELATION.MemberOf,
+    RELATION.Influences,
   ]);
   const pairKey = (a: string, b: string) => (a < b ? `${a}||${b}` : `${b}||${a}`);
   const strength = (t: string): number => {
-    const u = String(t || '').toUpperCase().trim();
-    if (u === 'OWNS' || u === 'PARENT_OF') return 10;
-    if (u === 'SUBSIDIARY_OF') return 12;
-    if (u === 'INVESTS_IN') return 20;
-    if (u === 'CONTROLS' || u === 'MANAGES') return 30;
-    if (u === 'BOARD_MEMBER_OF' || u === 'EXECUTIVE_OF') return 40;
-    if (u === 'EMPLOYED_BY') return 50;
-    if (u === 'FOUNDED') return 60;
+    const n = normalizeEdgeType(t);
+    if (n === RELATION.BeneficiallyOwns) return 10;
+    if (n === RELATION.SubsidiaryOf) return 12;
+    if (n === RELATION.InvestedIn) return 20;
+    if (n === RELATION.ControlsVia || n === RELATION.ManagedBy) return 30;
+    if (n === RELATION.HoldsBoardSeat) return 40;
+    if (n === RELATION.MemberOf) return 50;
+    if (n === RELATION.Influences) return 60;
     return 100;
   };
   const isRight = (id: string) => (paneByKey.get(id) || '') === 'right';

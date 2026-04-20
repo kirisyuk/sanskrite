@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import type { Edge, Node } from 'reactflow';
+import { RELATION } from '../taxonomy.generated';
 import { classifyGeoAnchor, classifyInfluenceActor, classifyInfluenceRelation, classifyValueChainNode } from './classifiers';
 import { recalculateInfluenceHandles, recalculateSupplyFlowHandles, recalculateValueChainHandles } from './handles';
 import { layoutInfluenceNetwork, layoutSupplyFlow, layoutValueChain } from './layouts';
@@ -41,7 +42,7 @@ test('normalizeGraphView keeps new and legacy ids stable', () => {
   assert.equal(graphViewToSemantic('supply-chain'), 'supply-flow');
   assert.equal(getGraphViewOverlayPolicy('supply-flow').showSupplyChainOverlay, true);
   assert.equal(getGraphViewOverlayPolicy('hierarchical').showExpansionModeMenu, true);
-  assert.equal(getGraphViewExpansionPolicy('influence-network').edgeTypes.includes('OWNS'), true);
+  assert.equal(getGraphViewExpansionPolicy('influence-network').edgeTypes.includes(RELATION.BeneficiallyOwns), true);
   assert.deepEqual(
     getGraphViewToolbarPolicy('value-chain').highlightModes.map((mode) => mode.key),
     ['off', 'production', 'supplies', 'competition', 'signal-propagation'],
@@ -75,7 +76,7 @@ test('geo and actor classifiers separate bloc/country and family/community roles
   assert.equal(tribe.actorRole, 'tribe');
   assert.equal(tribe.clusterKind, 'community');
   assert.equal(regulator.actorRole, 'regulator');
-  assert.equal(classifyInfluenceRelation('INFLUENCES'), 'influence-general');
+  assert.equal(classifyInfluenceRelation(RELATION.Influences), 'influence-general');
 });
 
 test('supply flow layout classifies routes and keeps chokepoints pinned to the flow columns', async () => {
@@ -87,10 +88,10 @@ test('supply flow layout classifies routes and keeps chokepoints pinned to the f
     makeNode('customs', { canonicalPath: '/gov/om/customs-authority', label: 'Customs Authority', type: 'GOV' }),
   ];
   const edges = [
-    makeEdge('e1', 'ore', 'plant', 'SUPPLIES_TO'),
-    makeEdge('e2', 'plant', 'port', 'SUPPLIES_TO', { criticality: 0.7 }),
-    makeEdge('e3', 'port', 'buyer', 'SUPPLIES_TO', { criticality: 0.9 }),
-    makeEdge('e4', 'customs', 'port', 'REGULATES'),
+    makeEdge('e1', 'ore', 'plant', RELATION.Supplies),
+    makeEdge('e2', 'plant', 'port', RELATION.Supplies, { criticality: 0.7 }),
+    makeEdge('e3', 'port', 'buyer', RELATION.Supplies, { criticality: 0.9 }),
+    makeEdge('e4', 'customs', 'port', RELATION.Regulates),
   ];
 
   const arranged = await layoutSupplyFlow(nodes, edges, {});
@@ -119,14 +120,14 @@ test('influence network layout builds an ownership spine with attached governanc
     makeNode('country', { canonicalPath: '/loc/gb', label: 'United Kingdom', type: 'COUNTRY' }),
   ];
   const edges = [
-    makeEdge('i0', 'dynasty', 'family', 'HAS_SUBGROUP'),
-    makeEdge('i1', 'family', 'holdco', 'OWNS'),
-    makeEdge('i2', 'holdco', 'opco', 'CONTROLS'),
-    makeEdge('i3', 'opco', 'asset', 'OWNS'),
-    makeEdge('i4', 'executive', 'opco', 'EXECUTIVE_OF'),
-    makeEdge('i5', 'gov', 'opco', 'REGULATES'),
-    makeEdge('i6', 'opco', 'bloc', 'INFLUENCES'),
-    makeEdge('i7', 'country', 'opco', 'IMPACTS'),
+    makeEdge('i0', 'dynasty', 'family', RELATION.MemberOf),
+    makeEdge('i1', 'family', 'holdco', RELATION.BeneficiallyOwns),
+    makeEdge('i2', 'holdco', 'opco', RELATION.ControlsVia),
+    makeEdge('i3', 'opco', 'asset', RELATION.BeneficiallyOwns),
+    makeEdge('i4', 'executive', 'opco', RELATION.HoldsBoardSeat),
+    makeEdge('i5', 'gov', 'opco', RELATION.Regulates),
+    makeEdge('i6', 'opco', 'bloc', RELATION.Influences),
+    makeEdge('i7', 'country', 'opco', RELATION.Disrupts),
   ];
 
   const arranged = await layoutInfluenceNetwork(nodes, edges, {});
@@ -168,7 +169,7 @@ test('influence network layout builds an ownership spine with attached governanc
 test('value chain layout keeps regulators in support rail and economic stages left-to-right', async () => {
   const regulatorMeta = classifyValueChainNode(
     makeNode('gov', { canonicalPath: '/gov/ae/space-regulator', label: 'Space regulator', type: 'GOV' }),
-    ['REGULATES'],
+    [RELATION.Regulates],
   );
   assert.equal(regulatorMeta.stage, 'support');
   assert.equal(regulatorMeta.role, 'regulator');
@@ -182,11 +183,11 @@ test('value chain layout keeps regulators in support rail and economic stages le
     makeNode('gov', { canonicalPath: '/gov/ae/space-regulator', label: 'Space regulator', type: 'GOV' }),
   ];
   const edges = [
-    makeEdge('v1', 'raw', 'component', 'SUPPLIES_TO'),
-    makeEdge('v2', 'component', 'launch', 'TRANSFORMS_INTO'),
-    makeEdge('v3', 'launch', 'ops', 'SUPPLIES_TO'),
-    makeEdge('v4', 'ops', 'market', 'PARTICIPATES_IN'),
-    makeEdge('v5', 'gov', 'ops', 'REGULATES'),
+    makeEdge('v1', 'raw', 'component', RELATION.Supplies),
+    makeEdge('v2', 'component', 'launch', RELATION.Produces),
+    makeEdge('v3', 'launch', 'ops', RELATION.Supplies),
+    makeEdge('v4', 'ops', 'market', RELATION.MemberOf),
+    makeEdge('v5', 'gov', 'ops', RELATION.Regulates),
   ];
 
   const arranged = await layoutValueChain(nodes, edges, {});
@@ -212,14 +213,14 @@ test('specialized handle policies prefer vertical routing for same-cluster and h
     makeNode('d', { graphView: 'value-chain', valueChainMeta: { stage: 'operators', role: 'operator' } }, { x: 110, y: 140 }),
   ];
   const influenceEdges = recalculateInfluenceHandles([
-    makeEdge('e1', 'a', 'b', 'AFFILIATED_WITH', { routingHint: { sameCluster: true } }),
-    makeEdge('e4', 'e', 'f', 'OWNS', { routingHint: { preferredAxis: 'horizontal' } }),
+    makeEdge('e1', 'a', 'b', RELATION.JointVentureWith, { routingHint: { sameCluster: true } }),
+    makeEdge('e4', 'e', 'f', RELATION.BeneficiallyOwns, { routingHint: { preferredAxis: 'horizontal' } }),
   ], nodes as any);
   const valueEdges = recalculateValueChainHandles([
-    makeEdge('e2', 'c', 'd', 'REGULATES', { routingHint: { preferredAxis: 'vertical' }, valueChainMeta: { valueClass: 'governance-context' } }),
+    makeEdge('e2', 'c', 'd', RELATION.Regulates, { routingHint: { preferredAxis: 'vertical' }, valueChainMeta: { valueClass: 'governance-context' } }),
   ], nodes as any);
   const flowEdges = recalculateSupplyFlowHandles([
-    makeEdge('e3', 'a', 'd', 'SUPPLIES_TO', { routingHint: { preferredAxis: 'horizontal' }, supplyFlowMeta: { flowClass: 'material-input' } }),
+    makeEdge('e3', 'a', 'd', RELATION.Supplies, { routingHint: { preferredAxis: 'horizontal' }, supplyFlowMeta: { flowClass: 'material-input' } }),
   ], nodes as any);
 
   assert.equal(influenceEdges[0]?.sourceHandle, 'source-bottom');

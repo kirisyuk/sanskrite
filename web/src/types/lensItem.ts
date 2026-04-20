@@ -10,6 +10,8 @@
  * When updating backend LensItem struct, manually update these types.
  */
 
+import type { RelationName } from '../lib/taxonomy.generated';
+
 export interface LensItemMetadata {
   pinned?: boolean;
   notes?: string[];
@@ -24,59 +26,6 @@ export interface LensItemPosition {
 
 export type LensItemKind = 'node' | 'edge' | 'viewport' | 'layout';
 
-export type DependencyType = 
-  | 'SUPPLIES_TO'
-  | 'LOCATED_IN'
-  | 'OWNS'
-  | 'PARENT_OF'
-  | 'SUBSIDIARY_OF'
-  | 'PRODUCES'
-  | 'OPERATES_IN'
-  | 'BASED_IN'
-  | 'HEADQUARTERED_IN'
-  | 'REGULATES'
-  | 'COMPETES_WITH'
-  | 'CONFLICTS_WITH'
-  | 'OPPOSES'
-  | 'DEPENDS_ON'
-  | 'INFLUENCES'
-  | 'TRANSFORMS_INTO'
-  | 'EXTRACTS_FROM'
-  | 'PARTICIPATES_IN'
-  | 'TRADED_IN'
-  | 'DOMINATES'
-  | 'HAS_MARKET_SEGMENT'
-  | 'HAS_SUBGROUP'
-  | 'ADMINISTERS'
-  | 'OPERATES_VIA'
-  | 'MEMBER_OF'
-  | 'AFFILIATED_WITH'
-  // Governance / org-person
-  | 'MANAGES'
-  | 'CONTROLS'
-  | 'EMPLOYED_BY'
-  | 'BOARD_MEMBER_OF'
-  | 'EXECUTIVE_OF'
-  | 'FOUNDED'
-  | 'INVESTS_IN'
-  | 'PARTNERS_WITH'
-  | 'COOPERATES_WITH'
-  // Assurance / oversight (Third Line)
-  | 'ASSURES'
-  // OSINT-lite / governance extensions
-  | 'AUDITED_BY'
-  | 'RELATIVE_OF'
-  | 'RELATED_TO'
-  // UI/ingestion-tolerant aliases (backend may emit these, UI should not break)
-  | 'REQUIRES'
-  | 'NEEDS'
-  | 'USES'
-  | 'SIMILAR_TO'
-  | 'LINKED_TO'
-  | 'AFFECTS'
-  | 'IMPACTS'
-  | 'SUPPORTS';
-
 export type EdgeDirection = 'forward' | 'reverse' | 'bidirectional';
 
 export interface LensItem {
@@ -85,7 +34,7 @@ export interface LensItem {
   projectId: string;
   lensId: string;
   kind: LensItemKind;
-  subkind?: string; // For nodes: "fragment" | "scope" | ...; For edges: DependencyType
+  subkind?: string; // For nodes: "fragment" | "scope" | ...; For edges: RelationName (AH snake_case)
   
   // For kind="node"
   fragmentId?: string;
@@ -106,7 +55,7 @@ export interface LensItem {
   // For kind="edge"
   sourceFragmentId?: string;
   targetFragmentId?: string;
-  edgeType?: DependencyType; // Duplicates subkind for convenience
+  edgeType?: RelationName; // Duplicates subkind for convenience
   criticality?: number;
   amplification?: number;
   latencyHours?: number;
