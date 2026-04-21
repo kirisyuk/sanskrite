@@ -171,7 +171,6 @@ func TestSemanticSeedFragmentAllowedRejectsSupplyLinksAndAbstractHubs(t *testing
 				CanonicalPath: "/supply-link/ir/bandar-abbas-to-doha",
 				Class:         ah.FragmentClassSite,
 				Subtype:       "supply_link",
-				Identifiers:   map[string]string{"legacy_supply_link": "true"},
 			},
 			want: false,
 		},

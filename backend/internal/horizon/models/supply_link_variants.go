@@ -1,17 +1,7 @@
 package models
 
-// TRANSITIONAL: this whole file exists only to keep the legacy
-// SUPPLY_LINK edge-as-fragment artifact addressable (canonical-path
-// generation, route-variant key derivation, dedup key) until migrate-cli
-// converts every SUPPLY_LINK fragment into a proper `supplies` edge plus
-// a leg_connects chain through /route fragments. The whole block —
-// including canonicalTransportViaRefAliases, ValidateSupplyLinkFields,
-// BuildSupplyLinkCanonicalPath, BuildSupplyLinkRouteVariantKey, and the
-// SupplyLinkRouteVariant payload — is scheduled for deletion in the
-// `materialized-payload-rewrite` task once migration completes. Do not
-// add new call sites; do not extend the canonical alias table; refer to
-// docs/taxonomy/migration_map.yaml -> SUPPLY_LINK / SUPPLIES_TO for the
-// canonical replacement. Gating predicate is HorizonFragment.IsLegacySupplyLink().
+// Supply-link path helpers: canonical /supply-link/ paths, transport-via
+// normalization, and route-variant merging for materialized legs.
 
 import (
 	"crypto/sha1"
@@ -312,7 +302,7 @@ func ValidateSupplyLinkFields(f *HorizonFragment) error {
 		return fmt.Errorf("fragment is nil")
 	}
 	if !f.IsLegacySupplyLink() {
-		return fmt.Errorf("fragment must be a legacy SUPPLY_LINK (Class=site, Subtype=supply_link, identifiers.legacy_supply_link=true)")
+		return fmt.Errorf("fragment must be a supply-link site (Class=site, Subtype=supply_link, or /supply-link/ canonical path)")
 	}
 	// SupplyLink can be tenant-scoped OR global-scoped (global = assumption layer).
 	if f.TenantID == "" {
@@ -365,9 +355,7 @@ func ValidateSupplyLinkFields(f *HorizonFragment) error {
 	return nil
 }
 
-// IsSupplyLink checks if a fragment is a legacy SUPPLY_LINK artifact.
-// Same predicate as HorizonFragment.IsLegacySupplyLink — kept as a free
-// function for callers that want a nil-safe wrapper.
+// IsSupplyLink reports site/subtype supply_link fragments (or /supply-link/ paths).
 func IsSupplyLink(f *HorizonFragment) bool {
 	return f.IsLegacySupplyLink()
 }

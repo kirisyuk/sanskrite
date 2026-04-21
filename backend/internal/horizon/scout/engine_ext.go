@@ -10095,7 +10095,6 @@ func (e *ScoutEngine) processSupplyChains(
 			Class:            ah.FragmentClassSite,
 			Subtype:          "supply_link",
 			TenantID:         "global",
-			Identifiers:      map[string]string{"legacy_supply_link": "true"},
 			SupplierRef:      &supplierRef,
 			ProductRef:       &productRef,
 			CustomerRef:      &customerRef,

@@ -205,15 +205,8 @@ type HorizonFragment struct {
 	Metadata   FragmentMetadata `json:"metadata" firestore:"metadata"`
 	Governance Governance       `json:"governance" firestore:"governance"`
 
-	// Supply Link specific fields — LEGACY (transitional).
-	// Per migration_map.yaml SUPPLY_LINK is rewrite_edge: migrate-cli
-	// converts these documents into a `supplies` edge plus N
-	// `leg_connects` edges and deletes the document. Until that runs,
-	// supply-link fragments live as Class=site, Subtype="supply_link"
-	// with Identifiers["legacy_supply_link"]="true". The fields below
-	// are read-only inputs to migrate-cli; new writers should populate
-	// edge attributes directly. Validate() routes legacy docs through
-	// IsLegacySupplyLink() rather than switching on Class.
+	// Supply-link modeled as site/subtype supply_link (or /supply-link/ path).
+	// Fields support leg materialization and route variants alongside `supplies` edges.
 	SupplierRef         *string  `json:"supplierRef,omitempty" firestore:"supplierRef,omitempty"`                 // MUST be /fac/... or /deposit/... for extraction. NOT /org/. (nil = natural resource)
 	CustomerRef         *string  `json:"customerRef,omitempty" firestore:"customerRef,omitempty"`                 // MUST be /fac/... NOT /org/. (nil = end consumer)
 	ProductRef          *string  `json:"productRef,omitempty" firestore:"productRef,omitempty"`                   // /product/... (required for SUPPLY_LINK)
@@ -255,9 +248,7 @@ type horizonFragmentBase HorizonFragment
 // UnmarshalJSON accepts both the new wire shape (`class` + `subtype`)
 // and the legacy shape (`type: "ORGANIZATION"`). Legacy values are
 // translated through models.LegacyFragmentTypeAliases — a SUPPLY_LINK
-// document is mapped to Class=site, Subtype="supply_link", with
-// Identifiers["legacy_supply_link"]="true" stamped so Validate() routes
-// it through the supply-link gating path.
+// document is mapped to Class=site, Subtype="supply_link".
 func (f *HorizonFragment) UnmarshalJSON(data []byte) error {
 	shim := horizonFragmentJSONShim{horizonFragmentBase: (*horizonFragmentBase)(f)}
 	if err := json.Unmarshal(data, &shim); err != nil {
@@ -268,15 +259,8 @@ func (f *HorizonFragment) UnmarshalJSON(data []byte) error {
 		alias, ok := LookupLegacyFragmentType(legacy)
 		switch {
 		case ok && alias.Disposition == LegacyDispositionRewriteEdge && legacy == "SUPPLY_LINK":
-			// SUPPLY_LINK transitionally lands as site/supply_link with
-			// the legacy_supply_link identifier so migrate-cli can find
-			// it later. Validate() routes via IsLegacySupplyLink().
 			f.Class = ah.FragmentClassSite
 			f.Subtype = "supply_link"
-			if f.Identifiers == nil {
-				f.Identifiers = map[string]string{}
-			}
-			f.Identifiers["legacy_supply_link"] = "true"
 		case ok && alias.Class != "":
 			f.Class = alias.Class
 			if f.Subtype == "" {
@@ -307,21 +291,17 @@ func (f *HorizonFragment) LegacyTypeAlias() string {
 	return LegacyTypeForClass(f.Class, f.Subtype)
 }
 
-// IsLegacySupplyLink reports whether the fragment is a transitional
-// SUPPLY_LINK document not yet rewritten by migrate-cli. Identification
-// rule: Class=site, Subtype=supply_link, Identifiers[legacy_supply_link]=true.
-// Validate() uses this to route into ValidateSupplyLinkFields.
+// IsLegacySupplyLink reports a supply-link modeled as site/subtype supply_link
+// or a /supply-link/ canonical path (companion to supplies edges / legs).
 func (f *HorizonFragment) IsLegacySupplyLink() bool {
 	if f == nil {
 		return false
 	}
-	if f.Class != ah.FragmentClassSite || f.Subtype != "supply_link" {
-		return false
+	if f.Class == ah.FragmentClassSite && strings.EqualFold(f.Subtype, "supply_link") {
+		return true
 	}
-	if f.Identifiers == nil {
-		return false
-	}
-	return strings.EqualFold(strings.TrimSpace(f.Identifiers["legacy_supply_link"]), "true")
+	cp := strings.TrimSpace(f.CanonicalPath)
+	return strings.HasPrefix(strings.ToLower(cp), "/supply-link/")
 }
 
 // IsLegacyProgram reports whether the fragment carries the legacy PROGRAM
@@ -423,10 +403,7 @@ func (f *HorizonFragment) Validate() error {
 		return fmt.Errorf("subtype %q is not valid for class %q", f.Subtype, f.Class)
 	}
 
-	// SUPPLY_LINK is a legacy edge-as-fragment artifact. Pre-migration
-	// docs land as Class=site, Subtype="supply_link" with the
-	// `legacy_supply_link` identifier set. Such docs may be tenant-
-	// scoped; everything else must be global.
+	// Supply-link fragments use Class=site, Subtype=supply_link (tenant-scoped).
 	if f.IsLegacySupplyLink() {
 		if f.TenantID == "" {
 			return fmt.Errorf("tenantId must be set for SUPPLY_LINK fragments")

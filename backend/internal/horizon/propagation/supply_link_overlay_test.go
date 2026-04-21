@@ -14,7 +14,6 @@ func TestBuildSupplyLinkOverlayRecord_UsesPrimaryEndpointsAndMetrics(t *testing.
 	link := &horizonmodels.HorizonFragment{
 		Class:            ah.FragmentClassSite,
 		Subtype:          "supply_link",
-		Identifiers:      map[string]string{"legacy_supply_link": "true"},
 		TenantID:         "global",
 		CanonicalPath:    "/supply-link/global/equinor/crude-oil/teesside-terminal",
 		SupplierRef:      &supplier,
