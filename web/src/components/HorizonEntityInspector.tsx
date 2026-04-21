@@ -827,7 +827,7 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
       'SUPPLIES_TO',
       'PRODUCES',
       'CONSUMES',
-      'TRANSFORMS_INTO',
+      'transforms_into',
       'DEPENDS_ON',
       'REQUIRES',
       'NEEDS',
@@ -900,7 +900,7 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
     }
     if (t === 'EXTRACTS_FROM') {
       if (fromType !== 'FACILITY') return { ok: false, message: 'EXTRACTS_FROM: From должен быть FACILITY' };
-      if (toType !== 'DEPOSIT') return { ok: false, message: 'EXTRACTS_FROM: To должен быть DEPOSIT' };
+      if (toType !== 'deposit') return { ok: false, message: 'EXTRACTS_FROM: To должен быть deposit' };
     }
     if (t === 'RELATIVE_OF' || t === 'RELATED_TO') {
       if (fromType !== 'PERSON') return { ok: false, message: `${t}: From должен быть PERSON` };
@@ -3489,7 +3489,7 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
                   </div>
                   {(() => {
                     const selectedType = String((nodeData as any)?.type || (fragment as any)?.type || '').trim().toUpperCase();
-                    const canOpen = !Boolean(edgeId) && (selectedType === 'ORGANIZATION' || selectedType === 'FACILITY');
+                    const canOpen = !edgeId && (selectedType === 'ORGANIZATION' || selectedType === 'FACILITY');
 
                     const openResolver = () => {
                       try {

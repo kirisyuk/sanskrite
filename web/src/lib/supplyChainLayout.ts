@@ -29,7 +29,7 @@ export function isSupplyChainCanonicalPath(path: string): boolean {
 export const SUPPLY_CHAIN_EDGE_STRENGTH: Record<string, number> = {
   EXTRACTS_FROM: 0,
   PRODUCES: 1,
-  TRANSFORMS_INTO: 2,
+  transforms_into: 2,
   SUPPLIES_TO: 3,
   CONSUMES: 4,
   DEPENDS_ON: 5,

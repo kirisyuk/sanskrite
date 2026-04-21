@@ -34,6 +34,6 @@ export function pathPayloadEdgeRelation(edge: unknown): string {
   const role = String(e.role ?? '').trim();
   const typ = String(e.type ?? '').trim();
   if (role === 'logistics_leg' || typ === 'LOGISTICS') return RELATION.Wields;
-  if (typ === 'SUPPLY_LINK') return RELATION.Supplies;
+  if (typ === 'supply_link') return RELATION.Supplies;
   return RELATION.Supplies;
 }

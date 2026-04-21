@@ -68,7 +68,7 @@ const PerspectiveAnalysisPanel: React.FC<PerspectiveAnalysisPanelProps> = ({ pre
     } else {
       setAnalysis(null);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [perspectiveId, preset, interactionsLength, getInteractions, persistedByLocalId]);
 
   const handleGenerate = React.useCallback(async () => {

@@ -2828,7 +2828,7 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
 
                     // Process CREATE changes in levels (breadth-first)
                     let remainingChanges = [...createChanges];
-                    let maxIterations = 100; // Safety limit
+                    const maxIterations = 100; // Safety limit
                     let iteration = 0;
 
                     while (remainingChanges.length > 0 && iteration < maxIterations) {
@@ -3208,7 +3208,7 @@ Return ONLY JSON, no markdown, no code fences, no explanations.`;
                   return;
                 }
 
-                let prompt = text.trim();
+                const prompt = text.trim();
                 // Slash commands: /section <title> and /end
                 const raw = prompt;
                 const isSection = /^\s*\/section\b/i.test(raw);

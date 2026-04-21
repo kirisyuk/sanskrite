@@ -711,7 +711,7 @@ export const ScenarioDataDisplay: React.FC<ScenarioDataDisplayProps> = ({ scenar
                             });
 
                             // Get series columns (Y axis columns)
-                            let seriesColumns = yAxisColumns;
+                            const seriesColumns = yAxisColumns;
 
                             // Detect theme for colors
                             const isDark = typeof window !== 'undefined' && document.body ?

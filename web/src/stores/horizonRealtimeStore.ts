@@ -235,7 +235,7 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
 
     handleWsEvent: (type, dataIn) => {
       const now = Date.now();
-      let data = dataIn;
+      const data = dataIn;
       const resolveNodePath = (id: string): string => {
         const nodes = get().nodes || {};
         const node = nodes[id];
@@ -373,7 +373,7 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
               return 'supplies to';
             case 'PRODUCES':
               return 'produces';
-            case 'TRANSFORMS_INTO':
+            case 'transforms_into':
               return 'transforms into';
             case 'DEPENDS_ON':
               return 'depends on';
@@ -675,7 +675,7 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
                 return 'supplies to';
               case 'PRODUCES':
                 return 'produces';
-              case 'TRANSFORMS_INTO':
+              case 'transforms_into':
                 return 'transforms into';
               case 'DEPENDS_ON':
                 return 'depends on';

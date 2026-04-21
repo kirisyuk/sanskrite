@@ -164,7 +164,7 @@ const stripDerivedNodes = <T,>(nodes: Node<T>[]): Node<T>[] => {
     if (id.startsWith('levels:')) return false;
     if (id.startsWith('group:')) return false;
     if (id.startsWith('stack:group:')) return false;
-    if (Boolean(d?.isStackGroup)) return false;
+    if (d?.isStackGroup) return false;
     if (id.includes(':ctrl:')) return false;
     if (id.includes(':card:')) return false;
     return true;
@@ -282,7 +282,7 @@ const hierarchicalController: GraphViewController<any> = {
       const id = String((node as any)?.id || '').trim();
       const d: any = (node as any)?.data;
       if (id.startsWith('stack:group:')) return false;
-      if (Boolean(d?.isStackGroup)) return false;
+      if (d?.isStackGroup) return false;
       return true;
     });
     const arranged = await context.layoutLevelsTwoPane(

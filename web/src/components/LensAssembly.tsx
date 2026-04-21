@@ -140,7 +140,7 @@ const producerKindFromType = (fragmentType?: string): ProductGraphNodeData['kind
       return 'facility';
     case 'ORGANIZATION':
       return 'organization';
-    case 'DEPOSIT':
+    case 'deposit':
       return 'deposit';
     case 'PROGRAM':
       return 'program';

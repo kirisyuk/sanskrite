@@ -393,7 +393,7 @@ export function classifyValueChainRelation(edgeType: string): ValueChainValueCla
   const et = normalizeEdgeType(edgeType);
   const rawU = String(edgeType || '').trim().toUpperCase();
   if (et === RELATION.Produces) {
-    if (rawU === 'TRANSFORMS_INTO') return 'transforms-into';
+    if (rawU === 'transforms_into') return 'transforms-into';
     return 'supplies-input';
   }
   if (et === RELATION.Supplies) return 'supplies-input';

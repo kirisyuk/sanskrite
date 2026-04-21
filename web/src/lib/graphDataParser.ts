@@ -25,7 +25,7 @@ export type ChartType = typeof ALLOWED_CHART_TYPES[number];
  */
 export function parseGraphData(interaction: any): GraphData | null {
   // Если уже есть graphData, используем его
-  let gd = interaction.graphData as GraphData | undefined;
+  const gd = interaction.graphData as GraphData | undefined;
   if (gd) {
     return gd;
   }

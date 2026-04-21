@@ -462,7 +462,7 @@ const NODE_COLORS: Record<string, NodeColorScheme> = {
     text: '#9A3412', textDark: '#FED7AA',
     accent: '#F97316', accentDark: '#FB923C',
   },
-  'DEPOSIT': {
+  'deposit': {
     // Earth / deposit: deeper soil/ore brown (avoid amber used by PRODUCT)
     bg: '#FBF2E8', bgDark: '#1A120C',
     border: '#6B3F2A', borderDark: '#B7791F',
@@ -872,11 +872,11 @@ const SUBTYPE_TO_VISUAL: Partial<Record<FragmentClass, Record<string, string>>> 
     substation: 'FACILITY_SUBSTATION',
     refinery: 'FACILITY_REFINERY',
     power_plant: 'FACILITY_POWER_PLANT',
-    deposit: 'DEPOSIT',
+    deposit: 'deposit',
     affected_zone: 'AFFECTED_ZONE',
   },
   [FRAGMENT_CLASS.Product]: {
-    deposit: 'DEPOSIT',
+    deposit: 'deposit',
   },
   [FRAGMENT_CLASS.Community]: {
     dynasty: 'COMMUNITY_DYNASTY',
@@ -1599,7 +1599,7 @@ export const HorizonNodeIcon: React.FC<{ type: string | undefined; color: string
         </svg>
       );
     
-    case 'DEPOSIT':
+    case 'deposit':
       // Deposit / resource: layered rock icon
       return (
         <svg viewBox="0 0 24 24" fill="none" stroke={color} strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={style}>
@@ -2051,7 +2051,7 @@ export const getEdgeColor = (edgeType: string | undefined): string => {
   // Partnership/Cooperation — Green
   if (['PARTNERS_WITH', 'COOPERATES_WITH', 'SUPPLIES_TO', 'SUPPORTS'].includes(type)) return '#22C55E';
   // Products/Output — Cyan
-  if (['PRODUCES', 'TRANSFORMS_INTO', 'EXTRACTS_FROM'].includes(type)) return '#06B6D4';
+  if (['PRODUCES', 'transforms_into', 'EXTRACTS_FROM'].includes(type)) return '#06B6D4';
   // Influence — Orange
   if (['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS'].includes(type)) return '#F97316';
   // Ownership — Blue
@@ -2166,7 +2166,7 @@ export const EdgeTypeIcon = ({ edgeType, color, size = 16 }: { edgeType: string;
           <path d="M5 21h14" />
         </svg>
       );
-    case 'TRANSFORMS_INTO':
+    case 'transforms_into':
       return (
         <svg {...common}>
           <path d="M16 3h4v4" />
@@ -2422,7 +2422,7 @@ const edgeCaptionShort = (raw: any): string => {
     NEEDS: 'Needs',
     USES: 'Uses',
     CONSUMES: 'Consumes',
-    TRANSFORMS_INTO: 'Transforms',
+    transforms_into: 'Transforms',
     // Ownership / control
     OWNS: 'Owns',
     MANAGES: 'Manages',

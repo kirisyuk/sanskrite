@@ -1167,7 +1167,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         return (prevNodes || []).map((n: any) => {
           const id = String(n?.id || '').trim();
           if (id !== nid) return n;
-          if (Boolean(n?.data?.isGroup)) return n;
+          if (n?.data?.isGroup) return n;
           const fid = String((n.data as any)?.fragmentId || id || '').trim();
           const shouldBeExpanded = fid && expandedNodesRef.current.has(fid);
           return { 
@@ -1971,7 +1971,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const DEPENDENCIES = [
       'SUPPLIES_TO',
       'PRODUCES',
-      'TRANSFORMS_INTO',
+      'transforms_into',
       'DEPENDS_ON',
       'REQUIRES',
       'NEEDS',
@@ -2030,7 +2030,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
   const supplyChainExpandEdgeTypes = React.useMemo((): string[] => [
     'EXTRACTS_FROM',
     'PRODUCES',
-    'TRANSFORMS_INTO',
+    'transforms_into',
     'SUPPLIES_TO',
     'CONSUMES',
     'DEPENDS_ON',
@@ -3963,7 +3963,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         const fid = String(d?.fragmentId || '').trim();
         const cp = String(d?.canonicalPath || '').trim();
         const shouldReveal = Boolean(nid && idSet.has(nid)) || Boolean(fid && idSet.has(fid)) || Boolean(cp && idSet.has(cp));
-        if (!shouldReveal || !Boolean((n as any)?.hidden)) return n;
+        if (!shouldReveal || !(n as any)?.hidden) return n;
         changed = true;
         return { ...(n as any), hidden: false } as any;
       });
@@ -4342,7 +4342,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     const unionEdgeTypes = (() => {
       if (wantsAll) return [] as string[];
       const OWNERSHIP = ['OWNS', 'SUBSIDIARY_OF', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF'];
-      const DEPENDENCIES = ['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM'];
+      const DEPENDENCIES = ['SUPPLIES_TO', 'PRODUCES', 'transforms_into', 'DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM'];
       const CONTEXT = ['LOCATED_IN', 'OPERATES_IN', 'BASED_IN', 'HEADQUARTERED_IN', 'REGULATES', 'ASSURES', 'AUDITED_BY', 'EXTRACTS_FROM', 'ADMINISTERS'];
       const MARKET = ['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO', 'PARTICIPATES_IN', 'TRADED_IN', 'DOMINATES', 'HAS_MARKET_SEGMENT', 'HAS_SUBGROUP'];
       const INFLUENCE = ['INFLUENCES', 'AFFECTS', 'IMPACTS'];
@@ -4358,7 +4358,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
     // Relative direction inference for traversal (best-effort, front-end guard; backend can pre-filter too).
     const CONTROL_FWD = new Set(['OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF']);
     const CONTROL_INV = new Set(['SUBSIDIARY_OF']);
-    const SUPPLY_FWD = new Set(['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO']);
+    const SUPPLY_FWD = new Set(['SUPPLIES_TO', 'PRODUCES', 'transforms_into']);
     const SUPPLY_INV = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'CONSUMES', 'EXTRACTS_FROM']);
     const PEER = new Set(['COMPETES_WITH', 'CONFLICTS_WITH', 'OPPOSES', 'PARTNERS_WITH', 'COOPERATES_WITH', 'RELATED_TO', 'RELATIVE_OF', 'SIMILAR_TO', 'LINKED_TO']);
     // Market-defining relations: org DOMINATES market → org appears to the RIGHT of market (not up/down hierarchy)
@@ -5233,7 +5233,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       // Strong edge types that dominate DEPENDS_ON when in the opposite direction
       // (e.g. ORG→PROGRAM PRODUCES + PROGRAM→ORG Depends → suppress Depends)
       const STRONG_VS_DEPENDS = new Set([
-        'PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO', 'PARTICIPATES_IN',
+        'PRODUCES', 'SUPPLIES_TO', 'transforms_into', 'PARTICIPATES_IN',
         'TRADED_IN',
         'PARTNERS_WITH', 'COOPERATES_WITH', 'SUPPORTS', 'INFLUENCES', 'AFFECTS', 'IMPACTS', 'REGULATES',
         'OWNS', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'FOUNDED', 'EMPLOYED_BY', 'BOARD_MEMBER_OF',
@@ -6065,8 +6065,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         for (const e of edgeListWithStackProxy) {
           const eidRaw = String((e as any)?.id || '').trim();
           if (eidRaw.startsWith('levels:agg:')) continue;
-          if (Boolean((e as any)?.data?.levelsAgg)) continue;
-          if (Boolean((e as any)?.data?.levelsStackProxy)) continue;
+          if ((e as any)?.data?.levelsAgg) continue;
+          if ((e as any)?.data?.levelsStackProxy) continue;
           const s = String((e as any)?.source || '').trim();
           const t = String((e as any)?.target || '').trim();
           if (!s || !t) continue;
@@ -6140,9 +6140,9 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
       if (eidRaw.startsWith('levels:agg:')) continue;
       if (eidRaw.startsWith('levels:gproxy:')) continue;
       if (eidRaw.startsWith('levels:stackgproxy:')) continue;
-      if (Boolean(ed.levelsAgg)) continue;
-      if (Boolean(ed.levelsGroupProxy)) continue;
-      if (Boolean(ed.levelsStackGroupProxy)) continue;
+      if (ed.levelsAgg) continue;
+      if (ed.levelsGroupProxy) continue;
+      if (ed.levelsStackGroupProxy) continue;
 
       const s = String((e as any)?.source || '').trim();
       const t = String((e as any)?.target || '').trim();
@@ -8788,7 +8788,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         HAS_SUBGROUP: 34,
         PRODUCES: 40,
         SUPPLIES_TO: 42,
-        TRANSFORMS_INTO: 44,
+        transforms_into: 44,
         LOCATED_IN: 50,
         OPERATES_IN: 52,
         BASED_IN: 52,
@@ -12049,10 +12049,10 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
           ? fragmentNodes
           : ((nodesStateRef.current?.length ? nodesStateRef.current : nodes) as Node<HorizonNodeData>[]);
       const arrangedResult = await arrangeWithGraphView(layoutMode, nodesForArrange as any, edges as any);
-      let withGroups: Node<HorizonNodeData>[] = arrangedResult.nodes as any;
+      const withGroups: Node<HorizonNodeData>[] = arrangedResult.nodes as any;
       setEdges(arrangedResult.edges as any);
       // Add onGroupPageChange callback to group nodes
-      let withCallbacks = withGroups.map((node) => {
+      const withCallbacks = withGroups.map((node) => {
         if ((node.data as any)?.isGroup) {
           return {
             ...node,
@@ -12129,8 +12129,8 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
             ? fragmentNodes
             : (current as Node<HorizonNodeData>[]);
         const arrangedResult = await arrangeWithGraphView(layoutMode, nodesForArrange as any, nextEdges as any);
-        let nextNodes: Node<HorizonNodeData>[] = arrangedResult.nodes as any;
-        let finalEdges: Edge[] = arrangedResult.edges as any;
+        const nextNodes: Node<HorizonNodeData>[] = arrangedResult.nodes as any;
+        const finalEdges: Edge[] = arrangedResult.edges as any;
 
         if (isFreeformLayout) {
           try {
@@ -12157,7 +12157,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         }
 
         // Add onGroupPageChange callback to groups (both modes)
-        let finalNodes = (nextNodes as any[]).map((n) => {
+        const finalNodes = (nextNodes as any[]).map((n) => {
           if ((n.data as any)?.isGroup) {
             return { ...n, data: { ...n.data, onGroupPageChange: handleGroupPageChange } };
           }
@@ -15936,12 +15936,12 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
                             if (!prev) return prev;
                             const nextScopes = { ...(prev.scopes || ({} as any)) };
                             if (opt.key === 'all') {
-                              const nextAll = !Boolean(nextScopes.all);
+                              const nextAll = !nextScopes.all;
                               for (const k of Object.keys(nextScopes) as TraceScopeKey[]) nextScopes[k] = false;
                               nextScopes.all = nextAll;
                             } else {
                               nextScopes.all = false;
-                              nextScopes[opt.key] = !Boolean(nextScopes[opt.key]);
+                              nextScopes[opt.key] = !nextScopes[opt.key];
                             }
                             return { ...prev, scopes: nextScopes };
                           });

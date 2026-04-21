@@ -1208,7 +1208,7 @@ export async function layoutLevelsTwoPane<T = any>(
       // Normalize stale right-stack context cards from previous relayouts back to fragments first.
       // Otherwise old derived cards can survive and appear as "phantom" duplicate stacks.
       const dIn: any = out?.data || {};
-      if (Boolean(dIn?.rightStackContextCard)) {
+      if (dIn?.rightStackContextCard) {
         const snap: any =
           dIn?.stackControllerSnapshot && typeof dIn.stackControllerSnapshot === 'object'
             ? { ...(dIn.stackControllerSnapshot as any) }
@@ -1250,7 +1250,7 @@ export async function layoutLevelsTwoPane<T = any>(
   // IMPORTANT: do NOT treat "hidden by stack" as manual, otherwise expanding a stack would never reveal its nodes.
   const preHiddenIds = new Set<string>(
     fragments
-      .filter((n) => Boolean((n as any).hidden) && !Boolean(((n as any)?.data as any)?.hiddenByStack))
+      .filter((n) => Boolean((n as any).hidden) && !((n as any)?.data as any)?.hiddenByStack)
       .map((n) => n.id),
   );
 
@@ -1283,7 +1283,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'USES_MECHANISM',
     'APPLIES_TO',
   ]);
-  const DOCK_SUPPLY = new Set(['SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO']);
+  const DOCK_SUPPLY = new Set(['SUPPLIES_TO', 'PRODUCES', 'transforms_into']);
   const DOCK_DEPENDENCIES = new Set(['DEPENDS_ON', 'REQUIRES', 'NEEDS', 'USES', 'EXTRACTS_FROM']);
   const DOCK_STRUCTURE = new Set(['DOMINATES', 'HAS_MARKET_SEGMENT', 'HAS_SUBGROUP', 'PARTICIPATES_IN', 'TRADED_IN']);
 
@@ -1313,7 +1313,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'ADMINISTERS',
   ]);
   const GOVERNANCE_CONTROL_TYPES = new Set(['BOARD_MEMBER_OF', 'EXECUTIVE_OF', 'EMPLOYED_BY']);
-  const SUPPLY_CHAIN_TYPES = new Set(['PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO']);
+  const SUPPLY_CHAIN_TYPES = new Set(['PRODUCES', 'SUPPLIES_TO', 'transforms_into']);
   const INFLUENCE_TYPES = new Set(['INFLUENCES', 'AFFECTS', 'REGULATES', 'IMPACTS']);
   const hierarchyScore = (et: string): number => {
     const t = String(et || '').trim();
@@ -1342,7 +1342,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'EXECUTIVE_OF',
     'PRODUCES',
     'SUPPLIES_TO',
-    'TRANSFORMS_INTO',
+    'transforms_into',
     'ADMINISTERS',
     'INFLUENCES',
     'AFFECTS',
@@ -1490,7 +1490,7 @@ export async function layoutLevelsTwoPane<T = any>(
     const isGov = t === 'GOV' || t === 'GOVERNMENT' || t === 'GOVERNMENT_AGENCY' || t === 'AGENCY' || t === 'MINISTRY';
     const isPerson = t === 'PERSON';
     const isProd = t === 'PRODUCT' || t === 'SERVICE' || t === 'TECHNOLOGY';
-    const isFac = t === 'FACILITY' || t === 'DEPOSIT';
+    const isFac = t === 'FACILITY' || t === 'deposit';
     const isMarket = t === 'MARKET' || t.startsWith('MARKET_');
     const isGeo = ['GEO_REGION', 'LOCATION', 'COUNTRY', 'STATE', 'PROVINCE', 'CITY'].includes(t) || t.includes('GEO');
 
@@ -1534,9 +1534,9 @@ export async function layoutLevelsTwoPane<T = any>(
     if (eid.startsWith('levels:agg:')) continue;
     if (eid.startsWith('levels:stackproxy:')) continue;
     if (eid.startsWith('levels:gproxy:')) continue;
-    if (Boolean(ed.levelsAgg)) continue;
-    if (Boolean(ed.levelsStackProxy)) continue;
-    if (Boolean(ed.levelsGroupProxy)) continue;
+    if (ed.levelsAgg) continue;
+    if (ed.levelsStackProxy) continue;
+    if (ed.levelsGroupProxy) continue;
     const s = normId(e?.source);
     const t = normId(e?.target);
     if (!s || !t) continue;
@@ -1626,8 +1626,8 @@ export async function layoutLevelsTwoPane<T = any>(
   for (const e of (edges || []) as any[]) {
     const eid = String(e?.id || '').trim();
     if (eid.startsWith('levels:agg:')) continue;
-    if (Boolean(e?.data?.levelsAgg)) continue;
-    if (Boolean(e?.data?.levelsStackProxy)) continue;
+    if (e?.data?.levelsAgg) continue;
+    if (e?.data?.levelsStackProxy) continue;
     const s = normId(e?.source);
     const t = normId(e?.target);
     if (!s || !t) continue;
@@ -1843,7 +1843,7 @@ export async function layoutLevelsTwoPane<T = any>(
       (leftPaneLayoutHeightFor as any)._cache?.clear?.();
       (leftPaneLayoutWidthFor as any)._cache?.clear?.();
     }
-    if (Boolean(d?.contextCard)) return nodeHeight * 2;
+    if (d?.contextCard) return nodeHeight * 2;
     if (compactLeftPane) return COMPACT_NODE_LAYOUT_HEIGHT;
     const key = String(d?.type || '') + '|' + String(d?.canonicalPath || '') + '|' + String(Boolean(d?.contextCard));
     const cached = (leftPaneLayoutHeightFor as any)._cache?.get(key);
@@ -1861,7 +1861,7 @@ export async function layoutLevelsTwoPane<T = any>(
       (leftPaneLayoutHeightFor as any)._cache?.clear?.();
       (leftPaneLayoutWidthFor as any)._cache?.clear?.();
     }
-    if (Boolean(d?.contextCard)) return nodeWidth;
+    if (d?.contextCard) return nodeWidth;
     if (compactLeftPane) return COMPACT_NODE_WIDTH;
     const key = String(d?.type || '') + '|' + String(d?.canonicalPath || '') + '|' + String(Boolean(d?.contextCard));
     const cached = (leftPaneLayoutWidthFor as any)._cache?.get(key);
@@ -1899,7 +1899,7 @@ export async function layoutLevelsTwoPane<T = any>(
       // Facilities
       'FACILITY': 'Facilities',
       // Natural Resources
-      'DEPOSIT': 'Natural Resources',
+      'deposit': 'Natural Resources',
       // Domains (meta-anchors, shown as compact mini-nodes)
       'DOMAIN': 'Domains',
       // Milestones
@@ -1931,7 +1931,7 @@ export async function layoutLevelsTwoPane<T = any>(
     if (tt === 'COMMUNITY') return 140;
     // "Places / assets"
     if (tt === 'FACILITY') return 210;
-    if (tt === 'DEPOSIT') return 215;
+    if (tt === 'deposit') return 215;
     if (tt === 'GEO_REGION') return 220;
     if (tt === 'LOCATION') return 230;
     if (tt === 'AFFECTED_ZONE') return 225; // Conflict/disaster zones (between GEO and LOCATION)
@@ -1960,7 +1960,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'ASSURES', 'AUDITED_BY', 'REGULATES',
   ]);
   const SUPPLY_EDGE_SET = new Set([
-    'SUPPLIES_TO', 'PRODUCES', 'TRANSFORMS_INTO', 'DEPENDS_ON', 'REQUIRES',
+    'SUPPLIES_TO', 'PRODUCES', 'transforms_into', 'DEPENDS_ON', 'REQUIRES',
     'NEEDS', 'USES', 'EXTRACTS_FROM',
   ]);
   const MARKET_EDGE_SET = new Set([
@@ -2144,8 +2144,8 @@ export async function layoutLevelsTwoPane<T = any>(
       for (const e of (edges || []) as any[]) {
         const eid = String(e?.id || '').trim();
         if (eid.startsWith('levels:agg:')) continue;
-        if (Boolean(e?.data?.levelsAgg)) continue;
-        if (Boolean(e?.data?.levelsStackProxy)) continue;
+        if (e?.data?.levelsAgg) continue;
+        if (e?.data?.levelsStackProxy) continue;
         const s = normId(e?.source);
         const t = normId(e?.target);
         if (!s || !t) continue;
@@ -2271,7 +2271,7 @@ export async function layoutLevelsTwoPane<T = any>(
       DOMAIN_RELATION: 'Domain link',
       SUPPLIES_TO: 'Supplies',
       PRODUCES: 'Produces',
-      TRANSFORMS_INTO: 'Transforms',
+      transforms_into: 'Transforms',
       LOCATED_IN: 'Located',
       OPERATES_IN: 'Operates',
       BASED_IN: 'Based',
@@ -2430,7 +2430,7 @@ export async function layoutLevelsTwoPane<T = any>(
     'ASSURES': { outgoing: 'Assures', incoming: 'Assured by' },
     'AUDITED_BY': { outgoing: 'Audited by', incoming: 'Audits' },
     'PRODUCES': { outgoing: 'Products:', incoming: 'Produced by' },
-    'TRANSFORMS_INTO': { outgoing: 'Transforms into', incoming: 'Transformed from' },
+    'transforms_into': { outgoing: 'Transforms into', incoming: 'Transformed from' },
     'SUPPLIES_TO': { outgoing: 'Supplies', incoming: 'Supplied by' },
     'EXTRACTS_FROM': { outgoing: 'Extracts from', incoming: 'Extracted by' },
     'DEPENDS_ON': { outgoing: 'Depends on', incoming: 'Dependency of' },
@@ -2472,7 +2472,7 @@ export async function layoutLevelsTwoPane<T = any>(
           .filter(Boolean)
           .filter((n) => {
             if (preHiddenIds.has(n.id)) return false;
-            if (!Boolean((n as any).hidden)) return true;
+            if (!(n as any).hidden) return true;
             const d: any = (n as any)?.data || {};
             if (!d?.hiddenByStack) return false;
             const stackGroupKey = String(d?.stackGroupKey || '').trim();
@@ -2525,8 +2525,8 @@ export async function layoutLevelsTwoPane<T = any>(
       for (const e of (edges || []) as any[]) {
         const eid = String(e?.id || '').trim();
         if (eid.startsWith('levels:agg:')) continue;
-        if (Boolean(e?.data?.levelsAgg)) continue;
-        if (Boolean(e?.data?.levelsStackProxy)) continue;
+        if (e?.data?.levelsAgg) continue;
+        if (e?.data?.levelsStackProxy) continue;
         const s = normId(e?.source);
         const t = normId(e?.target);
         if (!s || !t) continue;
@@ -2541,8 +2541,8 @@ export async function layoutLevelsTwoPane<T = any>(
         for (const e of (edges || []) as any[]) {
           const eid = String(e?.id || '').trim();
           if (eid.startsWith('levels:agg:')) continue;
-          if (Boolean(e?.data?.levelsAgg)) continue;
-          if (Boolean(e?.data?.levelsStackProxy)) continue;
+          if (e?.data?.levelsAgg) continue;
+          if (e?.data?.levelsStackProxy) continue;
           const s = normId(e?.source);
           const t = normId(e?.target);
           if (s !== pid || t !== cid) continue; // only OUTGOING from parent -> child
@@ -2576,8 +2576,8 @@ export async function layoutLevelsTwoPane<T = any>(
       for (const e of (edges || []) as any[]) {
         const eid = String(e?.id || '').trim();
         if (eid.startsWith('levels:agg:')) continue;
-        if (Boolean(e?.data?.levelsAgg)) continue;
-        if (Boolean(e?.data?.levelsStackProxy)) continue;
+        if (e?.data?.levelsAgg) continue;
+        if (e?.data?.levelsStackProxy) continue;
         const s = normId(e?.source);
         const t = normId(e?.target);
         if (!s || !t) continue;
@@ -2601,8 +2601,8 @@ export async function layoutLevelsTwoPane<T = any>(
         for (const e of (edges || []) as any[]) {
           const eid = String(e?.id || '').trim();
           if (eid.startsWith('levels:agg:')) continue;
-          if (Boolean(e?.data?.levelsAgg)) continue;
-          if (Boolean(e?.data?.levelsStackProxy)) continue;
+          if (e?.data?.levelsAgg) continue;
+          if (e?.data?.levelsStackProxy) continue;
           const s = normId(e?.source);
           const t = normId(e?.target);
           if (s === pid && t === cid && edgeTypeOf(e) === 'PRODUCES') {
@@ -2658,8 +2658,8 @@ export async function layoutLevelsTwoPane<T = any>(
       for (const e of (edges || []) as any[]) {
         const eid = String(e?.id || '').trim();
         if (eid.startsWith('levels:agg:')) continue;
-        if (Boolean(e?.data?.levelsAgg)) continue;
-        if (Boolean(e?.data?.levelsStackProxy)) continue;
+        if (e?.data?.levelsAgg) continue;
+        if (e?.data?.levelsStackProxy) continue;
         const s = normId(e?.source);
         const t = normId(e?.target);
         if (!s || !t || s === t) continue;
@@ -3527,7 +3527,7 @@ export async function layoutLevelsTwoPane<T = any>(
     if (tt === 'DOMAIN' || cp.startsWith('/domain/')) return 3;
     if (tt === 'DECISION_POINT' || tt === 'MECHANISM') return 3;
     if (tt === 'ORGANIZATION' || tt === 'PERSON' || tt === 'COMMUNITY' || tt === 'MEDIA_CHANNEL') return 2;
-    if (tt === 'FACILITY' || tt === 'DEPOSIT') return 0;
+    if (tt === 'FACILITY' || tt === 'deposit') return 0;
     if (tt === 'GEO_REGION' || tt === 'LOCATION' || tt === 'COUNTRY' || tt === 'STATE' || tt === 'PROVINCE' || tt === 'CITY') return 3;
     if (tt === 'PRODUCT' || tt === 'SERVICE' || tt === 'TECHNOLOGY') return 1;
     return 2;
@@ -4827,10 +4827,10 @@ export async function layoutLevelsTwoPane<T = any>(
     for (const e of (edges || []) as any[]) {
       const eid = String(e?.id || '').trim();
       if (eid.startsWith('levels:agg:')) continue;
-      if (Boolean(e?.data?.levelsAgg)) continue;
-      if (Boolean(e?.data?.levelsStackProxy)) continue;
+      if (e?.data?.levelsAgg) continue;
+      if (e?.data?.levelsStackProxy) continue;
       if (eid.startsWith('levels:stackproxy:')) continue;
-      if (Boolean(e?.data?.levelsGroupProxy)) continue;
+      if (e?.data?.levelsGroupProxy) continue;
       if (eid.startsWith('levels:gproxy:')) continue;
       const s = normId(e?.source);
       const t = normId(e?.target);
@@ -4895,9 +4895,9 @@ export async function layoutLevelsTwoPane<T = any>(
       if (eid.startsWith('levels:agg:')) continue;
       if (eid.startsWith('levels:stackproxy:')) continue;
       if (eid.startsWith('levels:gproxy:')) continue;
-      if (Boolean(e?.data?.levelsAgg)) continue;
-      if (Boolean(e?.data?.levelsStackProxy)) continue;
-      if (Boolean(e?.data?.levelsGroupProxy)) continue;
+      if (e?.data?.levelsAgg) continue;
+      if (e?.data?.levelsStackProxy) continue;
+      if (e?.data?.levelsGroupProxy) continue;
       const s = normId(e?.source);
       const t = normId(e?.target);
       if (!s || !t || s === t) continue;
@@ -4979,9 +4979,9 @@ export async function layoutLevelsTwoPane<T = any>(
       if (eid.startsWith('levels:agg:')) continue;
       if (eid.startsWith('levels:stackproxy:')) continue;
       if (eid.startsWith('levels:gproxy:')) continue;
-      if (Boolean(e?.data?.levelsAgg)) continue;
-      if (Boolean(e?.data?.levelsStackProxy)) continue;
-      if (Boolean(e?.data?.levelsGroupProxy)) continue;
+      if (e?.data?.levelsAgg) continue;
+      if (e?.data?.levelsStackProxy) continue;
+      if (e?.data?.levelsGroupProxy) continue;
       const s = normId(e?.source);
       const t = normId(e?.target);
       if (!s || !t || s === t) continue;
@@ -5406,7 +5406,7 @@ export async function layoutLevelsTwoPane<T = any>(
       let nodeToAdd: any;
       let dataToUse: any;
 
-      if (Boolean(md?.rightStackContextCard)) {
+      if (md?.rightStackContextCard) {
         // Controller was replaced by context card — create synthetic fragment from contextLines.
         let label = '';
         let type = '';
@@ -5735,7 +5735,7 @@ export async function layoutLevelsTwoPane<T = any>(
       const p = rightPos.get(n.id);
       if (!p) {
         const dMiss: any = (n as any)?.data || {};
-        if (Boolean(dMiss?.rightStackContextCard)) return null as any;
+        if (dMiss?.rightStackContextCard) return null as any;
         return n;
       }
       const meta = stackMetaById.get(n.id);
@@ -5928,7 +5928,7 @@ export function deriveLevelsTreeMetadata<T = any>(
   const HIERARCHY_TYPES = new Set([
     // Corporate structure / control
     'OWNS', 'PARENT_OF', 'MANAGES', 'CONTROLS', 'INVESTS_IN', 'FOUNDED', 'ADMINISTERS', 'BOARD_MEMBER_OF', 'EXECUTIVE_OF',
-    'PRODUCES', 'SUPPLIES_TO', 'TRANSFORMS_INTO',
+    'PRODUCES', 'SUPPLIES_TO', 'transforms_into',
     // Market-defining (org -> market): treat as hierarchy signal
     'DOMINATES',
     // Market hierarchy (parent -> segment)
@@ -5960,7 +5960,7 @@ export function deriveLevelsTreeMetadata<T = any>(
     if (t === 'DOMINATES') return 260;
     if (t === 'HAS_MARKET_SEGMENT' || t === 'HAS_SUBMARKET') return 240;
     if (t === 'BOARD_MEMBER_OF' || t === 'EXECUTIVE_OF') return 220;
-    if (t === 'PRODUCES' || t === 'SUPPLIES_TO' || t === 'TRANSFORMS_INTO') return 120;
+    if (t === 'PRODUCES' || t === 'SUPPLIES_TO' || t === 'transforms_into') return 120;
     if (INFLUENCE_TYPES.has(t)) return 40;
     if (STRATEGIC_TYPES.has(t)) return 160;
     return 80;

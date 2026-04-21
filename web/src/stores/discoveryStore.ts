@@ -218,7 +218,7 @@ function handleResearchEvent(
     const progressInteractionId = eventStreamId ? `research-${eventStreamId}-progress` : null;
     
     // Find existing progress interaction
-    let progressInteraction = progressInteractionId 
+    const progressInteraction = progressInteractionId 
       ? interactions.find((it: any) => it.id === progressInteractionId)
       : null;
 

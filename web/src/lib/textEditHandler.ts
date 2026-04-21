@@ -158,7 +158,7 @@ export async function handleEditTextWithPalette(
         });
 
         const rawOut = (res?.content || '').toString();
-        let cleaned = stripFences(rawOut);
+        const cleaned = stripFences(rawOut);
         let updated = cleaned;
         let outFormat: 'json' | 'plain' = 'plain';
 

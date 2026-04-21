@@ -62,9 +62,9 @@ export function productStreamEdgeVisualKind(raw: string | undefined | null): Pro
     return 'transformation';
   }
   const upper = s.toUpperCase().replace(/-/g, '_');
-  if (upper === 'ASSEMBLES_INTO') return 'assembly';
+  if (upper === 'assembles_into') return 'assembly';
   if (upper === 'USED_IN') return 'usage';
-  if (upper === 'TRANSFORMS_INTO') return 'transformation';
+  if (upper === 'transforms_into') return 'transformation';
   return 'transformation';
 }
 
@@ -106,7 +106,7 @@ const LEGACY_FRAGMENT_TYPE_TO_CLASS: Record<string, FragmentClass> = {
   DOMAIN: FRAGMENT_CLASS.Org,
   SUPPLIER: FRAGMENT_CLASS.Org,
   DEPENDENCY: FRAGMENT_CLASS.Org,
-  DEPOSIT: FRAGMENT_CLASS.Product,
+  deposit: FRAGMENT_CLASS.Product,
   RISK: FRAGMENT_CLASS.Evidence,
   MEDIA_CHANNEL: FRAGMENT_CLASS.Market,
   REGIME: FRAGMENT_CLASS.Regime,

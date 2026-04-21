@@ -664,7 +664,7 @@ export const SidebarPanel: React.FC<SidebarPanelProps> = ({
     } else {
       setSidebarMainTab('projects');
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+     
   }, [currentProject?.id, isModernSidebarMode, isHorizonMode]);
 
   const hasSelectedProject = Boolean(
