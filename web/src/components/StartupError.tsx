@@ -1,6 +1,6 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
-import darkLogo from '../assets/nv-horizon-dark-theme.png';
+import darkLogo from '../assets/dark-theme.png';
 
 type Props = { error?: Error | null; onRetry?: () => void };
 

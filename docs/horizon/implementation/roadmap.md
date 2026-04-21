@@ -2953,7 +2953,7 @@ type PolicyDecision struct {
 - **Async LLM Queue для сложных Propagation-решений (низкий приоритет)**
   - **Когда**: классификация неоднозначна, conflict resolution, causal inference для explain trace.
   - **Решение**:
-    - Отдельная Cloud Tasks queue `nv-horizon-propagation-llm` с throttling.
+    - Отдельная Cloud Tasks queue `prevalent-horizon-test-propagation-llm` с throttling.
     - `PropagationLLMTask` содержит контекст (fragment, metric, signals, damping state).
     - `PropagationLLMExecutor` подчиняется тем же правилам затухания (depth check, damping factor), использует `min_capability_score=6`.
   - **Acceptance**: LLM вызывается только async, подчиняется damping, не блокирует hot path.

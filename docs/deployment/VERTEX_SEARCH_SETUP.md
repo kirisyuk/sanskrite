@@ -8,7 +8,7 @@
    - `VERTEX_SEARCH_DATA_STORE_ID` - должен быть `rag-documents-store`
    - `VERTEX_SEARCH_LOCATION` - должен быть `global`
    - `GEMINI_API_KEY` - обязателен
-   - `RAG_DOCUMENTS_BUCKET` - должен быть `nv-horizon-rag-documents`
+   - `RAG_DOCUMENTS_BUCKET` - должен быть `prevalent-horizon-test-rag-documents`
    - `GCP_PROJECT_ID` - обязателен
 
 2. **Секреты в Secret Manager**:
@@ -19,7 +19,7 @@
    - Количество проиндексированных документов
 
 4. **GCS Bucket**:
-   - Существование bucket `nv-horizon-rag-documents`
+   - Существование bucket `prevalent-horizon-test-rag-documents`
    - Количество .txt файлов
 
 5. **API**:
@@ -85,7 +85,7 @@ local paypal_secrets="GEMINI_API_KEY=gemini_api_key:latest,..."
 gcloud run services update api \
   --region=us-central1 \
   --update-env-vars="VERTEX_SEARCH_DATA_STORE_ID=rag-documents-store" \
-  --project=nv-horizon
+  --project=prevalent-horizon-test
 ```
 
 ### 2. Выдать роль discoveryengine.editor:

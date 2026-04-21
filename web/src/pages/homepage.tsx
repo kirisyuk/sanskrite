@@ -89,7 +89,7 @@ export default function Homepage() {
 
           <a
             className="homepage-landing__external-link"
-            href="https://nv-horizon.com/platform.html"
+            href="https://www.prevalent.com/horizon"
             target="_blank"
             rel="noreferrer"
           >

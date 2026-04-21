@@ -1,12 +1,12 @@
 {
   "projects": {
-    "default": "horde-horizon-test-20260405"
+    "default": "prevalent-horizon-test"
   },
   "targets": {
-    "horde-horizon-test-20260405": {
+    "prevalent-horizon-test": {
       "hosting": {
         "marketing": [
-          "horde-horizon-marketing"
+          "prevalent-horizon-site"
         ]
       }
     }

@@ -44,13 +44,13 @@ if o.publish != nil {
 **Процесс:**
 1. `PublishJSON()` получает `EventDocProcess`
 2. `routeTopicName()` определяет целевой топик:
-   - `EventDocProcess` → `TopicArtifactEvents` = `"nv_horizon.artifact.events"`
-3. Событие публикуется в топик `nv_horizon.artifact.events` с атрибутами:
+   - `EventDocProcess` → `TopicArtifactEvents` = `"horizon.artifact.events"`
+3. Событие публикуется в топик `horizon.artifact.events` с атрибутами:
    - `tenantId`
    - `eventType: "document.process"`
    - `ts` (timestamp)
 
-**Исправлено:** DocumentProcessor теперь подписывается на `nv_horizon.artifact.events` и фильтрует события по `eventType = "document.process"`.
+**Исправлено:** DocumentProcessor теперь подписывается на `horizon.artifact.events` и фильтрует события по `eventType = "document.process"`.
 
 ---
 
@@ -62,7 +62,7 @@ if o.publish != nil {
 ```go
 worker := discovery.NewDocumentProcessor(
     psClient, 
-    string(realtime.TopicArtifactEvents), // = "nv_horizon.artifact.events"
+    string(realtime.TopicArtifactEvents), // = "horizon.artifact.events"
     docsRepo, 
     rulesRepo, 
     exec, 
@@ -72,8 +72,8 @@ worker := discovery.NewDocumentProcessor(
 ```
 
 **Подписка:**
-- Топик: `nv_horizon.artifact.events`
-- Подписка: `nv_horizon.artifact.events.document-processor.worker`
+- Топик: `horizon.artifact.events`
+- Подписка: `horizon.artifact.events.document-processor.worker`
 - Фильтрация: только события с `eventType = "document.process"`
 
 **Обработка сообщения:**
@@ -197,13 +197,13 @@ worker := discovery.NewDocumentProcessor(
 ### ✅ Исправлено: Несоответствие топиков
 
 **Проблема:**
-- События публикуются в топик `nv_horizon.artifact.events` (через `routeTopicName()`)
+- События публикуются в топик `horizon.artifact.events` (через `routeTopicName()`)
 - DocumentProcessor был подписан на топик `document.process`
 
 **Решение:**
-1. Изменен DocumentProcessor для подписки на `nv_horizon.artifact.events`
+1. Изменен DocumentProcessor для подписки на `horizon.artifact.events`
 2. Добавлена фильтрация по `eventType = "document.process"` в обработчике сообщений
-3. Изменено имя подписки на `nv_horizon.artifact.events.document-processor.worker`
+3. Изменено имя подписки на `horizon.artifact.events.document-processor.worker`
 
 **Изменения:**
 - `backend/cmd/server/main.go:367` - использует `TopicArtifactEvents` вместо `EventDocProcess`

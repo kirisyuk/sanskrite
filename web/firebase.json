@@ -1,6 +1,6 @@
 {
   "hosting": {
-    "site": "horde-horizon-test-20260405",
+    "site": "prevalent-horizon-test",
     "public": "dist",
     "ignore": [
       "firebase.json",

@@ -234,7 +234,7 @@ Texas и Nevada не “ломаются”, а начинают агресси�
 
 Новый runtime закрепил executive-layer как часть `SimulationBundle`, а не как внешний текст.
 
-- AgentMesh revision: `nv-horizon-agentmesh-00032-5mm`
+- AgentMesh revision: `prevalent-horizon-test-agentmesh-00032-5mm`
 - `tesla-legal`: `7ebHDuAX68xxBOWfchXA`
 - `tesla-financial`: `406Tuqpk85VMZ8XYNSgw`
 - `tesla-physical`: `X3MY76CE0sjVyZVec1Bv`
@@ -390,7 +390,7 @@ Texas и Nevada не “ломаются”, а начинают агресси�
 
 ### Live rerun on runtime v4
 
-- AgentMesh revision: `nv-horizon-agentmesh-00034-s28`
+- AgentMesh revision: `prevalent-horizon-test-agentmesh-00034-s28`
 - `tesla-legal`: `SD8AA8nlUWV3dDu24qFH`
 - `tesla-financial`: `uEvYkNIji4wzhovnoXqw`
 - `tesla-physical`: `5S0U6SqvrCVVbuMKzvk8`

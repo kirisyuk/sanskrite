@@ -113,7 +113,7 @@ func NewGeoNamesClient(username string) *GeoNamesClient {
 		// GeoNames HTTPS endpoint uses secure.geonames.org (certificate SANs).
 		// api.geonames.org may work over HTTP, but HTTPS is expected in production.
 		baseURL:   "https://secure.geonames.org",
-		userAgent: "sanskrite/1.0",
+		userAgent: "Horizon/1.0",
 		limiter:   defaultGeoNamesLimiter(),
 	}
 }

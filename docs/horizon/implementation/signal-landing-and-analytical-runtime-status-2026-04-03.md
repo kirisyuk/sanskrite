@@ -482,7 +482,7 @@ Live-наблюдения:
 Что это означает:
 
 - Redis runtime path в коде есть и fallback не ломает систему;
-- но Cloud Run service пока не имеет реально работающей сетевой связности с `nv-horizon-redis`;
+- но Cloud Run service пока не имеет реально работающей сетевой связности с `prevalent-horizon-test-redis`;
 - это инфраструктурный blocker, а не логическая ошибка analytical/runtime слоя.
 
 Следствие:
@@ -804,8 +804,8 @@ Affected zone — это именно карта территории встря
 
 Корневая причина шума оказалась не в BigQuery как сервисе, а в рассинхроне между infra и runtime:
 
-- deploy/setup infra создавал dataset `nv_horizon_test_documents`
-- API runtime по умолчанию смотрел в `nv_horizon_documents`
+- deploy/setup infra создавал dataset `horizon_test_documents`
+- API runtime по умолчанию смотрел в `horizon_documents`
 
 Из-за этого сервис поднимался, включал BigQuery sync, а потом начинал шуметь `not found`.
 
@@ -814,7 +814,7 @@ Affected zone — это именно карта территории встря
 - `scripts/deploy` теперь явно прокидывает `BIGQUERY_DATASET_ID`, вычисленный из project id
 - server init считает BigQuery обязательным, если dataset ID задан явно
 - live revision `api-00076-2jz` стартовала с:
-  - `BigQuery AI service enabled: project=nv-horizon-test, dataset=nv_horizon_test_documents`
+  - `BigQuery AI service enabled: project=prevalent-horizon-test, dataset=horizon_test_documents`
   - без прежнего `Dataset ... not found`
 
 ### Redis / live hot path
@@ -828,12 +828,12 @@ Affected zone — это именно карта территории встря
 Итоговое рабочее решение для live API:
 
 - не connector path
-- а direct VPC egress через выделенную Cloud Run subnet `nv-horizon-run` (`10.20.0.0/26`)
+- а direct VPC egress через выделенную Cloud Run subnet `prevalent-horizon-test-run` (`10.20.0.0/26`)
 
 Что подтверждено:
 
 - live revision `api-00076-2jz` работает с
-  - `run.googleapis.com/network-interfaces: [{"network":"default","subnetwork":"nv-horizon-run"}]`
+  - `run.googleapis.com/network-interfaces: [{"network":"default","subnetwork":"prevalent-horizon-test-run"}]`
   - `run.googleapis.com/vpc-access-egress: private-ranges-only`
 - Redis client на старте инициализируется
 - после live lens-chat запроса по Saudi lens новых `redis: connection pool ... i/o timeout` логов на `00076` не появилось
@@ -848,7 +848,7 @@ Affected zone — это именно карта территории встря
 - в проекте включён `servicenetworking.googleapis.com`
 - создан PSA range `google-managed-services-default`
 - поднят private services access peering `servicenetworking-googleapis-com`
-- начато создание нового Redis instance `nv-horizon-redis-psa` в `PRIVATE_SERVICE_ACCESS`
+- начато создание нового Redis instance `prevalent-horizon-test-redis-psa` в `PRIVATE_SERVICE_ACCESS`
 - `scripts/deploy` уже переведён на PSA Redis как целевой infra path
 
 На момент этого обновления новый PSA Redis ещё в `CREATING`, поэтому финальное переключение API на него и повторная live-проверка Redis hot path остаются последним незавершённым блоком.
@@ -860,19 +860,19 @@ Affected zone — это именно карта территории встря
 Что оказалось корневой причиной на самом деле:
 
 1. старый Redis был в `DIRECT_PEERING`, что само по себе было плохой базой для Cloud Run;
-2. новый PSA Redis поднялся корректно, но Cloud Run subnet `nv-horizon-run` использовала диапазон `10.20.0.0/26`;
+2. новый PSA Redis поднялся корректно, но Cloud Run subnet `prevalent-horizon-test-run` использовала диапазон `10.20.0.0/26`;
 3. default VPC firewall rule `default-allow-internal` пропускала только `10.128.0.0/9`;
 4. из-за этого даже новый PSA Redis формально был жив, но traffic из Cloud Run subnet до него timeout'ился.
 
 Что сделано:
 
 - создан новый Redis instance:
-  - `nv-horizon-redis-psa`
+  - `prevalent-horizon-test-redis-psa`
   - `connectMode=PRIVATE_SERVICE_ACCESS`
   - host `10.26.0.3`
 - API переведён на новый Redis host
 - создан явный firewall rule:
-  - `nv-horizon-run-allow-internal`
+  - `prevalent-horizon-test-run-allow-internal`
   - source range `10.20.0.0/26`
   - allow `tcp,udp,icmp`
 - после этого выпущена новая live revision:
@@ -883,7 +883,7 @@ Affected zone — это именно карта территории встря
 - healthcheck зелёный
 - на старте revision `00080` Redis инициализируется без `i/o timeout`
 - повторный live lens-chat запрос проходит без новых `redis: connection pool ... i/o timeout` логов
-- BigQuery остаётся clean и работает с `nv_horizon_test_documents`
+- BigQuery остаётся clean и работает с `horizon_test_documents`
 
 ### Event-Core / Halo Prioritization
 
@@ -1033,9 +1033,9 @@ Affected zone — это именно карта территории встря
 
 Дополнительная проверка после выката:
 
-- `gcloud scheduler jobs run nv-horizon-source-poller`
-- `gcloud scheduler jobs run nv-horizon-canvas-global`
-- `go run ./backend/cmd/tools/horizon_inspect_signal_landing --project nv-horizon-test --tenant global --limit 4 --include-cycle`
+- `gcloud scheduler jobs run prevalent-horizon-test-source-poller`
+- `gcloud scheduler jobs run prevalent-horizon-test-canvas-global`
+- `go run ./backend/cmd/tools/horizon_inspect_signal_landing --project prevalent-horizon-test --tenant global --limit 4 --include-cycle`
 
 Что подтвердилось:
 
@@ -1110,8 +1110,8 @@ Affected zone — это именно карта территории встря
   - `src_gulf_d0bfb16c924c25ce` (`Energy and Water Sites`) — `documentsProcessed=100`, `documentsCreated=100`
   - `src_gulf_0577e3016e11612d` (`Airspace and Urban Intercepts`) — `documentsProcessed=100`, `documentsCreated=100`
 - scheduler по-прежнему активен:
-  - `nv-horizon-source-poller` — каждые `15m`
-  - `nv-horizon-canvas-global` — каждые `2h`
+  - `prevalent-horizon-test-source-poller` — каждые `15m`
+  - `prevalent-horizon-test-canvas-global` — каждые `2h`
 
 Это означает, что целевой auto-refresh контур уже существует в штатном пайплайне:
 

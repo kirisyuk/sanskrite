@@ -2,8 +2,8 @@ import React, { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useAuth } from '../contexts/AuthContext';
 import { AuthLoading } from './AuthLoading';
-import lightLogo from '../assets/nv-horizon-light-theme.png';
-import darkLogo from '../assets/nv-horizon-dark-theme.png';
+import lightLogo from '../assets/light-theme.png';
+import darkLogo from '../assets/dark-theme.png';
 import { ThemeContext } from './ThemeProvider';
 import { getAuthErrorMessage } from '../lib/authErrorMessage';
 

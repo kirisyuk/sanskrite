@@ -38,7 +38,7 @@ def _install_mock_transport(
 
     monkeypatch.setattr(httpx, "AsyncClient", _patched)
     monkeypatch.setenv("OPENROUTER_API_KEY", "test-key")
-    monkeypatch.setenv("OPENROUTER_APP_TITLE", "sanskrite-test")
+    monkeypatch.setenv("OPENROUTER_APP_TITLE", "horizon-test")
     monkeypatch.setenv("OPENROUTER_HTTP_REFERER", "https://example.local")
     return captured
 
@@ -81,7 +81,7 @@ class TestOpenRouterCriticClient:
         req = captured[0]
         assert req["url"].endswith("/chat/completions")
         assert req["headers"]["authorization"] == "Bearer test-key"
-        assert req["headers"]["x-title"] == "sanskrite-test"
+        assert req["headers"]["x-title"] == "horizon-test"
         body = req["body"]
         assert body["model"] == "z-ai/glm-5.1"
         assert body["response_format"]["type"] == "json_schema"

@@ -33,7 +33,7 @@ type NominatimClient struct {
 //
 // Env:
 //   - NOMINATIM_BASE_URL (default: https://nominatim.openstreetmap.org)
-//   - NOMINATIM_USER_AGENT (required by Nominatim ToS for public instance, default: "sanskrite/1.0")
+//   - NOMINATIM_USER_AGENT (required by Nominatim ToS for public instance, default: "Horizon/1.0")
 //   - NOMINATIM_RATE_LIMIT (requests per second; default: 1 for public, 0=unlimited for self-hosted)
 func NominatimOptionsFromEnv() *NominatimClient {
 	base := strings.TrimSpace(os.Getenv("NOMINATIM_BASE_URL"))
@@ -43,7 +43,7 @@ func NominatimOptionsFromEnv() *NominatimClient {
 	base = strings.TrimRight(base, "/")
 	ua := strings.TrimSpace(os.Getenv("NOMINATIM_USER_AGENT"))
 	if ua == "" {
-		ua = "sanskrite/1.0"
+		ua = "Horizon/1.0"
 	}
 	var lim *rate.Limiter
 	if rps := strings.TrimSpace(os.Getenv("NOMINATIM_RATE_LIMIT")); rps != "" {

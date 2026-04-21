@@ -63,7 +63,7 @@ WS сервер отвечает ACK:
 
 ## Event types (актуальные)
 
-Все события Horizon используют namespace **`horizon.*`** и уходят в отдельный Pub/Sub топик `nv_horizon.horizon.events`.
+Все события Horizon используют namespace **`horizon.*`** и уходят в отдельный Pub/Sub топик `horizon.core.events`.
 
 Envelope всегда одинаковый:
 
@@ -159,8 +159,8 @@ Legacy (kept during migration):
   - `backend/internal/realtime/subscriber.go` (Pub/Sub → WS delivery)
 - **Pub/Sub routing по топикам**
   - `backend/internal/realtime/pubsub.go`
-    - `TopicHorizonEvents = "nv_horizon.horizon.events"`
-    - `routeTopicName(...)` — `horizon.*` → `nv_horizon.horizon.events`
+    - `TopicHorizonEvents = "horizon.core.events"`
+    - `routeTopicName(...)` — `horizon.*` → `horizon.core.events`
 
 ### Hook → Assemble (создание Lens) / Assembly events
 

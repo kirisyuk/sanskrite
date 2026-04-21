@@ -407,7 +407,7 @@ func main() {
 		log.Fatalf("gcs init: %v", err)
 	}
 
-	logger := log.New(os.Stdout, "[sanskrite] ", log.LstdFlags|log.Lshortfile)
+	logger := log.New(os.Stdout, "[horizon] ", log.LstdFlags|log.Lshortfile)
 
 	var horizonSimulationSubmitter *agentmeshsubmitter.Service
 	var horizonAgentMeshSubmitter *agentmeshsubmitter.Service

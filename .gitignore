@@ -119,3 +119,26 @@ paypal-credentials.md
 # Secrets file for deploy (apply-secrets.sh) — never commit!
 scripts/secrets.env
 scripts/create-secrets.sh
+
+# Fork hygiene: binaries / dumps at repo root (re-copy from R4 stale purge list)
+/server
+/horizon_*
+/unstuck_scout_jobs
+backend/.tmp_fs_indexes.json
+firepit-log.txt
+logs*.json
+logs_api.txt
+logs_full.json
+timeline*.txt
+profile_errors.txt
+test_env_check.txt
+graph_structure.txt
+analyze_duplicates.js
+analyze_graph.js
+clean_csv.py
+test-tesla-batteries-logistics.json
+test-tesla-batteries-logistics.sh
+tmpcheck-catl-*.go
+ingress_policy.yaml
+policy.yaml
+web/firepit-log.txt

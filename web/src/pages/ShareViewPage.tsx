@@ -8,8 +8,8 @@ import ChatMessage from '../components/ChatMessage';
 import { api } from '../lib/api';
 import { useTranslation } from 'react-i18next';
 import { ThemeContext } from '../components/ThemeProvider';
-import logoDarkTheme from '../assets/nv-horizon-dark-theme.png';
-import logoLightTheme from '../assets/nv-horizon-light-theme.png';
+import logoDarkTheme from '../assets/dark-theme.png';
+import logoLightTheme from '../assets/light-theme.png';
 
 export default function ShareViewPage() {
   const { token } = useParams<{ token: string }>();

@@ -55,7 +55,7 @@ func NewOpenCorporatesClient(apiToken string) *OpenCorporatesClient {
 		httpClient: &http.Client{
 			Timeout: 15 * time.Second,
 		},
-		userAgent: "sanskrite/1.0",
+		userAgent: "Horizon/1.0",
 	}
 }
 

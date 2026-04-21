@@ -36,7 +36,7 @@ curl -X POST \
 ### Что происходит
 
 1. Эндпоинт находит все документы со статусом `"embedded"` для источника
-2. Асинхронно публикует события `EventDocProcess` в топик `nv_horizon.artifact.events`
+2. Асинхронно публикует события `EventDocProcess` в топик `horizon.artifact.events`
 3. DocumentProcessor получает события и обрабатывает документы:
    - LLM-извлечение (категории, темы, сущности, события, claims)
    - Извлечение онтологии через `OntologyExtractor`

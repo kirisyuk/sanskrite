@@ -26,17 +26,17 @@ cd /Users/kirisyuk/cursor/sanskrite/site
 firebase deploy --only hosting:marketing
 ```
 
-## Привязка к Firebase project `horde-horizon-test-20260405`
+## Привязка к Firebase project `prevalent-horizon-test`
 
 Внешний сайт настроен как отдельный Hosting site внутри того же Firebase project,
 что и платформа.
 
-- Firebase project: `horde-horizon-test-20260405`
+- Firebase project: `prevalent-horizon-test`
 - Hosting target для внешнего сайта: `marketing`
-- Hosting site id для внешнего сайта: `horde-horizon-marketing`
+- Hosting site id для внешнего сайта: `prevalent-horizon-site`
 
 Текущая платформа в `/Users/kirisyuk/cursor/sanskrite/web` продолжает
-деплоиться в default Hosting site `horde-horizon-test-20260405`, поэтому конфиг в `site/`
+деплоиться в default Hosting site `prevalent-horizon-test`, поэтому конфиг в `site/`
 не должен её перезаписывать.
 
 ## One-time setup
@@ -45,7 +45,7 @@ firebase deploy --only hosting:marketing
 
 ```bash
 firebase login --reauth
-firebase hosting:sites:create horde-horizon-marketing --project horde-horizon-test-20260405
+firebase hosting:sites:create prevalent-horizon-site --project prevalent-horizon-test
 ```
 
 После этого деплой внешнего сайта:

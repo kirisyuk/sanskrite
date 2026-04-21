@@ -77,11 +77,11 @@
 
 ### Настройка GDELT в Horizon
 
-1. **BigQuery API** — включён в проекте `nv-horizon`.
+1. **BigQuery API** — включён в проекте `prevalent-horizon-test`.
 2. **GCP_PROJECT_ID** — задаётся при деплое Cloud Run (`scripts/deploy`). Fallback: `GOOGLE_CLOUD_PROJECT` (автоматически в Cloud Run).
 3. **Проверка доступа:**
    ```bash
-   bq query --project_id=nv-horizon --use_legacy_sql=false \
+   bq query --project_id=prevalent-horizon-test --use_legacy_sql=false \
      "SELECT COUNT(*) FROM \`gdelt-bq.gdeltv2.events\` WHERE SQLDATE >= 20260301 LIMIT 1"
    ```
 

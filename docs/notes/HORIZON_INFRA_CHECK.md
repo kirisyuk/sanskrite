@@ -14,7 +14,7 @@
 
 2. **GCS Buckets**
    - ✓ `sanskrite-core-docs` - существует
-   - ✓ `nv-horizon-rag-documents` - существует
+   - ✓ `prevalent-horizon-test-rag-documents` - существует
 
 3. **Vertex AI Search**
    - ✓ Discovery Engine API включен
@@ -22,8 +22,8 @@
 
 4. **Pub/Sub**
    - ✓ Топик `source.poll` - существует
-   - ✓ Топик `nv_horizon.operations.events` - существует
-   - ✓ Топик `nv_horizon.interaction.events` - существует
+   - ✓ Топик `horizon.operations.events` - существует
+   - ✓ Топик `horizon.interaction.events` - существует
    - ✓ Остальные агрегированные топики создаются автоматически
 
 5. **Secret Manager**
@@ -43,7 +43,7 @@
 7. **Переменные окружения Cloud Run**
    - ✓ `VERTEX_SEARCH_DATA_STORE_ID` = `rag-documents-store`
    - ✓ `VERTEX_SEARCH_LOCATION` = `global`
-   - ✓ `RAG_DOCUMENTS_BUCKET` = `nv-horizon-rag-documents`
+   - ✓ `RAG_DOCUMENTS_BUCKET` = `prevalent-horizon-test-rag-documents`
    - ✓ `CORE_DOCS_BUCKET` = `sanskrite-core-docs`
 
 8. **Firestore Security Rules**
@@ -64,7 +64,7 @@ firebase deploy --only firestore:indexes
 
 Или через gcloud:
 ```bash
-gcloud firestore indexes create --project=nv-horizon
+gcloud firestore indexes create --project=prevalent-horizon-test
 ```
 
 ### 3. Настроить Watchdog (рекомендация)
@@ -75,8 +75,8 @@ gcloud firestore indexes create --project=nv-horizon
 
 ## Скрипты для проверки и настройки
 
-1. **`scripts/check-nv-horizon-infra.sh`** - полная проверка инфраструктуры
-2. **`scripts/setup-nv-horizon-pubsub.sh`** - настройка Pub/Sub топиков
+1. **`scripts/check-prevalent-horizon-test-infra.sh`** - полная проверка инфраструктуры
+2. **`scripts/setup-prevalent-horizon-test-pubsub.sh`** - настройка Pub/Sub топиков
 3. **`scripts/create-vertex-search-datastore.sh`** - создание Data Store
 4. **`scripts/setup-horizon-watchdog.md`** - рекомендации по Watchdog
 

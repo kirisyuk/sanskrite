@@ -27,7 +27,7 @@ source .venv/bin/activate
 python3 -m pip install -r requirements.txt
 PYTHONPATH=/Users/kirisyuk/cursor/sanskrite/agents/vertex \
 python3 runner.py \
-  --project horde-horizon-test-20260405 \
+  --project prevalent-horizon-test \
   --canonical-path /fac/ae/jebel-ali-port-terminal
 ```
 

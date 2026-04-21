@@ -43,7 +43,7 @@ Lens:
 - `l8dOd17uKYYTKD0CI9hy`
 
 Manual enrichment tool:
-- `go run ./backend/cmd/tools/horizon_backfill_lens_path_metrics --project nv-horizon --lens l8dOd17uKYYTKD0CI9hy --min-risk 0.6 --exclude-product-contains coal`
+- `go run ./backend/cmd/tools/horizon_backfill_lens_path_metrics --project prevalent-horizon-test --lens l8dOd17uKYYTKD0CI9hy --min-risk 0.6 --exclude-product-contains coal`
 
 Result:
 - `68` path artifacts were written into `lens.scopeArtifacts`
@@ -59,7 +59,7 @@ This was intentionally filtered to exclude obvious off-scope contamination such 
 ## Deployed revisions
 
 - `api-00195-6q6`
-- `nv-horizon-agentmesh-00064-g4q`
+- `prevalent-horizon-test-agentmesh-00064-g4q`
 
 ## Live run
 

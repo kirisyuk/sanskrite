@@ -151,7 +151,7 @@ func (c *WikidataClient) searchEntities(ctx context.Context, searchQuery string,
 	if err != nil {
 		return nil, fmt.Errorf("failed to create search request: %w", err)
 	}
-	req.Header.Set("User-Agent", "Sanskrite/1.0 (https://sanskrite.com)")
+	req.Header.Set("User-Agent", "Horizon/1.0 (https://prevalent.com)")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -209,7 +209,7 @@ func (c *WikidataClient) getEntityData(ctx context.Context, qID string) (*Wikida
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
-	req.Header.Set("User-Agent", "Sanskrite/1.0 (https://sanskrite.com)")
+	req.Header.Set("User-Agent", "Horizon/1.0 (https://prevalent.com)")
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

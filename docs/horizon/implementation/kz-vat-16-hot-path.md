@@ -97,7 +97,7 @@ Hot-path специально ограничен allowlist `policy_impact`:
 Повторяемый entrypoint:
 
 ```bash
-go run ./backend/cmd/tools/horizon_kz_vat_hot_path --project nv-horizon
+go run ./backend/cmd/tools/horizon_kz_vat_hot_path --project prevalent-horizon-test
 ```
 
 Что делает tool:

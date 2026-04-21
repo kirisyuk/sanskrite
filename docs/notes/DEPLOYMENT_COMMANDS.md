@@ -91,7 +91,7 @@ Write-Host "=== Deployment Complete! ===" -ForegroundColor Green
 
 ### 1. Check Backend Logs
 ```bash
-gcloud logs read --project=nv-horizon --service=api --limit=100
+gcloud logs read --project=prevalent-horizon-test --service=api --limit=100
 ```
 
 ### 2. Test Discovery Flow
@@ -163,7 +163,7 @@ wscat -c wss://api-<hash>-uc.a.run.app/ws?token=YOUR_TOKEN
 
 ### View Real-time Logs
 ```bash
-gcloud logs tail --project=nv-horizon --resource-type=cloud_run_revision
+gcloud logs tail --project=prevalent-horizon-test --resource-type=cloud_run_revision
 ```
 
 

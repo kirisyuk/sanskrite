@@ -605,7 +605,7 @@ LIMIT %d
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/sparql-results+json")
-	req.Header.Set("User-Agent", "Sanskrite/1.0 (https://sanskrite.com)")
+	req.Header.Set("User-Agent", "Horizon/1.0 (https://prevalent.com)")
 
 	// Use a short-lived client; callers already provide ctx. Keep it simple.
 	client := &http.Client{Timeout: 20 * time.Second}

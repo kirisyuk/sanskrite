@@ -28,7 +28,7 @@ func GraphIntentDraft07SchemaJSON(name string) ([]byte, error) {
 func GraphIntentPlanRequestSchemaDraft07() map[string]interface{} {
 	return map[string]interface{}{
 		"$schema":              graphIntentDraft07SchemaURI,
-		"$id":                  "https://sanskrite.dev/schemas/horizon/graph-intent/plan-request.v1.schema.json",
+		"$id":                  "https://horizon.prevalent.com/schemas/graph-intent/plan-request.v1.schema.json",
 		"title":                "GraphIntentPlanRequest",
 		"type":                 "object",
 		"additionalProperties": false,
@@ -65,7 +65,7 @@ func GraphIntentPlanRequestSchemaDraft07() map[string]interface{} {
 func GraphIntentPlanResponseSchemaDraft07() map[string]interface{} {
 	return map[string]interface{}{
 		"$schema":              graphIntentDraft07SchemaURI,
-		"$id":                  "https://sanskrite.dev/schemas/horizon/graph-intent/plan-response.v1.schema.json",
+		"$id":                  "https://horizon.prevalent.com/schemas/graph-intent/plan-response.v1.schema.json",
 		"title":                "GraphIntentPlanResponse",
 		"type":                 "object",
 		"additionalProperties": false,
@@ -139,7 +139,7 @@ func GraphIntentPlanResponseSchemaDraft07() map[string]interface{} {
 func GraphIntentApplyRequestSchemaDraft07() map[string]interface{} {
 	return map[string]interface{}{
 		"$schema":              graphIntentDraft07SchemaURI,
-		"$id":                  "https://sanskrite.dev/schemas/horizon/graph-intent/apply-request.v1.schema.json",
+		"$id":                  "https://horizon.prevalent.com/schemas/graph-intent/apply-request.v1.schema.json",
 		"title":                "GraphIntentApplyRequest",
 		"type":                 "object",
 		"additionalProperties": false,
@@ -172,7 +172,7 @@ func GraphIntentApplyRequestSchemaDraft07() map[string]interface{} {
 func GraphIntentApplyResponseSchemaDraft07() map[string]interface{} {
 	return map[string]interface{}{
 		"$schema":              graphIntentDraft07SchemaURI,
-		"$id":                  "https://sanskrite.dev/schemas/horizon/graph-intent/apply-response.v1.schema.json",
+		"$id":                  "https://horizon.prevalent.com/schemas/graph-intent/apply-response.v1.schema.json",
 		"title":                "GraphIntentApplyResponse",
 		"type":                 "object",
 		"additionalProperties": false,
