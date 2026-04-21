@@ -1,21 +1,8 @@
-package risk
+package focusobject
 
-import (
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
-)
+import "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 
-// Package-local aliases that retain the legacy DependencyType/FragmentType
-// vocabulary used throughout the risk package while we run the AH taxonomy
-// "Big Bang" migration. Source-of-truth mapping:
-// docs/taxonomy/migration_map.yaml.
-//
-// See backend/internal/horizon/scout/legacy_aliases.go for the canonical
-// template — this file is a verbatim per-package replica.
-
-// FragmentType is the risk-local alias for ah.FragmentClass.
 type FragmentType = ah.FragmentClass
-
-// DependencyType is the risk-local alias for ah.RelationName.
 type DependencyType = ah.RelationName
 
 const (
@@ -95,4 +82,5 @@ const (
 	DependencyTypeRelatedDomain       DependencyType = "related_domain"
 	DependencyTypeBroadensTo          DependencyType = "broadens_to"
 	DependencyTypeNarrowsTo           DependencyType = "narrows_to"
+	DependencyTypeConsumes            DependencyType = "consumes"
 )

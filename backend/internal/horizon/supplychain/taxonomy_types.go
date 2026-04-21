@@ -1,16 +1,6 @@
 package supplychain
 
-import (
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
-)
-
-// Package-local aliases that retain the legacy DependencyType/FragmentType
-// vocabulary used throughout the supplychain package while we run the AH
-// taxonomy "Big Bang" migration. Source-of-truth mapping:
-// docs/taxonomy/migration_map.yaml.
-//
-// See backend/internal/horizon/scout/legacy_aliases.go for the canonical
-// template — this file is a verbatim per-package replica.
+import "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 
 type FragmentType = ah.FragmentClass
 type DependencyType = ah.RelationName
@@ -42,11 +32,8 @@ const (
 	DependencyTypeUsedIn         DependencyType = "used_in"
 )
 
-// ProductTransitionEdgeTypes returns the canonical set of product->product
-// transition relations consumed by supply-chain pathfinding. Mirror of the
-// legacy models.ProductTransitionEdgeTypes() helper (now lives in
-// pathbuilder/legacy_aliases.go) — replicated locally to avoid an
-// import cycle with pathbuilder.
+// ProductTransitionEdgeTypes returns product→product transition relations for pathfinding.
+// Kept local to avoid an import cycle with pathbuilder.
 func ProductTransitionEdgeTypes() []DependencyType {
 	return []DependencyType{
 		DependencyTypeTransformsInto,

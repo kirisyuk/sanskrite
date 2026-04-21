@@ -1,21 +1,9 @@
-package importance
+package manualresolve
 
-import (
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
-)
+import "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 
-// Package-local aliases that retain the legacy DependencyType/FragmentType
-// vocabulary used throughout the importance package while we run the AH
-// taxonomy "Big Bang" migration. Source-of-truth mapping:
-// docs/taxonomy/migration_map.yaml.
-//
-// See backend/internal/horizon/scout/legacy_aliases.go for the canonical
-// template — this file is a verbatim per-package replica.
-
-// FragmentType is the importance-local alias for ah.FragmentClass.
+// FragmentType and DependencyType name ah.FragmentClass / ah.RelationName within this package.
 type FragmentType = ah.FragmentClass
-
-// DependencyType is the importance-local alias for ah.RelationName.
 type DependencyType = ah.RelationName
 
 const (
@@ -95,6 +83,26 @@ const (
 	DependencyTypeRelatedDomain       DependencyType = "related_domain"
 	DependencyTypeBroadensTo          DependencyType = "broadens_to"
 	DependencyTypeNarrowsTo           DependencyType = "narrows_to"
-	DependencyTypeConsumes            DependencyType = "consumes"
-	DependencyTypeTriggeredBy         DependencyType = "triggered_by"
+)
+
+const (
+	QualifierTransportVia                = "transport_via"
+	QualifierAtFacility                  = "at_facility"
+	QualifierFlowRefs                    = "flow_refs"
+	QualifierZoneRefs                    = "zone_refs"
+	QualifierAffectedZoneRefs            = "affected_zone_refs"
+	QualifierFacet                       = "facet"
+	QualifierTransmissionContractVersion = "transmission_contract_version"
+	QualifierTransmissionContractStatus  = "transmission_contract_status"
+	QualifierTransmissionContractMode    = "transmission_contract_mode"
+	QualifierTransmissionContractMissing = "transmission_contract_missing"
+
+	TransmissionContractVersionV1 = "v1"
+
+	TransmissionContractStatusComplete = "complete"
+	TransmissionContractStatusPartial  = "partial"
+	TransmissionContractStatusMissing  = "missing"
+
+	TransmissionContractModeInferred = "inferred"
+	TransmissionContractModeExplicit = "explicit"
 )

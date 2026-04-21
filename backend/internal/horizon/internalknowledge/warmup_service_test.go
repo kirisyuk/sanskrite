@@ -125,7 +125,8 @@ func TestShouldRetryWarmStateWrite(t *testing.T) {
 }
 
 func TestPendingImportStillActiveTreatsFreshManagedBatchAsLive(t *testing.T) {
-	now := time.Date(2026, time.April, 6, 9, 0, 0, 0, time.UTC)
+	// pendingImportStillActive compares metadata times to time.Now(); keep offsets relative to "now".
+	now := time.Now().UTC()
 	svc := &WarmupService{
 		cfg: WarmupConfig{
 			ImportWaitTimeout: 45 * time.Minute,
@@ -153,7 +154,7 @@ func TestPendingImportStillActiveTreatsFreshManagedBatchAsLive(t *testing.T) {
 }
 
 func TestPendingImportStillActiveAllowsRecoveryWhenManagedBatchLooksStalled(t *testing.T) {
-	now := time.Date(2026, time.April, 6, 9, 0, 0, 0, time.UTC)
+	now := time.Now().UTC()
 	svc := &WarmupService{
 		cfg: WarmupConfig{
 			ImportWaitTimeout: 30 * time.Minute,

@@ -6,7 +6,7 @@ import (
 
 // Additional package-local typed constants used by the legacy policy code that
 // still reasons in legacy DependencyType / FragmentType vocabulary. These
-// supplement legacy_aliases.go (which is reserved for the canonical aliases
+// supplement wire_constants.go (canonical AH + wire-boundary relation keys
 // listed in the task spec) and are required to keep policy rules matching
 // legacy wire payloads while everything is being migrated to the AH SoT.
 //
@@ -61,12 +61,12 @@ const (
 	relRebrandedTo         ah.RelationName = "rebranded_to"         // -> attributes.name_history
 	relLegalSuccessorOf    ah.RelationName = "legal_successor_of"   // -> reverse(merged_into)
 	relMergedInto                          = ah.RelationNameMergedInto
-	relSpunOffFrom         ah.RelationName = "spun_off_from"        // -> reverse(spun_out)
-	relAcquiredBy          ah.RelationName = "acquired_by"          // -> reverse(acquired_stake_from)
-	relTriggeredBy         ah.RelationName = "triggered_by"         // -> attributes.triggers
-	relHasSubmarket        ah.RelationName = "has_submarket"        // -> attributes.submarkets
-	relSuppliesTo2         ah.RelationName = "supplies_to"          // legacy SUPPLIES_TO wire spelling
-	relParticipatesIn2     ah.RelationName = "participates_in"      // alias for cross-file use
+	relSpunOffFrom         ah.RelationName = "spun_off_from"   // -> reverse(spun_out)
+	relAcquiredBy          ah.RelationName = "acquired_by"     // -> reverse(acquired_stake_from)
+	relTriggeredBy         ah.RelationName = "triggered_by"    // -> attributes.triggers
+	relHasSubmarket        ah.RelationName = "has_submarket"   // -> attributes.submarkets
+	relSuppliesTo2         ah.RelationName = "supplies_to"     // legacy SUPPLIES_TO wire spelling
+	relParticipatesIn2     ah.RelationName = "participates_in" // alias for cross-file use
 )
 
 // ---- legacy fragment-class aliases ----
@@ -77,15 +77,15 @@ const (
 // constants below map only to the AH class; subtype handling lives in the
 // fragment_path_policy / canonicalizer layer.
 const (
-	classMediaChannel = ah.FragmentClassOrg      // subtype=media_channel
-	classAffectedZone = ah.FragmentClassGeo      // subtype=affected_zone
-	classEvent        = ah.FragmentClassEvidence // subtype=event
+	classMediaChannel  = ah.FragmentClassOrg      // subtype=media_channel
+	classAffectedZone  = ah.FragmentClassGeo      // subtype=affected_zone
+	classEvent         = ah.FragmentClassEvidence // subtype=event
 	classDecisionPoint = ah.FragmentClassDecision
-	classSupplyLink2  = ah.FragmentClassSite     // subtype=supply_link (alias for legacy_aliases.go)
-	classRoute        = ah.FragmentClassRoute
-	classRegime       = ah.FragmentClassRegime
-	classProject      = ah.FragmentClassProject
-	classVesselClass  = ah.FragmentClassVesselClass
+	classSupplyLink2   = ah.FragmentClassSite // subtype=supply_link (secondary class alias)
+	classRoute         = ah.FragmentClassRoute
+	classRegime        = ah.FragmentClassRegime
+	classProject       = ah.FragmentClassProject
+	classVesselClass   = ah.FragmentClassVesselClass
 )
 
 // silence unused warnings for forward-decl helpers (kept for future migrations).
