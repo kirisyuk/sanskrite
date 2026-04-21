@@ -439,7 +439,7 @@ func TestGeneralEnrichmentPrompt_ModularContract(t *testing.T) {
 	input := ResearchStrategyInput{
 		Fragment: &models.HorizonFragment{
 			CanonicalPath: "/fac/global/red-sea-corridor",
-			Class:          FragmentTypeFacility,
+			Class:          ah.FragmentClassSite,
 			Qualifiers:    map[string]interface{}{"route": true},
 		},
 		MissingInfo:      []string{"Find key logistics operators"},
@@ -470,7 +470,7 @@ func TestGeneralEnrichmentPrompt_ModularContract(t *testing.T) {
 func TestGeneralEnrichmentPrompt_OwnsDirectionGuardrails(t *testing.T) {
 	a := NewResearchAgent(nil)
 	input := ResearchStrategyInput{
-		Fragment:    &models.HorizonFragment{CanonicalPath: "/org/us/example", Class: FragmentTypeOrganization},
+		Fragment:    &models.HorizonFragment{CanonicalPath: "/org/us/example", Class: ah.FragmentClassOrg},
 		MissingInfo: []string{"Who owns this org?"},
 	}
 	prompt := a.buildGeneralEnrichmentPrompt(input)
@@ -513,7 +513,7 @@ func TestGeneralEnrichmentPrompt_DomainOverride(t *testing.T) {
 func TestModePrompts_UseUSOTRelationAllowlists(t *testing.T) {
 	a := NewResearchAgent(nil)
 	baseInput := ResearchStrategyInput{
-		Fragment:    &models.HorizonFragment{CanonicalPath: "/org/us/example", Class: FragmentTypeOrganization},
+		Fragment:    &models.HorizonFragment{CanonicalPath: "/org/us/example", Class: ah.FragmentClassOrg},
 		MissingInfo: []string{"collect key relations"},
 	}
 
@@ -592,7 +592,7 @@ func TestModePrompts_UseUSOTRelationAllowlists(t *testing.T) {
 func TestSupplyChainEnrichmentPrompt_StrictSupplyChainsContractBlock(t *testing.T) {
 	a := NewResearchAgent(nil)
 	input := ResearchStrategyInput{
-		Fragment:    &models.HorizonFragment{CanonicalPath: "/fac/kz/aktau-sea-port", Class: FragmentTypeFacility},
+		Fragment:    &models.HorizonFragment{CanonicalPath: "/fac/kz/aktau-sea-port", Class: ah.FragmentClassSite},
 		MissingInfo: []string{"Find route links"},
 	}
 	prompt := a.buildSupplyChainEnrichmentPrompt(input)

@@ -2,10 +2,11 @@ package agents
 
 import (
 	"context"
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 // CriticPipeline runs domain-specific validators and merges results.
@@ -49,7 +50,7 @@ func (p *CriticPipelineRunner) Validate(ctx context.Context, input CriticValidat
 	if hasStrategic && input.Fragment != nil && p.agent != nil {
 		ft := input.Fragment.Class
 		cp := strings.ToLower(strings.TrimSpace(input.Fragment.CanonicalPath))
-		isStrategicEntity := ft == FragmentTypeDecisionPoint || ft == FragmentTypeMechanism ||
+		isStrategicEntity := ft == ah.FragmentClassDecision || ft == ah.FragmentClassMechanism ||
 			strings.HasPrefix(cp, "/decision/") || strings.HasPrefix(cp, "/mechanism/")
 		if !isStrategicEntity {
 			isStrategicEntity = hasStrategicRelations(input.Relations)
@@ -179,8 +180,11 @@ func mergeValidationResults(a, b *ValidationResult) *ValidationResult {
 // hasStrategicRelations returns true if any relation type maps to SemanticGroupStrategic.
 func hasStrategicRelations(relations []DiscoveredRelation) bool {
 	for _, r := range relations {
-		dt := DependencyType(strings.ToUpper(strings.TrimSpace(r.RelationType)))
-		if SemanticGroupForEdgeType(dt) == SemanticGroupStrategic {
+		dec, ok := models.NormalizeRelationName(strings.TrimSpace(r.RelationType))
+		if !ok || dec.Dropped || dec.Relation == "" {
+			continue
+		}
+		if SemanticGroupForEdgeType(dec.Relation) == SemanticGroupStrategic {
 			return true
 		}
 	}

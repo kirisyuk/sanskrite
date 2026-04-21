@@ -1,9 +1,9 @@
 package scout
 
 import (
-	"testing"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"testing"
 )
 
 func TestDetectFacilityQualifierSemanticFromFragment(t *testing.T) {
@@ -15,7 +15,7 @@ func TestDetectFacilityQualifierSemanticFromFragment(t *testing.T) {
 		{
 			name: "explicit object qualifier route",
 			frag: &models.HorizonFragment{
-				Class:          FragmentTypeFacility,
+				Class:          ah.FragmentClassSite,
 				CanonicalPath: "/fac/sa/east-west-corridor",
 				Identifiers:   map[string]string{"objectQualifier": "route"},
 			},
@@ -24,7 +24,7 @@ func TestDetectFacilityQualifierSemanticFromFragment(t *testing.T) {
 		{
 			name: "route qualifier",
 			frag: &models.HorizonFragment{
-				Class:          FragmentTypeFacility,
+				Class:          ah.FragmentClassSite,
 				CanonicalPath: "/fac/ae/jebel-ali-corridor",
 				Qualifiers:    map[string]interface{}{"route": true},
 			},
@@ -33,7 +33,7 @@ func TestDetectFacilityQualifierSemanticFromFragment(t *testing.T) {
 		{
 			name: "procurement qualifier",
 			frag: &models.HorizonFragment{
-				Class:          FragmentTypeFacility,
+				Class:          ah.FragmentClassSite,
 				CanonicalPath: "/fac/us/vendor-gateway",
 				Qualifiers:    map[string]interface{}{"facilityRole": "procurement hub"},
 			},
@@ -42,7 +42,7 @@ func TestDetectFacilityQualifierSemanticFromFragment(t *testing.T) {
 		{
 			name: "supply qualifier",
 			frag: &models.HorizonFragment{
-				Class:          FragmentTypeFacility,
+				Class:          ah.FragmentClassSite,
 				CanonicalPath: "/fac/de/supplier-park",
 				Identifiers:   map[string]string{"supplyChainRole": "supplier"},
 			},
@@ -51,7 +51,7 @@ func TestDetectFacilityQualifierSemanticFromFragment(t *testing.T) {
 		{
 			name: "no qualifier",
 			frag: &models.HorizonFragment{
-				Class:          FragmentTypeFacility,
+				Class:          ah.FragmentClassSite,
 				CanonicalPath: "/fac/de/manufacturing-plant",
 			},
 			want: facilityQualifierSemanticNone,
@@ -68,12 +68,12 @@ func TestDetectFacilityQualifierSemanticFromFragment(t *testing.T) {
 
 func TestShouldSkipSameFacilityQualifierRecursion(t *testing.T) {
 	routeSource := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/global/red-sea-corridor",
 		Qualifiers:    map[string]interface{}{"route": true},
 	}
 	routeTarget := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/global/suez-route",
 		Qualifiers:    map[string]interface{}{"route_path": []interface{}{"/loc/eg/suez"}},
 	}
@@ -82,12 +82,12 @@ func TestShouldSkipSameFacilityQualifierRecursion(t *testing.T) {
 	}
 
 	supplySource := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/cn/supplier-cluster",
 		Identifiers:   map[string]string{"supplyChainRole": "supplier"},
 	}
 	procurementTarget := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/us/procurement-center",
 		Qualifiers:    map[string]interface{}{"role": "procurement"},
 	}
@@ -96,7 +96,7 @@ func TestShouldSkipSameFacilityQualifierRecursion(t *testing.T) {
 	}
 
 	supplyTarget := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/pl/downstream-supplier",
 		Qualifiers:    map[string]interface{}{"supplyRole": "supplier"},
 	}
@@ -108,17 +108,17 @@ func TestShouldSkipSameFacilityQualifierRecursion(t *testing.T) {
 func TestIsFacilityQualifierBusinessRelation_Route(t *testing.T) {
 	if isFacilityQualifierBusinessRelation(
 		facilityQualifierSemanticRoute,
-		string(DependencyTypeManages),
+		string(ah.RelationNameManagedBy),
 		"/person/jane-doe",
-		FragmentTypePerson,
+		ah.FragmentClassPerson,
 	) {
 		t.Fatalf("route fac should not keep person/governance relation for business scouting")
 	}
 	if !isFacilityQualifierBusinessRelation(
 		facilityQualifierSemanticRoute,
-		string(DependencyTypeDependsOn),
+		string(ah.RelationNameSupplies),
 		"/org/sg/maersk",
-		FragmentTypeOrganization,
+		ah.FragmentClassOrg,
 	) {
 		t.Fatalf("route fac should keep business dependency to logistics org")
 	}

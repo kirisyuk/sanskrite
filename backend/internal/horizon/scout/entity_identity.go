@@ -1,11 +1,11 @@
 package scout
 
 import (
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 func normalizeIdentityText(in string) string {
@@ -85,7 +85,7 @@ func buildRelationTargetIdentityKey(rel agents.DiscoveredRelation, canonicalPath
 	name := bestNameForIdentityFromRelation(rel)
 	nameNorm := normalizeIdentityText(name)
 	switch fragType {
-	case FragmentTypeProduct:
+	case ah.FragmentClassProduct:
 		slug := leafSlug(canonicalPath)
 		if slug != "" && slug != "na" {
 			return "product|slug=" + slug
@@ -93,7 +93,7 @@ func buildRelationTargetIdentityKey(rel agents.DiscoveredRelation, canonicalPath
 		if nameNorm != "" {
 			return "product|name=" + nameNorm
 		}
-	case FragmentTypeOrganization:
+	case ah.FragmentClassOrg:
 		cc := extractPathJurisdiction(canonicalPath)
 		slug := stripSlugLegalForm(leafSlug(canonicalPath))
 		orgNorm := NormalizeLegalName(name)
@@ -112,7 +112,7 @@ func buildRelationTargetIdentityKey(rel agents.DiscoveredRelation, canonicalPath
 		if len(parts) > 1 {
 			return strings.Join(parts, "|")
 		}
-	case FragmentTypeMarket:
+	case ah.FragmentClassMarket:
 		geo, domain := extractMarketPathGeoDomain(canonicalPath)
 		slug := leafSlug(canonicalPath)
 		parts := []string{"market"}

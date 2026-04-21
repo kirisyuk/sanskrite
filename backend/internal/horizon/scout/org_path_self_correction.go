@@ -4,15 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"os"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 type orgPathUpgrade struct {
@@ -101,7 +101,7 @@ func orgCanonicalizationLabel(fragment *models.HorizonFragment, oldPath string) 
 }
 
 func (e *ScoutEngine) maybeUpgradeLegacyOrgPath(_ context.Context, fragment *models.HorizonFragment, effectiveCanonicalPath string) *orgPathUpgrade {
-	if fragment == nil || fragment.Class != FragmentTypeOrganization {
+	if fragment == nil || fragment.Class != ah.FragmentClassOrg {
 		return nil
 	}
 	oldPath := strings.TrimSpace(effectiveCanonicalPath)

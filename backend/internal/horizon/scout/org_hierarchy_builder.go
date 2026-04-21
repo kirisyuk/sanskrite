@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-	"time"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
+	"time"
 )
 
 // =============================================================================
@@ -64,7 +64,7 @@ func (b *OrgHierarchyBuilder) EnsureOrgHierarchy(
 	if b == nil || b.fragmentsRepo == nil || b.edgesRepo == nil {
 		return nil
 	}
-	if fragment == nil || fragment.Class != FragmentTypeOrganization {
+	if fragment == nil || fragment.Class != ah.FragmentClassOrg {
 		return nil
 	}
 	if fragmentID == "" {
@@ -152,7 +152,7 @@ func (b *OrgHierarchyBuilder) inferParentName(name string) string {
 // generateOrgPath creates a canonical path for an organization name.
 func (b *OrgHierarchyBuilder) generateOrgPath(name string) string {
 	fragment := &models.HorizonFragment{
-		Class: FragmentTypeOrganization,
+		Class: ah.FragmentClassOrg,
 		Labels: map[string]string{
 			"en": strings.TrimSpace(name),
 		},
@@ -178,7 +178,7 @@ func (b *OrgHierarchyBuilder) ensureParentOrg(ctx context.Context, path, name, _
 	// Create minimal parent org fragment
 	f := &models.HorizonFragment{
 		CanonicalPath: path,
-		Class:          FragmentTypeOrganization,
+		Class:          ah.FragmentClassOrg,
 		Labels: map[string]string{
 			"en": name,
 		},
@@ -218,7 +218,7 @@ func (b *OrgHierarchyBuilder) ensureParentOrg(ctx context.Context, path, name, _
 // ensureOwnsEdge creates an OWNS edge from parent to child if it doesn't exist.
 func (b *OrgHierarchyBuilder) ensureOwnsEdge(ctx context.Context, parentID, childID, provenanceMethod, sourceID string) error {
 	// Check if edge already exists
-	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", parentID, childID, DependencyTypeOwns)
+	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", parentID, childID, ah.RelationNameBeneficiallyOwns)
 	if err == nil {
 		return nil // Already exists
 	}
@@ -231,7 +231,7 @@ func (b *OrgHierarchyBuilder) ensureOwnsEdge(ctx context.Context, parentID, chil
 		TenantID:         "global",
 		SourceFragmentID: parentID,
 		TargetFragmentID: childID,
-		Relation:             DependencyTypeOwns,
+		Relation:             ah.RelationNameBeneficiallyOwns,
 		Properties: models.EdgeProperties{
 			Criticality:   0.7,
 			Amplification: 1.0,

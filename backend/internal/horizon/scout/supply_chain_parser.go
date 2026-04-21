@@ -4,14 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/wirekeys"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/supplysemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 // SupplyChainParser converts supply chain objects from agent output
@@ -189,7 +190,7 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 				} else if edge != nil {
 					result.Edges = append(result.Edges, edge)
 					result.Stats.EdgesCreated++
-					if edge.RelationType == string(DependencyTypeDependsOn) &&
+					if edge.RelationType == string(ah.RelationNameSupplies) &&
 						strings.TrimSpace(edge.SourceCanonicalPath) == strings.TrimSpace(nextPath) &&
 						strings.TrimSpace(edge.TargetCanonicalPath) == strings.TrimSpace(canonicalPath) {
 						// This corresponds to the product->actor inversion case.
@@ -219,7 +220,7 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 							Confidence:          chain.Confidence,
 							Reason:              fmt.Sprintf("Supply chain: %s transitions into %s at %s. %s", prevNode.Name, nextNode.Name, node.Name, chain.Reason),
 							Qualifiers: map[string]interface{}{
-								QualifierAtFacility: facPath,
+								wirekeys.QualifierAtFacility: facPath,
 							},
 						}
 						result.Edges = append(result.Edges, transformEdge)
@@ -355,7 +356,7 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 				"product_ref":     prodPath,
 			}
 			if len(seg.TransportViaRefs) > 0 {
-				supQualifiers[QualifierTransportVia] = seg.TransportViaRefs
+				supQualifiers[wirekeys.QualifierTransportVia] = seg.TransportViaRefs
 			}
 			supReason := fmt.Sprintf("Supply chain: %s supplies %s to %s. %s", a.Name, prod.Name, b.Name, chain.Reason)
 			if len(seg.TransportViaRefs) > 0 {
@@ -364,7 +365,7 @@ func (p *SupplyChainParser) ParseSupplyChains(chains []agents.SupplyChain, sourc
 			result.Edges = append(result.Edges, &ChainEdge{
 				SourceCanonicalPath: srcPath,
 				TargetCanonicalPath: dstPath,
-				RelationType:        string(DependencyTypeSuppliesTo),
+				RelationType:        string(ah.RelationNameSupplies),
 				Confidence:          chain.Confidence,
 				Reason:              supReason,
 				Qualifiers:          supQualifiers,
@@ -540,7 +541,7 @@ func (p *SupplyChainParser) createTransportFacilityFragment(canonicalPath string
 	}
 	return &models.HorizonFragment{
 		CanonicalPath: canonicalPath,
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		Labels:        map[string]string{"en": name},
 		Identifiers:   identifiers,
 		State:         make(map[string]models.MetricValue),
@@ -574,7 +575,7 @@ func (p *SupplyChainParser) createFragmentFromNode(node agents.SupplyChainNode) 
 	if name != "" {
 		frag.Labels["en"] = name
 		frag.Identifiers["shortName"] = name
-		if fragType == FragmentTypeOrganization && strings.TrimSpace(frag.Identifiers["legalName"]) == "" {
+		if fragType == ah.FragmentClassOrg && strings.TrimSpace(frag.Identifiers["legalName"]) == "" {
 			frag.Identifiers["legalName"] = name
 		}
 	}
@@ -585,7 +586,7 @@ func (p *SupplyChainParser) createFragmentFromNode(node agents.SupplyChainNode) 
 		frag.Identifiers["supplyChainRole"] = role
 	}
 	// Set facilityType (supply chain role) and facilityKind (physical type) for FACILITY
-	if fragType == FragmentTypeFacility {
+	if fragType == ah.FragmentClassSite {
 		if ft := taxonomy.NormalizeFacilityRole(strings.TrimSpace(node.FacilityType)); ft != "" {
 			frag.Identifiers["facilityType"] = string(ft)
 		}
@@ -605,52 +606,52 @@ func (p *SupplyChainParser) createFragmentFromNode(node agents.SupplyChainNode) 
 
 // inferFragmentType determines the fragment type from node type or canonical path.
 //
-// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeProgram and FragmentTypeDeposit
+// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassOrg and ah.FragmentClassSite
 // collapsed onto (org, program) and (site, deposit) respectively. This function
 // returns the parent FragmentClass only; subtype assignment is handled by
 // createFragmentFromNode via InferClassSubtypeFromCanonicalPath, so the returned
-// class for PROGRAM is FragmentTypeOrganization and for DEPOSIT is FragmentTypeFacility.
+// class for PROGRAM is ah.FragmentClassOrg and for DEPOSIT is ah.FragmentClassSite.
 func (p *SupplyChainParser) inferFragmentType(nodeType string, canonicalPath string) FragmentType {
 	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
 
 	switch nodeType {
 	case "ORGANIZATION":
-		return FragmentTypeOrganization
+		return ah.FragmentClassOrg
 	case "FACILITY":
-		return FragmentTypeFacility
+		return ah.FragmentClassSite
 	case "PRODUCT":
-		return FragmentTypeProduct
+		return ah.FragmentClassProduct
 	case "PROGRAM":
-		return FragmentTypeOrganization
+		return ah.FragmentClassOrg
 	case "MARKET":
-		return FragmentTypeMarket
+		return ah.FragmentClassMarket
 	case "GEO_REGION":
-		return FragmentTypeGeoRegion
+		return ah.FragmentClassGeo
 	case "DEPOSIT":
-		return FragmentTypeFacility
+		return ah.FragmentClassSite
 	case "COMMUNITY":
-		return FragmentTypeCommunity
+		return ah.FragmentClassCommunity
 	}
 
 	// Fallback: infer from canonical path prefix
 	canonicalPath = strings.TrimSpace(canonicalPath)
 	switch {
 	case strings.HasPrefix(canonicalPath, "/org/"):
-		return FragmentTypeOrganization
+		return ah.FragmentClassOrg
 	case strings.HasPrefix(canonicalPath, "/fac/"):
-		return FragmentTypeFacility
+		return ah.FragmentClassSite
 	case strings.HasPrefix(canonicalPath, "/product/"):
-		return FragmentTypeProduct
+		return ah.FragmentClassProduct
 	case strings.HasPrefix(canonicalPath, "/program/"):
-		return FragmentTypeOrganization
+		return ah.FragmentClassOrg
 	case strings.HasPrefix(canonicalPath, "/market/"):
-		return FragmentTypeMarket
+		return ah.FragmentClassMarket
 	case strings.HasPrefix(canonicalPath, "/loc/"):
-		return FragmentTypeGeoRegion
+		return ah.FragmentClassGeo
 	case strings.HasPrefix(canonicalPath, "/deposit/"):
-		return FragmentTypeFacility
+		return ah.FragmentClassSite
 	case strings.HasPrefix(canonicalPath, "/community/"):
-		return FragmentTypeCommunity
+		return ah.FragmentClassCommunity
 	}
 
 	return ""
@@ -696,13 +697,13 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 	// Use CONTROLS for /gov/ sources, OWNS for /org/ (and generic org) sources.
 	case fromIsOrg && toIsFac:
 		if strings.HasPrefix(fromPath, "/gov/") {
-			return mkEdge(string(DependencyTypeControls)), false
+			return mkEdge(string(ah.RelationNameControlsVia)), false
 		}
-		return mkEdge(string(DependencyTypeOwns)), false
+		return mkEdge(string(ah.RelationNameBeneficiallyOwns)), false
 
 	// fac → product: facility produces product
 	case fromIsFac && toIsProduct:
-		return mkEdge(string(DependencyTypeProduces)), false
+		return mkEdge(string(ah.RelationNameProduces)), false
 
 	// product → fac: abstain. Product is not a valid SUPPLIES_TO source.
 	// Facility-to-facility flow is materialized separately via SupplyLink segments.
@@ -716,7 +717,7 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 
 	// Generic actor → product (fallback for non-fac actors)
 	case fromIsActor && toIsProduct:
-		return mkEdge(string(DependencyTypeProduces)), false
+		return mkEdge(string(ah.RelationNameProduces)), false
 
 	// product → actor (non-fac): abstain for non-facility actors
 	case fromIsProduct && toIsActor && !toIsFac:
@@ -724,7 +725,7 @@ func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNo
 
 	// fac → deposit: extraction
 	case fromIsFac && p.isDepositType(to.Type, toPath):
-		return mkEdge(string(DependencyTypeExtractsFrom)), false
+		return mkEdge(string(DependencyType("extracts_from"))), false
 
 	// actor → actor: no direct edge between same-level actors
 	case fromIsActor && toIsActor:
@@ -750,7 +751,7 @@ func (p *SupplyChainParser) normalizeProductRelation(sourcePath, targetPath stri
 	sourcePath = normalizeSupplyChainCanonicalPath(sourcePath)
 	targetPath = normalizeSupplyChainCanonicalPath(targetPath)
 	if sourcePath == "" || targetPath == "" {
-		return sourcePath, targetPath, DependencyTypeTransformsInto
+		return sourcePath, targetPath, ah.RelationNameProduces
 	}
 	if p != nil && p.productDictionary != nil {
 		if resolution, err := p.productDictionary.ResolveProductRelation(context.Background(), sourcePath, targetPath); err == nil {
@@ -797,13 +798,13 @@ func (p *SupplyChainParser) maybeCreateFacilityActorOverlay(
 	rel := ""
 	switch {
 	case strings.HasPrefix(actorPath, "/gov/"):
-		rel = string(DependencyTypeControls)
+		rel = string(ah.RelationNameControlsVia)
 	case strings.Contains(role, "owner"), strings.Contains(role, "parent"), strings.Contains(role, "holding"):
-		rel = string(DependencyTypeOwns)
+		rel = string(ah.RelationNameBeneficiallyOwns)
 	case strings.Contains(role, "operator"), strings.Contains(role, "manager"), strings.Contains(role, "manages"), strings.Contains(role, "managed"):
-		rel = string(DependencyTypeManages)
+		rel = string(ah.RelationNameManagedBy)
 	case strings.Contains(role, "controller"), strings.Contains(role, "state"), strings.Contains(role, "administrator"), strings.Contains(role, "admin"):
-		rel = string(DependencyTypeControls)
+		rel = string(ah.RelationNameControlsVia)
 	default:
 		return nil
 	}

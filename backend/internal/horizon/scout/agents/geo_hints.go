@@ -1,17 +1,17 @@
 package agents
 
 import (
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 func applyInferredHomeLocationHint(fragment *models.HorizonFragment) {
 	if fragment == nil {
 		return
 	}
-	if fragment.Class != FragmentTypeFacility && fragment.Class != FragmentTypeOrganization {
+	if fragment.Class != ah.FragmentClassSite && fragment.Class != ah.FragmentClassOrg {
 		return
 	}
 	if fragment.HomeLocation == nil {

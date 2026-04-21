@@ -2,20 +2,20 @@ package scout
 
 import (
 	"context"
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"fmt"
-	"log"
-	"strconv"
-	"strings"
-	"time"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
-	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
-	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
+	"log"
+	"strconv"
+	"strings"
+	"time"
 )
 
 // =============================================================================
@@ -171,7 +171,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 
 	// Normalize market paths: collapse domain==vertical to prevent duplicates
 	// (e.g. /market/iq/agriculture/agriculture → /market/iq/agriculture)
-	if fragment.Class == FragmentTypeMarket && strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/market/") {
+	if fragment.Class == ah.FragmentClassMarket && strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/market/") {
 		fragment.CanonicalPath = collapseMarketDomainEqualVertical(fragment.CanonicalPath)
 	}
 
@@ -215,7 +215,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	}
 
 	// Organization canonical paths must be strict: /org/{iso2|na|int|regional}/{slug}.
-	if fragment.Class == FragmentTypeOrganization {
+	if fragment.Class == ah.FragmentClassOrg {
 		cp := strings.TrimSpace(fragment.CanonicalPath)
 		if strings.HasPrefix(cp, "/org/") {
 			parts := strings.Split(strings.Trim(cp, "/"), "/")
@@ -239,7 +239,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// ==========================================================================
 	// Facilities should be nested under their parent organization:
 	// Good: /fac/us/gigafactory-texas (or /fac/na/gigafactory-texas when geo unknown)
-	if fragment.Class == FragmentTypeFacility {
+	if fragment.Class == ah.FragmentClassSite {
 		pathParts := strings.Split(strings.Trim(fragment.CanonicalPath, "/"), "/")
 		if len(pathParts) != 3 || pathParts[0] != "fac" {
 			result.Warnings = append(result.Warnings,
@@ -256,7 +256,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// ==========================================================================
 	// Legacy /region/ paths should be migrated to /loc/.
 	// Note: GEO_REGION validation issues are warnings, not blockers (can be fixed post-factum)
-	if fragment.Class == FragmentTypeGeoRegion {
+	if fragment.Class == ah.FragmentClassGeo {
 		if strings.HasPrefix(fragment.CanonicalPath, "/region/") {
 			// NOTE: legacy /region/ had multiple shapes (including /region/na/{cc}/{admin1}/{city}).
 			// Do NOT do a naive prefix replace; normalize into canonical /loc hierarchy.
@@ -378,7 +378,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// Policy 4.6: Facility geo revalidation before generic coordinate enrichment.
 	// This blocks a common debt pattern: facility path/homeLocation country is guessed
 	// incorrectly, then survives forever as /fac/na/... or with the wrong ISO2.
-	if fragment.Class == FragmentTypeFacility && v.geocodingClient != nil {
+	if fragment.Class == ah.FragmentClassSite && v.geocodingClient != nil {
 		if revalidated, err := RevalidateFacilityGeo(ctx, fragment, v.geocodingClient); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("facility geo revalidation skipped: %v", err))
 		} else if revalidated.Applied {
@@ -396,7 +396,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 			result.Warnings = append(result.Warnings, msg)
 		}
 	}
-	if fragment.Class == FragmentTypeOrganization && v.geocodingClient != nil {
+	if fragment.Class == ah.FragmentClassOrg && v.geocodingClient != nil {
 		if revalidated, err := RevalidateOrgGeo(ctx, fragment, v.geocodingClient); err != nil {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("organization geo revalidation skipped: %v", err))
 		} else if revalidated.Applied {
@@ -423,7 +423,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// ==========================================================================
 	// Policy 4: Auto-fill facilityKind from canonical path slug when missing
 	// ==========================================================================
-	if fragment.Class == FragmentTypeFacility && strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/fac/") {
+	if fragment.Class == ah.FragmentClassSite && strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/fac/") {
 		if fragment.Identifiers == nil {
 			fragment.Identifiers = map[string]string{}
 		}
@@ -454,7 +454,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// Policy 4.5: Facility deduplication
 	// ==========================================================================
 	// Check if this facility already exists (by path, label, shortName, or normalized name in same geo).
-	if fragment.Class == FragmentTypeFacility && v.facilityDedup != nil {
+	if fragment.Class == ah.FragmentClassSite && v.facilityDedup != nil {
 		existing, err := v.facilityDedup.DeduplicateFacility(ctx, fragment)
 		if err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID {
 			result.ReplacementFrag = existing
@@ -463,7 +463,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 					existing.CanonicalPath, existing.ID))
 		}
 	}
-	if fragment.Class == FragmentTypeFacility && result.ReplacementFrag == nil {
+	if fragment.Class == ah.FragmentClassSite && result.ReplacementFrag == nil {
 		if repairedPath, reason, ok := RepairSyntheticFacilityCanonicalPath(ctx, fragment, v.geocodingClient); ok {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %q", reason, repairedPath))
 			fragment.CanonicalPath = repairedPath
@@ -479,7 +479,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// Policy 5: Organization deduplication
 	// ==========================================================================
 	// Check if this organization already exists (by Wikidata ID or shortName).
-	if fragment.Class == FragmentTypeOrganization && v.orgDedup != nil {
+	if fragment.Class == ah.FragmentClassOrg && v.orgDedup != nil {
 		existing, err := v.orgDedup.DeduplicateOrg(ctx, fragment)
 		if err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID {
 			result.ReplacementFrag = existing
@@ -488,7 +488,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 					existing.CanonicalPath, existing.ID))
 		}
 	}
-	if fragment.Class == FragmentTypeOrganization && result.ReplacementFrag == nil {
+	if fragment.Class == ah.FragmentClassOrg && result.ReplacementFrag == nil {
 		if repairedPath, reason, ok := RepairSyntheticOrgCanonicalPath(fragment); ok {
 			result.Warnings = append(result.Warnings, fmt.Sprintf("%s: %q", reason, repairedPath))
 			fragment.CanonicalPath = repairedPath
@@ -511,7 +511,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// Policy 6: Product deduplication
 	// ==========================================================================
 	// Check if this product already exists (by Wikidata ID, CAS number, or chemical formula).
-	if fragment.Class == FragmentTypeProduct && v.productDedup != nil {
+	if fragment.Class == ah.FragmentClassProduct && v.productDedup != nil {
 		existing, err := v.productDedup.DeduplicateProduct(ctx, fragment)
 		if err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID {
 			result.ReplacementFrag = existing
@@ -526,7 +526,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// ==========================================================================
 	// Check if this person already exists (by Wikidata ID, name, or phonetic match).
 	// Phonetic matching catches Arabic transliteration variations: Tahnoon/Tahnoun, Khalid/Halid, etc.
-	if fragment.Class == FragmentTypePerson && v.personDedup != nil {
+	if fragment.Class == ah.FragmentClassPerson && v.personDedup != nil {
 		existing, err := v.personDedup.DeduplicatePerson(ctx, fragment)
 		if err == nil && existing != nil && existing.ID != "" && existing.ID != fragment.ID {
 			result.ReplacementFrag = existing
@@ -539,7 +539,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// ==========================================================================
 	// Policy 7.5: Market deduplication (tag-based, auto when overlap >= 5)
 	// ==========================================================================
-	if fragment.Class == FragmentTypeMarket && v.geoBuilder != nil && v.geoBuilder.fragmentsRepo != nil {
+	if fragment.Class == ah.FragmentClassMarket && v.geoBuilder != nil && v.geoBuilder.fragmentsRepo != nil {
 		fragment.Tags = taxonomy.NormalizeMarketTags(fragment.Tags)
 		if len(fragment.Tags) >= 5 {
 			geo, sector, vertical := parseMarketGeoSectorForDedup(fragment.CanonicalPath)
@@ -558,7 +558,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 							if cand == nil || cand.ID == "" || cand.ID == fragment.ID {
 								continue
 							}
-							if cand.Class != FragmentTypeMarket && !strings.HasPrefix(strings.TrimSpace(cand.CanonicalPath), "/market/") {
+							if cand.Class != ah.FragmentClassMarket && !strings.HasPrefix(strings.TrimSpace(cand.CanonicalPath), "/market/") {
 								continue
 							}
 							cGeo, cSector, cVertical := parseMarketGeoSectorForDedup(cand.CanonicalPath)
@@ -789,29 +789,29 @@ func repairInvalidCanonicalPath(fragment *models.HorizonFragment) (string, bool)
 		candidate = taxonomy.JoinPath("domain", "v1", "other", slug)
 	case fragment.IsLegacySphere():
 		candidate = taxonomy.JoinPath("sphere", slug)
-	case fragment.Class == FragmentTypeOrganization:
+	case fragment.Class == ah.FragmentClassOrg:
 		candidate = taxonomy.JoinPath("org", "na", slug)
-	case fragment.Class == FragmentTypeFacility:
+	case fragment.Class == ah.FragmentClassSite:
 		candidate = taxonomy.JoinPath("fac", "na", slug)
-	case fragment.Class == FragmentTypeGeoRegion:
+	case fragment.Class == ah.FragmentClassGeo:
 		candidate = taxonomy.JoinPath("loc", "na", "na", slug)
-	case fragment.Class == FragmentTypeProduct:
+	case fragment.Class == ah.FragmentClassProduct:
 		if isFinancialProductContext(fragment) {
 			candidate = taxonomy.JoinPath("product", "service", "financial", "na", slug)
 		} else {
 			candidate = taxonomy.JoinPath("product", "finished", "mechanical", "assembly", slug)
 		}
-	case fragment.Class == FragmentTypeMarket:
+	case fragment.Class == ah.FragmentClassMarket:
 		candidate = taxonomy.JoinPath("market", "global", slug)
-	case fragment.Class == FragmentTypePerson:
+	case fragment.Class == ah.FragmentClassPerson:
 		candidate = taxonomy.JoinPath("person", slug)
-	case fragment.Class == FragmentTypeDecisionPoint:
+	case fragment.Class == ah.FragmentClassDecision:
 		candidate = taxonomy.JoinPath("decision", "general", slug)
-	case fragment.Class == FragmentTypeMechanism:
+	case fragment.Class == ah.FragmentClassMechanism:
 		candidate = taxonomy.JoinPath("mechanism", "political", slug)
-	case fragment.Class == FragmentTypeCommunity:
+	case fragment.Class == ah.FragmentClassCommunity:
 		candidate = taxonomy.JoinPath("community", "global", "interest", slug)
-	case fragment.Class == FragmentTypeEvent:
+	case fragment.Class == ah.FragmentClassEvidence:
 		candidate = taxonomy.JoinPath("event", slug)
 	default:
 		return "", false
@@ -885,43 +885,43 @@ type CanonicalPathPolicy struct {
 
 // CanonicalPathPolicies defines the expected path format for each fragment type.
 var CanonicalPathPolicies = map[FragmentType]CanonicalPathPolicy{
-	FragmentTypeOrganization: {
+	ah.FragmentClassOrg: {
 		Prefix:      "/org/",
 		Example:     "/org/us/tesla",
 		Description: "Organization paths are jurisdiction-scoped: /org/{iso2|na}/{slug}. Government bodies use /gov/{iso2|na}/{slug}",
 	},
-	FragmentTypeFacility: {
+	ah.FragmentClassSite: {
 		Prefix:      "/fac/",
 		Example:     "/fac/us/gigafactory-texas",
 		Description: "Facility paths are nested under parent organization",
 	},
-	FragmentTypeGeoRegion: {
+	ah.FragmentClassGeo: {
 		Prefix:      "/loc/",
 		Example:     "/loc/us/tx/austin",
 		Description: "Geographic paths use /loc/{country}[/{level1}[/{level2}]] format",
 	},
-	FragmentTypeProduct: {
+	ah.FragmentClassProduct: {
 		Prefix:      "/product/",
 		Example:     "/product/finished/mechanical/assembly/model-3",
 		Description: "Product paths use strict taxonomy: /product/{category}/{type}/{stage}/{slug}",
 	},
-	FragmentTypePerson: {
+	ah.FragmentClassPerson: {
 		Prefix:      "/person/",
 		Example:     "/person/elon-musk",
 		Description: "Person paths use lowercase hyphenated names",
 	},
-	// MIGRATION NOTE: legacy FragmentTypeMediaChannel collapses onto
+	// MIGRATION NOTE: legacy ah.FragmentClassOrg collapses onto
 	// (org, media_channel). The map key cannot represent the subtype, so
 	// the /media/ prefix description has been folded into the org entry's
 	// note for callers reading this variable. New /media/{platform}/{slug}
 	// callers should look up the prefix via policy.ExpectedCanonicalPathPrefix
 	// with Subtype="media_channel" instead of this Class-keyed map.
-	FragmentTypeDecisionPoint: {
+	ah.FragmentClassDecision: {
 		Prefix:      "/decision/",
 		Example:     "/decision/ai-chips/euv-export-control",
 		Description: "Decision points are domain-scoped: /decision/{domain-slug}/{decision-slug}",
 	},
-	FragmentTypeMechanism: {
+	ah.FragmentClassMechanism: {
 		Prefix:      "/mechanism/",
 		Example:     "/mechanism/regulatory/export-control",
 		Description: "Mechanisms are reusable control tools: /mechanism/{category}/{slug}",

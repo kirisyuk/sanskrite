@@ -130,11 +130,11 @@ func revalidateFragmentGeo(ctx context.Context, fragment *models.HorizonFragment
 	if fragment == nil || geocodingClient == nil {
 		return
 	}
-	if fragment.Class == FragmentTypeFacility {
+	if fragment.Class == ah.FragmentClassSite {
 		_, _ = RevalidateFacilityGeo(ctx, fragment, geocodingClient)
 		return
 	}
-	if fragment.Class == FragmentTypeOrganization {
+	if fragment.Class == ah.FragmentClassOrg {
 		_, _ = RevalidateOrgGeo(ctx, fragment, geocodingClient)
 	}
 }
@@ -575,7 +575,7 @@ func missingInfoLimitForFragment(fragment *models.HorizonFragment) int {
 		return defaultMissingInfoLimit
 	}
 	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
-	if fragment.Class == FragmentTypePerson || strings.HasPrefix(cp, "/person/") {
+	if fragment.Class == ah.FragmentClassPerson || strings.HasPrefix(cp, "/person/") {
 		return personMissingInfoLimit
 	}
 	return defaultMissingInfoLimit
@@ -1171,42 +1171,42 @@ func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType D
 		strings.HasPrefix(targetPath, "/geo/") ||
 		strings.HasPrefix(targetPath, "/region/")
 	switch relationType {
-	case DependencyTypeOwns, DependencyTypeControls:
+	case ah.RelationNameBeneficiallyOwns, ah.RelationNameControlsVia:
 		return sourceIsController && targetIsOperational
-	case DependencyTypeManages:
+	case ah.RelationNameManagedBy:
 		return sourceIsController && targetIsManaged
-	case DependencyTypeCompetesWith:
+	case ah.RelationNameAlternateTo:
 		return sourceIsCompetitiveActor && targetIsCompetitiveActor
-	case DependencyTypePartnersWith:
+	case ah.RelationNameJointVentureWith:
 		return sourceIsPartnerActor && targetIsPartnerActor
-	case DependencyTypeOperatesVia:
+	case DependencyType("operates_via"):
 		return sourceOperatesViaChannel && targetOperatesViaChannel
-	case DependencyTypeMemberOf:
+	case ah.RelationNameMemberOf:
 		return sourceIsMemberActor && targetIsMembershipContainer
-	case DependencyTypeInvestsIn:
+	case ah.RelationNameInvestedIn:
 		return sourceIsInvestor && targetIsInvestable
-	case DependencyTypeInfluences:
+	case ah.RelationNameInfluences:
 		return sourceIsInfluence && targetIsInfluence
-	case DependencyTypeGatekeepsDecision:
+	case ah.RelationNameGatekeeps:
 		return sourceIsDecisionGatekeeper && strings.HasPrefix(targetPath, "/decision/")
-	case DependencyTypeUsesMechanism:
+	case ah.RelationNameWields:
 		return sourceUsesMechanism && targetIsMechanism
-	case DependencyTypeRegulates:
+	case ah.RelationNameRegulates:
 		return sourceIsController && targetIsPolicyEntity
-	case DependencyTypeControlsAccess:
+	case DependencyType("controls_access"):
 		return sourceUsesMechanism && targetIsPolicyEntity
-	case DependencyTypeImposesCondition:
+	case ah.RelationNameImposes:
 		return sourceIsConditionImposer && targetIsPolicyEntity
-	case DependencyTypeInGeoScope:
+	case DependencyType("in_geo_scope"), ah.RelationNameConstrainedBy:
 		return sourceIsGeoScopeOwner && targetIsGeoScope
-	case DependencyTypeAdministers:
+	case ah.RelationNameOperates:
 		targetIsAdministered := targetIsOperational || strings.HasPrefix(targetPath, "/program/") || strings.HasPrefix(targetPath, "/gov/")
 		return sourceIsController && targetIsAdministered
-	case DependencyTypeSubsidiaryOf:
+	case ah.RelationNameSubsidiaryOf:
 		sourceIsSubsidiary := strings.HasPrefix(sourcePath, "/org/") || strings.HasPrefix(sourcePath, "/gov/")
 		targetIsParent := strings.HasPrefix(targetPath, "/org/") || strings.HasPrefix(targetPath, "/gov/")
 		return sourceIsSubsidiary && targetIsParent
-	case DependencyTypeAffects:
+	case ah.RelationNameDisrupts:
 		return sourceIsImpact && targetIsAffected
 	default:
 		return false
@@ -1285,14 +1285,14 @@ func supplyChainsEnabled(targetCanonicalPath string, targetType FragmentType, _ 
 	// MIGRATION NOTE (AH taxonomy): callers may pass either an AH
 	// FragmentClass ("person") or a legacy wire token ("PERSON"); route
 	// through the hardcoded fragment-type normalizer so the comparison
-	// always lands on FragmentTypePerson regardless of input casing.
+	// always lands on ah.FragmentClassPerson regardless of input casing.
 	normalizedType := targetType
 	if strings.TrimSpace(string(targetType)) != "" {
 		if cls := normalizeFragmentTypeHardcoded(string(targetType)); cls != "" {
 			normalizedType = cls
 		}
 	}
-	if normalizedType == FragmentTypePerson {
+	if normalizedType == ah.FragmentClassPerson {
 		return false
 	}
 	if strings.HasPrefix(strings.ToLower(strings.TrimSpace(targetCanonicalPath)), "/person/") {
@@ -1393,7 +1393,7 @@ func detectFacilityQualifierSemanticFromFragment(frag *models.HorizonFragment) f
 
 func isFacilityTarget(targetCanonicalPath string, targetType FragmentType, candidates ...*models.HorizonFragment) bool {
 	cp := strings.TrimSpace(strings.ToLower(targetCanonicalPath))
-	if strings.HasPrefix(cp, "/fac/") || targetType == FragmentTypeFacility {
+	if strings.HasPrefix(cp, "/fac/") || targetType == ah.FragmentClassSite {
 		return true
 	}
 	for _, c := range candidates {
@@ -1401,7 +1401,7 @@ func isFacilityTarget(targetCanonicalPath string, targetType FragmentType, candi
 			continue
 		}
 		fcp := strings.TrimSpace(strings.ToLower(c.CanonicalPath))
-		if c.Class == FragmentTypeFacility || strings.HasPrefix(fcp, "/fac/") {
+		if c.Class == ah.FragmentClassSite || strings.HasPrefix(fcp, "/fac/") {
 			return true
 		}
 	}
@@ -1479,7 +1479,7 @@ func inferObjectQualifierForFragment(frag *models.HorizonFragment, fallbackTarge
 	}
 	switch {
 	case strings.HasPrefix(cp, "/fac/"):
-		switch detectFacilityQualifierSemanticForTarget(cp, FragmentTypeFacility, frag) {
+		switch detectFacilityQualifierSemanticForTarget(cp, ah.FragmentClassSite, frag) {
 		case facilityQualifierSemanticRoute:
 			return ObjectQualifierRoute
 		case facilityQualifierSemanticSupply:
@@ -1662,12 +1662,12 @@ func isFacilityQualifierBusinessTargetType(kind facilityQualifierSemantic, targe
 	if kind == facilityQualifierSemanticNone {
 		return true
 	}
-	// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeMediaChannel folds onto
-	// (org, media_channel) and FragmentTypeDomain onto (evidence, domain).
+	// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassOrg folds onto
+	// (org, media_channel) and ah.FragmentClassGeo onto (evidence, domain).
 	// Class-only callers can no longer distinguish these; we rely on the path
 	// prefix check below to gate /media/ and /domain/ subtypes out of the
 	// business-target whitelist.
-	if targetType == FragmentTypePerson || targetType == FragmentTypeCommunity || targetType == FragmentTypeEvent {
+	if targetType == ah.FragmentClassPerson || targetType == ah.FragmentClassCommunity || targetType == ah.FragmentClassEvidence {
 		return false
 	}
 	if targetPathHasAnyPrefix(targetPath, "/person/", "/community/", "/media/", "/event/", "/sphere/", "/domain/", "/decision/", "/mechanism/") {
@@ -1675,14 +1675,14 @@ func isFacilityQualifierBusinessTargetType(kind facilityQualifierSemantic, targe
 	}
 
 	// Keep qualifier lanes business-first: geo + flow + actors/products/markets.
-	// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeDeposit and
-	// FragmentTypeProgram fold onto (site, deposit) and (org, program); they
-	// are caught by the FragmentTypeFacility / FragmentTypeOrganization arms.
-	if targetType == FragmentTypeOrganization ||
-		targetType == FragmentTypeFacility ||
-		targetType == FragmentTypeProduct ||
-		targetType == FragmentTypeGeoRegion ||
-		targetType == FragmentTypeMarket ||
+	// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassSite and
+	// ah.FragmentClassOrg fold onto (site, deposit) and (org, program); they
+	// are caught by the ah.FragmentClassSite / ah.FragmentClassOrg arms.
+	if targetType == ah.FragmentClassOrg ||
+		targetType == ah.FragmentClassSite ||
+		targetType == ah.FragmentClassProduct ||
+		targetType == ah.FragmentClassGeo ||
+		targetType == ah.FragmentClassMarket ||
 		targetType == "" {
 		return true
 	}
@@ -1703,35 +1703,35 @@ func isFacilityQualifierAllowedRelationType(kind facilityQualifierSemantic, relT
 	switch kind {
 	case facilityQualifierSemanticRoute:
 		switch rt {
-		case string(DependencyTypeDependsOn),
-			string(DependencyTypeSuppliesTo),
-			string(DependencyTypeLocatedIn),
-			string(DependencyTypeOperatesIn),
-			string(DependencyTypeProduces),
-			string(DependencyTypeTransformsInto),
-			string(DependencyTypeExtractsFrom),
-			string(DependencyTypeParticipatesIn),
-			string(DependencyTypeRegulates),
-			string(DependencyTypeControlsAccess),
-			string(DependencyTypeImposesCondition):
+		case string(DependencyType("depends_on")),
+			string(ah.RelationNameSupplies),
+			string(DependencyType("located_in")),
+			string(DependencyType("operates_in")),
+			string(ah.RelationNameProduces),
+			string(DependencyType("transforms_into")),
+			string(DependencyType("extracts_from")),
+			string(DependencyType("participates_in")),
+			string(ah.RelationNameRegulates),
+			string(DependencyType("controls_access")),
+			string(ah.RelationNameImposes):
 			return true
 		default:
 			return false
 		}
 	case facilityQualifierSemanticSupply, facilityQualifierSemanticProcurement:
 		switch rt {
-		case string(DependencyTypeDependsOn),
-			string(DependencyTypeSuppliesTo),
-			string(DependencyTypeProduces),
-			string(DependencyTypeTransformsInto),
-			string(DependencyTypeExtractsFrom),
-			string(DependencyTypeLocatedIn),
-			string(DependencyTypeOperatesIn),
-			string(DependencyTypeParticipatesIn),
-			string(DependencyTypePartnersWith),
-			string(DependencyTypeRegulates),
-			string(DependencyTypeControlsAccess),
-			string(DependencyTypeImposesCondition):
+		case string(DependencyType("depends_on")),
+			string(ah.RelationNameSupplies),
+			string(ah.RelationNameProduces),
+			string(DependencyType("transforms_into")),
+			string(DependencyType("extracts_from")),
+			string(DependencyType("located_in")),
+			string(DependencyType("operates_in")),
+			string(DependencyType("participates_in")),
+			string(ah.RelationNameJointVentureWith),
+			string(ah.RelationNameRegulates),
+			string(DependencyType("controls_access")),
+			string(ah.RelationNameImposes):
 			return true
 		default:
 			return false
@@ -1816,11 +1816,11 @@ func filterMissingInfoByFragmentRelevance(fragment *models.HorizonFragment, in [
 	}
 
 	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
-	isPerson := fragment.Class == FragmentTypePerson || strings.HasPrefix(cp, "/person/")
-	isMarket := fragment.Class == FragmentTypeMarket || strings.HasPrefix(cp, "/market/")
-	isFacility := fragment.Class == FragmentTypeFacility || strings.HasPrefix(cp, "/fac/")
+	isPerson := fragment.Class == ah.FragmentClassPerson || strings.HasPrefix(cp, "/person/")
+	isMarket := fragment.Class == ah.FragmentClassMarket || strings.HasPrefix(cp, "/market/")
+	isFacility := fragment.Class == ah.FragmentClassSite || strings.HasPrefix(cp, "/fac/")
 	isDeposit := fragment.IsLegacyDeposit() || strings.HasPrefix(cp, "/deposit/")
-	isCommunity := fragment.Class == FragmentTypeCommunity || strings.HasPrefix(cp, "/community/")
+	isCommunity := fragment.Class == ah.FragmentClassCommunity || strings.HasPrefix(cp, "/community/")
 
 	personOnlyTokens := []string{
 		"spouse", "children", "parents", "siblings", "relative", "close associates", "family",
@@ -1887,7 +1887,7 @@ func isRouteFacilityFragment(frag *models.HorizonFragment) bool {
 		return false
 	}
 	cp := strings.TrimSpace(strings.ToLower(frag.CanonicalPath))
-	if frag.Class != FragmentTypeFacility && !strings.HasPrefix(cp, "/fac/") {
+	if frag.Class != ah.FragmentClassSite && !strings.HasPrefix(cp, "/fac/") {
 		return false
 	}
 	if frag.Qualifiers != nil {
@@ -2002,7 +2002,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		ex, err := e.fragmentsRepo.GetByCanonicalPath(ctx, canonicalPath)
 		if err == nil && ex != nil && ex.ID != "" {
 			// Keep GEO dimension labels human-readable even for existing taxonomy stubs.
-			if ftype == FragmentTypeGeoRegion {
+			if ftype == ah.FragmentClassGeo {
 				if ex.Labels == nil {
 					ex.Labels = map[string]string{}
 				}
@@ -2156,7 +2156,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		if sourceID == "" || targetID == "" || sourceID == targetID {
 			return
 		}
-		edgeType := DependencyTypeInfluences
+		edgeType := ah.RelationNameInfluences
 		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sourceID, targetID, edgeType); err == nil {
 			return
 		}
@@ -2232,7 +2232,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		if f.LocationPath != nil {
 			lp := strings.TrimSpace(*f.LocationPath)
 			if lp != "" {
-				gfrag, err := ensureFragment(lp, FragmentTypeGeoRegion, "", "/Geo/Region")
+				gfrag, err := ensureFragment(lp, ah.FragmentClassGeo, "", "/Geo/Region")
 				if err == nil && gfrag != nil {
 					ensureInfluenceEdge(gfrag.ID, target.ID, f.Confidence, map[string]interface{}{"dimension": "geo", "path": lp, "factId": f.ID})
 					// Metric updates are optional; geo linkage should exist even without metrics.
@@ -2449,17 +2449,17 @@ func (e *ScoutEngine) bestEffortMergeLensResearchObjects(ctx context.Context, le
 // (SPHERE, TRACK, EVENT, SUPPLY_LINK) to keep the scope meaningful.
 func isScopeEligibleEntityType(ft FragmentType) bool {
 	// Legacy DEPOSIT/PROGRAM fold onto site/org under AH and are therefore covered
-	// by FragmentTypeFacility / FragmentTypeOrganization.
+	// by ah.FragmentClassSite / ah.FragmentClassOrg.
 	switch ft {
-	case FragmentTypeOrganization,
-		FragmentTypeFacility,
-		FragmentTypeProduct,
-		FragmentTypeGeoRegion,
-		FragmentTypeCommunity,
-		FragmentTypeMarket,
-		FragmentTypePerson,
-		FragmentTypeDecisionPoint,
-		FragmentTypeMechanism:
+	case ah.FragmentClassOrg,
+		ah.FragmentClassSite,
+		ah.FragmentClassProduct,
+		ah.FragmentClassGeo,
+		ah.FragmentClassCommunity,
+		ah.FragmentClassMarket,
+		ah.FragmentClassPerson,
+		ah.FragmentClassDecision,
+		ah.FragmentClassMechanism:
 		return true
 	default:
 		return false
@@ -2585,7 +2585,7 @@ func (e *ScoutEngine) bestEffortRewriteLensScope(ctx context.Context, tenantID, 
 			}
 			ft := InferFragmentTypeFromCanonicalPath(p)
 			if ft == "" {
-				ft = FragmentTypeOrganization
+				ft = ah.FragmentClassOrg
 			}
 			if resolved, rerr := e.canonicalPathResolver.Resolve(ctx, p, ft); rerr == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 				cp := strings.TrimSpace(resolved.CanonicalPath)
@@ -4176,7 +4176,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		}
 		stubType := InferFragmentTypeFromCanonicalPath(effectiveCanonicalPath)
 		if stubType == "" {
-			stubType = FragmentTypeOrganization
+			stubType = ah.FragmentClassOrg
 		}
 		stub := &models.HorizonFragment{
 			CanonicalPath: effectiveCanonicalPath,
@@ -4643,32 +4643,32 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 		// (no LLM needed for this deterministic mapping).
 		// Legacy DOMAIN/PROGRAM/MEDIA_CHANNEL fold onto canonical (evidence,
 		// domain_legacy) / (org, program) / (org, media_channel) under AH.
-		defaultType := FragmentTypeOrganization
+		defaultType := ah.FragmentClassOrg
 		defaultSubtype := ""
 		switch {
 		case strings.HasPrefix(job.TargetCanonicalPath, "/domain/"):
 			defaultType = ah.FragmentClassEvidence
 			defaultSubtype = "domain_legacy"
 		case strings.HasPrefix(job.TargetCanonicalPath, "/product/"):
-			defaultType = FragmentTypeProduct
+			defaultType = ah.FragmentClassProduct
 		case strings.HasPrefix(job.TargetCanonicalPath, "/program/"):
 			defaultType = ah.FragmentClassOrg
 			defaultSubtype = "program"
 		case strings.HasPrefix(job.TargetCanonicalPath, "/market/"):
-			defaultType = FragmentTypeMarket
+			defaultType = ah.FragmentClassMarket
 		case strings.HasPrefix(job.TargetCanonicalPath, "/fac/"):
-			defaultType = FragmentTypeFacility
+			defaultType = ah.FragmentClassSite
 		case strings.HasPrefix(job.TargetCanonicalPath, "/loc/") || strings.HasPrefix(job.TargetCanonicalPath, "/region/"):
-			defaultType = FragmentTypeGeoRegion
+			defaultType = ah.FragmentClassGeo
 		case strings.HasPrefix(job.TargetCanonicalPath, "/event/"):
-			defaultType = FragmentTypeEvent
+			defaultType = ah.FragmentClassEvidence
 		case strings.HasPrefix(job.TargetCanonicalPath, "/gov/"):
 			// Government bodies are modeled as ORGANIZATION fragments, but use /gov/{iso2}/{slug} paths to avoid collisions.
-			defaultType = FragmentTypeOrganization
+			defaultType = ah.FragmentClassOrg
 		case strings.HasPrefix(job.TargetCanonicalPath, "/org/"):
-			defaultType = FragmentTypeOrganization
+			defaultType = ah.FragmentClassOrg
 		case strings.HasPrefix(job.TargetCanonicalPath, "/person/"):
-			defaultType = FragmentTypePerson
+			defaultType = ah.FragmentClassPerson
 		case strings.HasPrefix(job.TargetCanonicalPath, "/media/"):
 			defaultType = ah.FragmentClassOrg
 			defaultSubtype = "media_channel"
@@ -4950,7 +4950,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 	// - Critic can reliably require/check them
 	// - later systems can aggregate/query them consistently
 	// - they are not "lost" due to inconsistent key naming.
-	if extractedFragment != nil && (extractedFragment.Class == FragmentTypeMarket || strings.HasPrefix(strings.TrimSpace(extractedFragment.CanonicalPath), "/market/")) {
+	if extractedFragment != nil && (extractedFragment.Class == ah.FragmentClassMarket || strings.HasPrefix(strings.TrimSpace(extractedFragment.CanonicalPath), "/market/")) {
 		normalizeMarketMetricKeys(extractedFragment)
 	}
 
@@ -5746,7 +5746,7 @@ SKIP_METRICS:
 		revalidateFragmentGeo(ctx, extractedFragment, e.geocodingClient)
 
 		// Market deduplication via canonical path resolver (tag-based).
-		if e.canonicalPathResolver != nil && extractedFragment.Class == FragmentTypeMarket && len(extractedFragment.Tags) > 0 {
+		if e.canonicalPathResolver != nil && extractedFragment.Class == ah.FragmentClassMarket && len(extractedFragment.Tags) > 0 {
 			meta := map[string]string{
 				"tags": strings.Join(extractedFragment.Tags, ","),
 			}
@@ -5850,7 +5850,7 @@ SKIP_METRICS:
 					seen[t] = true
 					existingFragment.Tags = append(existingFragment.Tags, t)
 				}
-				if existingFragment.Class == FragmentTypeMarket {
+				if existingFragment.Class == ah.FragmentClassMarket {
 					existingFragment.Tags = taxonomy.NormalizeMarketTags(existingFragment.Tags)
 				}
 			}
@@ -6669,7 +6669,7 @@ func (e *ScoutEngine) applyIntentSphereLinks(ctx context.Context, job *models.Sc
 			target.IndexPaths = models.MergeIndexPaths(target, []string{sp})
 		}
 
-		edgeType := DependencyTypeInfluences
+		edgeType := ah.RelationNameInfluences
 		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", sfrag.ID, target.ID, edgeType); err == nil {
 			continue
 		}
@@ -7067,7 +7067,7 @@ func (e *ScoutEngine) enrichFragmentHierarchy(ctx context.Context, fragment *mod
 	}
 
 	// Auto-create geo hierarchy for GEO_REGION fragments
-	if fragment.Class == FragmentTypeGeoRegion && e.geoHierarchyBuilder != nil {
+	if fragment.Class == ah.FragmentClassGeo && e.geoHierarchyBuilder != nil {
 		if strings.HasPrefix(fragment.CanonicalPath, "/loc/") {
 			if err := e.geoHierarchyBuilder.EnsureAndLinkGeoHierarchy(ctx, fragment.ID, fragment.CanonicalPath, "scout_job", jobID); err != nil {
 				fmt.Printf("[ScoutEngine] Warning: failed to build geo hierarchy for %s: %v\n", fragment.CanonicalPath, err)
@@ -7076,27 +7076,27 @@ func (e *ScoutEngine) enrichFragmentHierarchy(ctx context.Context, fragment *mod
 	}
 
 	// Auto-create org hierarchy for ORGANIZATION fragments (infer parent from name)
-	if fragment.Class == FragmentTypeOrganization && e.orgHierarchyBuilder != nil {
+	if fragment.Class == ah.FragmentClassOrg && e.orgHierarchyBuilder != nil {
 		if err := e.orgHierarchyBuilder.EnsureOrgHierarchy(ctx, fragment.ID, fragment, "scout_job", jobID); err != nil {
 			fmt.Printf("[ScoutEngine] Warning: failed to build org hierarchy for %s: %v\n", fragment.CanonicalPath, err)
 		}
 	}
 
 	// Auto-create product hierarchy for PRODUCT fragments (build value chain from Wikidata)
-	if fragment.Class == FragmentTypeProduct && e.productHierarchyBuilder != nil {
+	if fragment.Class == ah.FragmentClassProduct && e.productHierarchyBuilder != nil {
 		if err := e.productHierarchyBuilder.EnsureProductHierarchy(ctx, fragment.ID, fragment, "scout_job", jobID); err != nil {
 			fmt.Printf("[ScoutEngine] Warning: failed to build product hierarchy for %s: %v\n", fragment.CanonicalPath, err)
 		}
 	}
 
 	// Auto-create market hierarchy for MARKET fragments (segment-first when possible; heuristic fallback)
-	if fragment.Class == FragmentTypeMarket && e.marketHierarchyBuilder != nil {
+	if fragment.Class == ah.FragmentClassMarket && e.marketHierarchyBuilder != nil {
 		if err := e.marketHierarchyBuilder.EnsureMarketHierarchy(ctx, fragment.ID, fragment, "scout_job", jobID); err != nil {
 			fmt.Printf("[ScoutEngine] Warning: failed to build market hierarchy for %s: %v\n", fragment.CanonicalPath, err)
 		}
 	}
 	// Auto-create geo market parent for regional MARKET fragments: /market/{geo}/X -> /market/global/X
-	if fragment.Class == FragmentTypeMarket && e.marketGeoHierarchy != nil {
+	if fragment.Class == ah.FragmentClassMarket && e.marketGeoHierarchy != nil {
 		if err := e.marketGeoHierarchy.EnsureMarketGeoHierarchy(ctx, fragment.ID, fragment, "scout_job", jobID); err != nil {
 			fmt.Printf("[ScoutEngine] Warning: failed to build market geo hierarchy for %s: %v\n", fragment.CanonicalPath, err)
 		}
@@ -7170,7 +7170,7 @@ func (e *ScoutEngine) enrichFragmentParallel(ctx context.Context, frag *models.H
 	}()
 	go func() {
 		defer wg.Done()
-		if henrich.OpenCorporatesEnabled() && e.openCorporatesClient != nil && frag.Class == FragmentTypeOrganization {
+		if henrich.OpenCorporatesEnabled() && e.openCorporatesClient != nil && frag.Class == ah.FragmentClassOrg {
 			henrich.AttachOpenCorporatesIDIfMissing(ctx, e.openCorporatesClient, frag)
 		}
 	}()

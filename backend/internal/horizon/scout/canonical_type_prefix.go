@@ -1,9 +1,9 @@
 package scout
 
 import (
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 // coerceCanonicalPathForType best-effort fixes obvious namespace/type mismatches.
@@ -16,7 +16,7 @@ func coerceCanonicalPathForType(path string, fragType FragmentType, fallbackName
 	}
 
 	switch fragType {
-	case FragmentTypeOrganization:
+	case ah.FragmentClassOrg:
 		// Organizations may live under /org/... or /gov/... .
 		if strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/gov/") {
 			return cp, false
@@ -31,7 +31,7 @@ func coerceCanonicalPathForType(path string, fragType FragmentType, fallbackName
 		fixed := taxonomy.JoinPath("org", "na", slug)
 		return fixed, fixed != cp
 
-	case FragmentTypeProduct:
+	case ah.FragmentClassProduct:
 		if strings.HasPrefix(cp, "/product/") {
 			return cp, false
 		}

@@ -1,10 +1,10 @@
 package scout
 
 import (
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/geoambiguity"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 // =============================================================================
@@ -44,7 +44,7 @@ func (n *TypeNormalizer) NormalizeFragmentType(fragment *models.HorizonFragment)
 	}
 
 	// Rule 1: Check if this is a country incorrectly typed as ORGANIZATION
-	if fragment.Class == FragmentTypeOrganization {
+	if fragment.Class == ah.FragmentClassOrg {
 		if result := n.checkIfCountry(fragment); result.ShouldNormalize {
 			return result
 		}
@@ -78,7 +78,7 @@ func (n *TypeNormalizer) checkIfCountry(fragment *models.HorizonFragment) Normal
 			return NormalizationResult{
 				ShouldNormalize: true,
 				OriginalType:    fragment.Class,
-				NormalizedType:  FragmentTypeGeoRegion,
+				NormalizedType:  ah.FragmentClassGeo,
 				CanonicalPath:   country.CanonicalPath,
 				Reason:          "legalName/label matches known country: " + country.EnglishName,
 				MergeWithPath:   country.CanonicalPath,
@@ -90,7 +90,7 @@ func (n *TypeNormalizer) checkIfCountry(fragment *models.HorizonFragment) Normal
 			return NormalizationResult{
 				ShouldNormalize: true,
 				OriginalType:    fragment.Class,
-				NormalizedType:  FragmentTypeGeoRegion,
+				NormalizedType:  ah.FragmentClassGeo,
 				CanonicalPath:   cp,
 				Reason:          "legalName/label matches country alias: " + country.EnglishName,
 				MergeWithPath:   cp,
@@ -126,26 +126,26 @@ func (n *TypeNormalizer) checkPathTypeMismatch(fragment *models.HorizonFragment)
 
 	// Map of path prefixes to expected AH FragmentClass values.
 	//
-	// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeProgram /
-	// FragmentTypeMediaChannel / FragmentTypeDeposit / FragmentTypeSupplyLink
+	// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassOrg /
+	// ah.FragmentClassOrg / ah.FragmentClassSite / ah.FragmentClassSite
 	// no longer exist as standalone class values — they collapse onto their
 	// parent class with a Subtype discriminator (org/program, org/media_channel,
 	// site/deposit, site/supply_link). Class-level prefix-vs-type validation
 	// only catches a fragment landing at /program/ with a non-org class; subtype
 	// alignment is validated separately by precreate_validator.
 	pathTypeMap := map[string]FragmentType{
-		"/loc/":         FragmentTypeGeoRegion,
-		"/geo/":         FragmentTypeGeoRegion,
-		"/org/":         FragmentTypeOrganization,
-		"/fac/":         FragmentTypeFacility,
-		"/deposit/":     FragmentTypeFacility, // Natural resource deposits → site/deposit
-		"/product/":     FragmentTypeProduct,
-		"/program/":     FragmentTypeOrganization, // → org/program
-		"/market/":      FragmentTypeMarket,
-		"/event/":       FragmentTypeEvent,
-		"/person/":      FragmentTypePerson,
-		"/media/":       FragmentTypeOrganization, // → org/media_channel
-		"/supply-link/": FragmentTypeFacility,     // → site/supply_link
+		"/loc/":         ah.FragmentClassGeo,
+		"/geo/":         ah.FragmentClassGeo,
+		"/org/":         ah.FragmentClassOrg,
+		"/fac/":         ah.FragmentClassSite,
+		"/deposit/":     ah.FragmentClassSite, // Natural resource deposits → site/deposit
+		"/product/":     ah.FragmentClassProduct,
+		"/program/":     ah.FragmentClassOrg, // → org/program
+		"/market/":      ah.FragmentClassMarket,
+		"/event/":       ah.FragmentClassEvidence,
+		"/person/":      ah.FragmentClassPerson,
+		"/media/":       ah.FragmentClassOrg, // → org/media_channel
+		"/supply-link/": ah.FragmentClassSite,     // → site/supply_link
 	}
 
 	for prefix, expectedType := range pathTypeMap {

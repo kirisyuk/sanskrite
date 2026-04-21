@@ -3,13 +3,12 @@ package scout
 import (
 	"context"
 	"fmt"
-	"strings"
-
-	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/status"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"strings"
 )
 
 // Reason codes for contract errors (non-retryable).
@@ -67,7 +66,7 @@ func (n *ContractNormalizer) Normalize(ctx context.Context, base *models.Horizon
 	if base.Class == "" {
 		inferred := InferFragmentTypeFromCanonicalPath(strings.TrimSpace(base.CanonicalPath))
 		if inferred == "" {
-			inferred = FragmentTypeOrganization
+			inferred = ah.FragmentClassOrg
 		}
 		base.Class = inferred
 	}

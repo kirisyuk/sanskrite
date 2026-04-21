@@ -8,6 +8,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type relationPromptAnnotation struct {
@@ -15,76 +16,76 @@ type relationPromptAnnotation struct {
 }
 
 type explicitSourcePromptSpec struct {
-	edgeType DependencyType
+	edgeType ah.RelationName
 	lines    []string
 }
 
-var preferredPromptEdgeOrder = []DependencyType{
-	DependencyTypeDependsOn,
-	DependencyTypeSuppliesTo,
-	DependencyTypeLocatedIn,
-	DependencyTypeOperatesIn,
-	DependencyTypeRegulates,
-	DependencyTypeOwns,
-	DependencyTypeSubsidiaryOf,
-	DependencyTypeControls,
-	DependencyTypeManages,
-	DependencyTypeAdministers,
-	DependencyTypeEmployedBy,
-	DependencyTypeBoardMemberOf,
-	DependencyTypeFounded,
-	DependencyTypeInvestsIn,
-	DependencyTypePartnersWith,
-	DependencyTypeProduces,
-	DependencyTypeTransformsInto,
-	DependencyTypeAssemblesInto,
-	DependencyTypeUsedIn,
-	DependencyTypeExtractsFrom,
-	DependencyTypeAssures,
-	DependencyTypeCompetesWith,
-	DependencyTypeInfluences,
-	DependencyTypeParticipatesIn,
-	DependencyTypeTradedIn,
-	DependencyTypeDominates,
-	DependencyTypeHasMarketSegment,
-	DependencyTypeOperatesVia,
-	DependencyTypeMemberOf,
-	DependencyTypeAffiliatedWith,
-	DependencyTypeHasSubgroup,
-	DependencyTypeRenamedTo,
-	DependencyTypeRebrandedTo,
-	DependencyTypeLegalSuccessorOf,
-	DependencyTypeMergedInto,
-	DependencyTypeSpunOffFrom,
-	DependencyTypeAcquiredBy,
-	DependencyTypeGatekeepsDecision,
-	DependencyTypeUsesMechanism,
-	DependencyTypeAppliesTo,
-	DependencyTypeControlsAccess,
-	DependencyTypeImposesCondition,
-	DependencyTypeInGeoScope,
-	DependencyTypeAffects,
-	DependencyTypeRelativeOf,
-	DependencyTypeRelatedTo,
-	DependencyTypeAssociatedWith,
-	DependencyTypeCorporateTransition,
-	DependencyTypeDomainRelation,
-	DependencyTypeWorksFor,
-	DependencyTypeKeyPerson,
-	DependencyTypeHasKeyPerson,
-	DependencyTypeAuditedBy,
-	DependencyTypeHasSubmarket,
+var preferredPromptEdgeOrder = []ah.RelationName{
+	ah.RelationName("depends_on"),
+	ah.RelationNameSupplies,
+	ah.RelationName("located_in"),
+	ah.RelationName("operates_in"),
+	ah.RelationNameRegulates,
+	ah.RelationNameBeneficiallyOwns,
+	ah.RelationNameSubsidiaryOf,
+	ah.RelationNameControlsVia,
+	ah.RelationName("manages"),
+	ah.RelationNameOperates,
+	ah.RelationName("employed_by"),
+	ah.RelationNameHoldsBoardSeat,
+	ah.RelationName("founded"),
+	ah.RelationNameInvestedIn,
+	ah.RelationNameJointVentureWith,
+	ah.RelationNameProduces,
+	ah.RelationName("transforms_into"),
+	ah.RelationName("assembles_into"),
+	ah.RelationName("used_in"),
+	ah.RelationName("extracts_from"),
+	ah.RelationNameAssures,
+	ah.RelationName("competes_with"),
+	ah.RelationNameInfluences,
+	ah.RelationName("participates_in"),
+	ah.RelationNameListedOn,
+	ah.RelationName("dominates"),
+	ah.RelationName("has_market_segment"),
+	ah.RelationName("operates_via"),
+	ah.RelationNameMemberOf,
+	ah.RelationName("affiliated_with"),
+	ah.RelationName("has_subgroup"),
+	ah.RelationName("renamed_to"),
+	ah.RelationName("rebranded_to"),
+	ah.RelationName("legal_successor_of"),
+	ah.RelationNameMergedInto,
+	ah.RelationName("spun_off_from"),
+	ah.RelationName("acquired_by"),
+	ah.RelationNameGatekeeps,
+	ah.RelationNameWields,
+	ah.RelationName("applies_to"),
+	ah.RelationName("controls_access"),
+	ah.RelationNameImposes,
+	ah.RelationName("in_geo_scope"),
+	ah.RelationNameDisrupts,
+	ah.RelationName("relative_of"),
+	ah.RelationName("related_to"),
+	ah.RelationName("associated_with"),
+	ah.RelationName("corporate_transition"),
+	ah.RelationName("domain_relation"),
+	ah.RelationName("works_for"),
+	ah.RelationName("key_person"),
+	ah.RelationName("has_key_person"),
+	ah.RelationName("audited_by"),
+	ah.RelationName("has_submarket"),
 }
 
-var strategicPromptEdges = map[DependencyType]struct{}{
-	DependencyTypeGatekeepsDecision: {},
-	DependencyTypeUsesMechanism:     {},
-	DependencyTypeAppliesTo:         {},
-	DependencyTypeControlsAccess:    {},
-	DependencyTypeImposesCondition:  {},
+var strategicPromptEdges = map[ah.RelationName]struct{}{
+	ah.RelationNameGatekeeps: {},
+	ah.RelationNameWields:     {},
+	ah.RelationName("applies_to"):         {},
+	ah.RelationName("controls_access"):    {},
+	ah.RelationNameImposes:  {},
 }
 
-// legacyPromptOnlyDirectionPolicies enumerates DependencyType values
+// legacyPromptOnlyDirectionPolicies enumerates ah.RelationName values (including prompt-only legacy literals)
 // that have NO entry in edgesemantics.EdgeDirectionPolicies (because
 // AH folded/dropped them per docs/taxonomy/migration_map.yaml) but
 // must remain in the LLM-facing extraction prompt vocabulary during
@@ -95,50 +96,50 @@ var strategicPromptEdges = map[DependencyType]struct{}{
 // This is the prompt-rendering analogue of the scout-level
 // EdgeDirectionPolicies overlay in scout/edge_normalizer.go; it lives
 // here because scout/agents cannot import scout (circular).
-var legacyPromptOnlyDirectionPolicies = map[DependencyType]edgesemantics.EdgeDirectionRule{
-	DependencyTypeRelativeOf: {
+var legacyPromptOnlyDirectionPolicies = map[ah.RelationName]edgesemantics.EdgeDirectionRule{
+	ah.RelationName("relative_of"): {
 		Description: "LEGACY (read-side only): kinship link between persons (folded into attributes.relations[] under AH).",
 	},
-	DependencyTypeRenamedTo: {
+	ah.RelationName("renamed_to"): {
 		Description: "LEGACY (read-side only): organizational rename succession (folded into nameHistory under AH).",
 	},
-	DependencyTypeRebrandedTo: {
+	ah.RelationName("rebranded_to"): {
 		Description: "LEGACY (read-side only): organizational rebrand succession (folded into nameHistory under AH).",
 	},
-	DependencyTypeEmployedBy: {
+	ah.RelationName("employed_by"): {
 		Description: "LEGACY (read-side only): person employed by organization (dropped as LLM noise under AH).",
 	},
-	DependencyTypeWorksFor: {
+	ah.RelationName("works_for"): {
 		Description: "LEGACY (read-side only): person works for organization (dropped as LLM noise under AH).",
 	},
-	DependencyTypeKeyPerson: {
+	ah.RelationName("key_person"): {
 		Description: "LEGACY (read-side only): person is a key person at organization (folded into attributes.key_persons[] under AH).",
 	},
-	DependencyTypeHasKeyPerson: {
+	ah.RelationName("has_key_person"): {
 		Description: "LEGACY (read-side only): organization has key person (folded into attributes.key_persons[] under AH).",
 	},
-	DependencyTypeFounded: {
+	ah.RelationName("founded"): {
 		Description: "LEGACY (read-side only): person founded organization (folded into attributes.founders[] under AH).",
 	},
-	DependencyTypeAuditedBy: {
+	ah.RelationName("audited_by"): {
 		Description: "LEGACY (read-side only): organization audited by another org (canonical AH form is assures + assurance_type=audit).",
 	},
-	DependencyTypeAffiliatedWith: {
+	ah.RelationName("affiliated_with"): {
 		Description: "LEGACY (read-side only): vague actor↔actor affiliation (dropped as LLM noise under AH).",
 	},
-	DependencyTypeAssociatedWith: {
+	ah.RelationName("associated_with"): {
 		Description: "LEGACY (read-side only): symmetric actor↔actor association (dropped as LLM noise under AH).",
 	},
-	DependencyTypeRelatedTo: {
+	ah.RelationName("related_to"): {
 		Description: "LEGACY (read-side only): generic 'related-to' link (dropped as too vague under AH).",
 	},
-	DependencyTypeHasSubgroup: {
+	ah.RelationName("has_subgroup"): {
 		Description: "LEGACY (read-side only): community has subgroup (folded into attributes.subgroups[] under AH).",
 	},
-	DependencyTypeCorporateTransition: {
+	ah.RelationName("corporate_transition"): {
 		Description: "LEGACY (read-side only): umbrella corporate transition edge (renamed/merged/spun-off/acquired).",
 	},
-	DependencyTypeManages: {
+	ah.RelationName("manages"): {
 		Description: "LEGACY (read-side only): managerial relation (canonical AH form is `managed_by` with src/dst swapped).",
 	},
 }
@@ -150,71 +151,71 @@ var legacyPromptOnlyDirectionPolicies = map[DependencyType]edgesemantics.EdgeDir
 // still surfaces during the migration window. The graph_intent
 // decoder (legacyRelationAliases) folds them back to canonical AH at
 // parse time.
-var supplyChainLegacyDecomposerEdges = []DependencyType{
-	DependencyTypeTransformsInto,
-	DependencyTypeAssemblesInto,
-	DependencyTypeUsedIn,
-	DependencyTypeExtractsFrom,
-	DependencyTypeHasMarketSegment,
-	DependencyTypeHasSubmarket,
-	DependencyTypeCompetesWith,
-	DependencyTypeParticipatesIn,
-	DependencyTypeOperatesVia,
+var supplyChainLegacyDecomposerEdges = []ah.RelationName{
+	ah.RelationName("transforms_into"),
+	ah.RelationName("assembles_into"),
+	ah.RelationName("used_in"),
+	ah.RelationName("extracts_from"),
+	ah.RelationName("has_market_segment"),
+	ah.RelationName("has_submarket"),
+	ah.RelationName("competes_with"),
+	ah.RelationName("participates_in"),
+	ah.RelationName("operates_via"),
 }
 
-var domainPromptEdges = map[DependencyType]struct{}{
-	DependencyTypeFocusesOn:      {},
-	DependencyTypeInvolvesActor:  {},
-	DependencyTypeAbout:          {},
-	DependencyTypeRelatedDomain:  {},
-	DependencyTypeDomainRelation: {},
-	DependencyTypeBroadensTo:     {},
-	DependencyTypeNarrowsTo:      {},
-	DependencyTypeSurfaces:       {},
+var domainPromptEdges = map[ah.RelationName]struct{}{
+	ah.RelationName("focuses_on"):      {},
+	ah.RelationName("involves_actor"):  {},
+	ah.RelationName("about"):          {},
+	ah.RelationName("related_domain"):  {},
+	ah.RelationName("domain_relation"): {},
+	ah.RelationName("broadens_to"):     {},
+	ah.RelationName("narrows_to"):      {},
+	ah.RelationName("surfaces"):       {},
 }
 
-var legacyPromptReplacements = map[DependencyType]string{
-	DependencyTypeAuditedBy:           "ASSURES",
-	DependencyTypeHasSubmarket:        "HAS_MARKET_SEGMENT",
-	DependencyTypeWorksFor:            "EMPLOYED_BY",
-	DependencyTypeHasKeyPerson:        "KEY_PERSON",
-	DependencyTypeCorporateTransition: "RENAMED_TO / REBRANDED_TO / LEGAL_SUCCESSOR_OF / MERGED_INTO / SPUN_OFF_FROM / ACQUIRED_BY",
-	DependencyTypeDomainRelation:      "RELATED_DOMAIN / BROADENS_TO / NARROWS_TO",
+var legacyPromptReplacements = map[ah.RelationName]string{
+	ah.RelationName("audited_by"):           "ASSURES",
+	ah.RelationName("has_submarket"):        "HAS_MARKET_SEGMENT",
+	ah.RelationName("works_for"):            "EMPLOYED_BY",
+	ah.RelationName("has_key_person"):        "KEY_PERSON",
+	ah.RelationName("corporate_transition"): "RENAMED_TO / REBRANDED_TO / LEGAL_SUCCESSOR_OF / MERGED_INTO / SPUN_OFF_FROM / ACQUIRED_BY",
+	ah.RelationName("domain_relation"):      "RELATED_DOMAIN / BROADENS_TO / NARROWS_TO",
 }
 
-var relationPromptAnnotations = map[DependencyType]relationPromptAnnotation{
-	DependencyTypeDependsOn: {
+var relationPromptAnnotations = map[ah.RelationName]relationPromptAnnotation{
+	ah.RelationName("depends_on"): {
 		extra: []string{
 			"Use when the source requires the target to operate or deliver outcomes.",
 			"Do NOT use when the source is the supplier and the target is the customer; use SUPPLIES_TO.",
 			"For actor↔actor dependencies include qualifiers.source_role=dependent and qualifiers.target_role=dependency.",
 		},
 	},
-	DependencyTypeSuppliesTo: {
+	ah.RelationNameSupplies: {
 		extra: []string{
 			"Commercial flow from supplier -> customer/recipient; not ownership or control.",
 			"MARKET MUST NOT be source or target for SUPPLIES_TO.",
 			"For ORG/FACILITY -> ORG/FACILITY supply links include qualifiers.source_role=supplier and qualifiers.target_role=customer.",
 		},
 	},
-	DependencyTypeLocatedIn: {
+	ah.RelationName("located_in"): {
 		extra: []string{
 			"Use for physical/geographic placement only.",
 		},
 	},
-	DependencyTypeOperatesIn: {
+	ah.RelationName("operates_in"): {
 		extra: []string{
 			"Use for operational activity or facility operation, not just a registered address.",
 			"MARKET MUST NOT be source for OPERATES_IN.",
 		},
 	},
-	DependencyTypeRegulates: {
+	ah.RelationNameRegulates: {
 		extra: []string{
 			`JURISDICTION RULE: REGULATES means ongoing domestic oversight within the regulator's own jurisdiction.`,
 			"Do NOT use REGULATES for sanctions, trade restrictions, or extra-territorial enforcement. Use CONTROLS_ACCESS or IMPOSES_CONDITION instead.",
 		},
 	},
-	DependencyTypeOwns: {
+	ah.RelationNameBeneficiallyOwns: {
 		extra: []string{
 			"Use OWNS only for legal, beneficial, or controlling ownership of the target.",
 			"NEVER output OWNS where targetType=PERSON.",
@@ -222,125 +223,125 @@ var relationPromptAnnotations = map[DependencyType]relationPromptAnnotation{
 			`NEVER output OWNS from ORGANIZATION to COMMUNITY if target canonicalPath is /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}. Dynasties and tribes own organizations, not the reverse.`,
 		},
 	},
-	DependencyTypeSubsidiaryOf: {
+	ah.RelationNameSubsidiaryOf: {
 		extra: []string{
 			"Inverse ownership form (child -> parent). Runtime normalizes it into OWNS.",
 		},
 	},
-	DependencyTypeControls: {
+	ah.RelationNameControlsVia: {
 		extra: []string{
 			"Use for voting, state, contractual, or indirect control when ownership is unclear.",
 			"Do NOT use CONTROLS for external audit/certification/inspection oversight; use ASSURES with qualifiers.assurance_type.",
 		},
 	},
-	DependencyTypeManages: {
+	ah.RelationName("manages"): {
 		extra: []string{
 			"Formal management authority or operational responsibility, not ownership.",
 		},
 	},
-	DependencyTypeInvestsIn: {
+	ah.RelationNameInvestedIn: {
 		extra: []string{
 			"Funding or minority stake only; do not use unless investment is explicit.",
 			"Direction is strict: investor -> investee.",
 		},
 	},
-	DependencyTypePartnersWith: {
+	ah.RelationNameJointVentureWith: {
 		extra: []string{
 			"Peer collaboration only; not ownership or supply-chain.",
 		},
 	},
-	DependencyTypeProduces: {
+	ah.RelationNameProduces: {
 		extra: []string{
 			"For PRODUCT -> PRODUCT value-chain steps use TRANSFORMS_INTO, ASSEMBLES_INTO, or USED_IN instead of PRODUCES.",
 		},
 	},
-	DependencyTypeTransformsInto: {
+	ah.RelationName("transforms_into"): {
 		extra: []string{
 			"Direction must follow the value chain: upstream raw/earlier-stage product -> downstream refined/later-stage product.",
 		},
 	},
-	DependencyTypeAssemblesInto: {
+	ah.RelationName("assembles_into"): {
 		extra: []string{
 			"Use for direct component/subassembly -> assembled-product steps.",
 		},
 	},
-	DependencyTypeUsedIn: {
+	ah.RelationName("used_in"): {
 		extra: []string{
 			"Use for strong operational input semantics where the source is required but not transformed into the target and not assembled into it.",
 		},
 	},
-	DependencyTypeAssures: {
+	ah.RelationNameAssures: {
 		extra: []string{
 			"Add qualifiers.assurance_type: audit | certification | regulatory | inspection.",
 		},
 	},
-	DependencyTypeInfluences: {
+	ah.RelationNameInfluences: {
 		extra: []string{
 			"Use for soft power, pressure, or indirect impact only.",
 		},
 	},
-	DependencyTypeParticipatesIn: {
+	ah.RelationName("participates_in"): {
 		extra: []string{
 			"PARTICIPATES_IN direction is participant -> market.",
 			`Put market share in relation.metrics["market_share_percent"] when known.`,
 		},
 	},
-	DependencyTypeTradedIn: {
+	ah.RelationNameListedOn: {
 		extra: []string{
 			"Use only for product↔market trading or price-discovery context. Do NOT use PARTICIPATES_IN for PRODUCT -> MARKET.",
 		},
 	},
-	DependencyTypeOperatesVia: {
+	ah.RelationName("operates_via"): {
 		extra: []string{
 			"Prefer MEDIA_CHANNEL targets such as /media/{platform}/{channel-slug}, not the platform organization.",
 		},
 	},
-	DependencyTypeMemberOf: {
+	ah.RelationNameMemberOf: {
 		extra: []string{
 			"Use only for PERSON -> COMMUNITY. Do not use for orgs, locations, or facilities.",
 		},
 	},
-	DependencyTypeAffiliatedWith: {
+	ah.RelationName("affiliated_with"): {
 		extra: []string{
 			"Use for COMMUNITY/PERSON affiliation with a formal organization, not ownership.",
 		},
 	},
-	DependencyTypeHasSubgroup: {
+	ah.RelationName("has_subgroup"): {
 		extra: []string{
 			"Community hierarchy is broader -> narrower subgroup.",
 		},
 	},
-	DependencyTypeGatekeepsDecision: {
+	ah.RelationNameGatekeeps: {
 		extra: []string{
 			"When THIS FRAGMENT is DECISION_POINT, use explicit sourceCanonicalPath for the gatekeeper.",
 		},
 	},
-	DependencyTypeUsesMechanism: {
+	ah.RelationNameWields: {
 		extra: []string{
 			"When THIS FRAGMENT is MECHANISM, use explicit sourceCanonicalPath for the actor or decision that uses it.",
 		},
 	},
-	DependencyTypeAppliesTo: {
+	ah.RelationName("applies_to"): {
 		extra: []string{
 			"When THIS FRAGMENT is the affected entity, use explicit sourceCanonicalPath for the mechanism.",
 		},
 	},
-	DependencyTypeControlsAccess: {
+	ah.RelationName("controls_access"): {
 		extra: []string{
 			"When THIS FRAGMENT is the controlled entity, use explicit sourceCanonicalPath for the controller.",
 		},
 	},
-	DependencyTypeImposesCondition: {
+	ah.RelationNameImposes: {
 		extra: []string{
 			"When THIS FRAGMENT is the affected entity, use explicit sourceCanonicalPath for the imposer.",
 		},
 	},
-	DependencyTypeInGeoScope: {
+	ah.RelationName("in_geo_scope"): {
 		extra: []string{
 			"When available include qualifiers.scope_basis to explain why this geo is in scope.",
 		},
 	},
-	DependencyTypeAffects: {
+	ah.RelationNameDisrupts: {
 		extra: []string{
 			"Use for downstream policy/community/market effects. Include pass-through/lag qualifiers when available.",
 		},
@@ -349,72 +350,72 @@ var relationPromptAnnotations = map[DependencyType]relationPromptAnnotation{
 
 var explicitSourcePromptSpecs = []explicitSourcePromptSpec{
 	{
-		edgeType: DependencyTypeOwns,
+		edgeType: ah.RelationNameBeneficiallyOwns,
 		lines: []string{
 			`If THIS FRAGMENT is owned by X, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.`,
 			`Never emit reversed OWNS (THIS FRAGMENT -> its owner).`,
 		},
 	},
 	{
-		edgeType: DependencyTypeInvestsIn,
+		edgeType: ah.RelationNameInvestedIn,
 		lines: []string{
 			`If THIS FRAGMENT is invested in by X, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.`,
 			`Never emit reversed INVESTS_IN (THIS FRAGMENT -> its investor).`,
 		},
 	},
 	{
-		edgeType: DependencyTypeAssures,
+		edgeType: ah.RelationNameAssures,
 		lines: []string{
 			`If THIS FRAGMENT is audited/certified/inspected by X, keep relationType=ASSURES and set sourceCanonicalPath/sourceType/sourceName = X.`,
 		},
 	},
 	{
-		edgeType: DependencyTypeControls,
+		edgeType: ah.RelationNameControlsVia,
 		lines: []string{
 			`Use explicit source whenever THIS FRAGMENT is the semantic target.`,
 			"If THIS FRAGMENT is PRODUCT and evidence says it is controlled by X, set sourceCanonicalPath = X and keep targetCanonicalPath = THIS FRAGMENT.",
 		},
 	},
 	{
-		edgeType: DependencyTypeGatekeepsDecision,
+		edgeType: ah.RelationNameGatekeeps,
 		lines: []string{
 			`If THIS FRAGMENT is DECISION_POINT and you are answering "Who gatekeeps this decision?", set sourceCanonicalPath/sourceType/sourceName to the gatekeeper.`,
 		},
 	},
 	{
-		edgeType: DependencyTypeUsesMechanism,
+		edgeType: ah.RelationNameWields,
 		lines: []string{
 			`If THIS FRAGMENT is MECHANISM and you are answering "Who uses this mechanism?", set sourceCanonicalPath/sourceType/sourceName to the user.`,
 			`If THIS FRAGMENT is DECISION_POINT and you are answering "What mechanism does this decision use?", THIS FRAGMENT remains the source.`,
 		},
 	},
 	{
-		edgeType: DependencyTypeAppliesTo,
+		edgeType: ah.RelationName("applies_to"),
 		lines: []string{
 			`If THIS FRAGMENT is the affected entity, set sourceCanonicalPath/sourceType/sourceName to the mechanism.`,
 		},
 	},
 	{
-		edgeType: DependencyTypeControlsAccess,
+		edgeType: ah.RelationName("controls_access"),
 		lines: []string{
 			"If THIS FRAGMENT is the controlled entity, set sourceCanonicalPath/sourceType/sourceName to the controller.",
 		},
 	},
 	{
-		edgeType: DependencyTypeImposesCondition,
+		edgeType: ah.RelationNameImposes,
 		lines: []string{
 			"If THIS FRAGMENT is the affected entity, set sourceCanonicalPath/sourceType/sourceName to the imposer.",
 		},
 	},
 	{
-		edgeType: DependencyTypeAdministers,
+		edgeType: ah.RelationNameOperates,
 		lines: []string{
 			"If THIS FRAGMENT is FACILITY or DEPOSIT and evidence says it is administered by X, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.",
 			"/org/ cannot administer /gov/; do not reverse that hierarchy.",
 		},
 	},
 	{
-		edgeType: DependencyTypeExtractsFrom,
+		edgeType: ah.RelationName("extracts_from"),
 		lines: []string{
 			"If THIS FRAGMENT is DEPOSIT and evidence says facility X extracts from it, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.",
 		},
@@ -433,10 +434,10 @@ func relationTypesPromptForDomainMode(mode string) string {
 	return strings.Join(types, ", ")
 }
 
-func orderedPromptEdgeTypes(includeDomain bool) []DependencyType {
-	seen := make(map[DependencyType]struct{})
-	out := make([]DependencyType, 0, len(edgesemantics.EdgeDirectionPolicies)+len(legacyPromptOnlyDirectionPolicies))
-	appendType := func(dt DependencyType) {
+func orderedPromptEdgeTypes(includeDomain bool) []ah.RelationName {
+	seen := make(map[ah.RelationName]struct{})
+	out := make([]ah.RelationName, 0, len(edgesemantics.EdgeDirectionPolicies)+len(legacyPromptOnlyDirectionPolicies))
+	appendType := func(dt ah.RelationName) {
 		if _, ok := seen[dt]; ok {
 			return
 		}
@@ -468,7 +469,7 @@ func orderedPromptEdgeTypes(includeDomain bool) []DependencyType {
 	// pins on this exact invariant.
 	remaining := make([]string, 0, len(edgesemantics.EdgeDirectionPolicies))
 	for rel := range edgesemantics.EdgeDirectionPolicies {
-		dt := DependencyType(rel)
+		dt := ah.RelationName(rel)
 		if !includeDomain {
 			if _, ok := domainPromptEdges[dt]; ok {
 				continue
@@ -481,16 +482,16 @@ func orderedPromptEdgeTypes(includeDomain bool) []DependencyType {
 	}
 	sort.Strings(remaining)
 	for _, name := range remaining {
-		appendType(DependencyType(name))
+		appendType(ah.RelationName(name))
 	}
 	return out
 }
 
-func renderEdgePromptEntry(dt DependencyType, indent string) string {
+func renderEdgePromptEntry(dt ah.RelationName, indent string) string {
 	rule, ok := edgesemantics.EdgeDirectionPolicies[dt]
 	if !ok {
 		// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
-		// fall back to the prompt-only legacy overlay so DependencyType
+		// fall back to the prompt-only legacy overlay so RelationName
 		// values whose AH disposition is Dropped/fold_to_attributes
 		// (RELATIVE_OF, RENAMED_TO, EMPLOYED_BY, …) still surface in the
 		// scout extraction prompt vocabulary; without this fallback the
@@ -547,8 +548,8 @@ func generatedGeneralRelationTaxonomyBlock() string {
 }
 
 func generatedResearchRelationDirectionRulesBlock() string {
-	var phase1 []DependencyType
-	var phase2 []DependencyType
+	var phase1 []ah.RelationName
+	var phase2 []ah.RelationName
 	for _, dt := range orderedPromptEdgeTypes(false) {
 		if _, ok := strategicPromptEdges[dt]; ok {
 			phase2 = append(phase2, dt)
@@ -650,8 +651,8 @@ func generatedIntentDecomposerRelationRulesBlock(domainModes []string) string {
 	isSupplyChain := taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) ||
 		taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeServiceChain)
 
-	filtered := make([]DependencyType, 0)
-	seenFiltered := make(map[DependencyType]struct{})
+	filtered := make([]ah.RelationName, 0)
+	seenFiltered := make(map[ah.RelationName]struct{})
 	for _, dt := range orderedPromptEdgeTypes(false) {
 		if !edgesemantics.AllowlistContains(allowlist, dt) {
 			continue
@@ -727,7 +728,7 @@ func PromptRelationTypesForDomainMode(mode string) string {
 	return relationTypesPromptForDomainMode(mode)
 }
 
-func promptFragmentTypes(types []FragmentType) string {
+func promptFragmentTypes(types []ah.FragmentClass) string {
 	if len(types) == 0 {
 		return "*"
 	}

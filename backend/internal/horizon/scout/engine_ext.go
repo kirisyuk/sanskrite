@@ -1,12 +1,34 @@
 package scout
 
 import (
+	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"context"
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/regstress"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/wirekeys"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/supplysemantics"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
+	"github.com/igorkirisyuk/sanskrite/internal/realtime"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"golang.org/x/sync/errgroup"
+	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
+	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"log"
 	"sort"
 	"strconv"
@@ -14,29 +36,6 @@ import (
 	"sync"
 	"time"
 	"unicode"
-
-	"golang.org/x/sync/errgroup"
-
-	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
-	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/regstress"
-	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/supplysemantics"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
-	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
-	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
-	"github.com/igorkirisyuk/sanskrite/internal/realtime"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 func parseOptionalISODate(s *string) *time.Time {
@@ -93,7 +92,7 @@ func isDomainScaffoldRelationType(rt string) bool {
 func canonicalDomainAnchorRelationType(rawType, targetPath string) string {
 	rt := strings.TrimSpace(taxonomy.NormalizeRelationType(rawType))
 	if rt == "" {
-		rt = string(DependencyTypeFocusesOn)
+		rt = string(ah.RelationNameInfluences)
 	}
 	if isDomainScaffoldRelationType(rt) {
 		return rt
@@ -102,10 +101,10 @@ func canonicalDomainAnchorRelationType(rawType, targetPath string) string {
 	// Fallback to FOCUSES_ON here caused systematic quarantine (direction contract mismatch).
 	targetType := InferFragmentTypeFromCanonicalPath(strings.TrimSpace(targetPath))
 	switch targetType {
-	case FragmentTypeMechanism, FragmentTypeDecisionPoint:
-		return string(DependencyTypeSurfaces)
+	case ah.FragmentClassMechanism, ah.FragmentClassDecision:
+		return string(ah.RelationNameInfluences)
 	default:
-		return string(DependencyTypeFocusesOn)
+		return string(ah.RelationNameInfluences)
 	}
 }
 
@@ -134,7 +133,7 @@ func sanitizeDomainResearchRelations(domainCanonicalPath, contractType string, r
 		// already speaks the scout DependencyType vocabulary.
 		rt := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
 		if rt == "" {
-			rt = string(DependencyTypeFocusesOn)
+			rt = string(ah.RelationNameInfluences)
 		}
 		if scoutRT := normalizeToScoutRelation(rt); scoutRT != "" {
 			rt = string(scoutRT)
@@ -189,14 +188,14 @@ func extractRadiusKmFromQualifiers(q map[string]interface{}) (float64, bool) {
 func supplyChainSubstitutabilityHeuristic(edgeType DependencyType, srcPath, dstPath string) float64 {
 	_ = srcPath
 	switch edgeType {
-	case DependencyTypeSuppliesTo:
+	case ah.RelationNameSupplies:
 		if strings.HasPrefix(strings.TrimSpace(dstPath), "/product/") {
 			return 0.24
 		}
 		return 0.40
-	case DependencyTypeTransformsInto, DependencyTypeAssemblesInto, DependencyTypeUsedIn:
+	case DependencyType("transforms_into"), DependencyType("assembles_into"), DependencyType("used_in"):
 		return 0.44
-	case DependencyTypeExtractsFrom:
+	case DependencyType("extracts_from"):
 		return 0.36
 	default:
 		return 0.52
@@ -519,10 +518,10 @@ func isSoftDeniedRelationForRecurse(sourceType, targetType FragmentType, _ strin
 	if shouldSkipRecursivePlaceholderTarget(targetPath) {
 		return true
 	}
-	if sourceType == FragmentTypeGeoRegion {
+	if sourceType == ah.FragmentClassGeo {
 		switch rt {
-		case string(DependencyTypeOperatesIn), string(DependencyTypeParticipatesIn):
-			if targetType == FragmentTypeMarket || strings.HasPrefix(strings.TrimSpace(targetPath), "/market/") {
+		case string(ah.RelationNameOperates), string(ah.RelationNameMemberOf):
+			if targetType == ah.FragmentClassMarket || strings.HasPrefix(strings.TrimSpace(targetPath), "/market/") {
 				return true
 			}
 		}
@@ -1371,7 +1370,7 @@ func (e *ScoutEngine) ensureOrgGeoFallbackLink(ctx context.Context, frag *models
 	if e == nil || e.fragmentsRepo == nil || e.edgesRepo == nil || frag == nil {
 		return
 	}
-	if frag.Class != FragmentTypeOrganization {
+	if frag.Class != ah.FragmentClassOrg {
 		return
 	}
 	orgID := strings.TrimSpace(frag.ID)
@@ -1418,13 +1417,13 @@ func (e *ScoutEngine) ensureOrgGeoFallbackLink(ctx context.Context, frag *models
 		return
 	}
 
-	geoFrag, err := e.getOrCreateFragmentByPath(ctx, targetPath, FragmentTypeGeoRegion, bestEffortGeoLabel(geoToken), "", "org_geo_fallback", sourceID)
+	geoFrag, err := e.getOrCreateFragmentByPath(ctx, targetPath, ah.FragmentClassGeo, bestEffortGeoLabel(geoToken), "", "org_geo_fallback", sourceID)
 	if err != nil || geoFrag == nil || strings.TrimSpace(geoFrag.ID) == "" {
 		return
 	}
 	geoID := strings.TrimSpace(geoFrag.ID)
 
-	if existing, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", orgID, geoID, DependencyTypeLocatedIn); err == nil && existing != nil {
+	if existing, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", orgID, geoID, ah.RelationNameIncorporatedIn); err == nil && existing != nil {
 		return
 	}
 	now := time.Now().UTC()
@@ -1432,7 +1431,7 @@ func (e *ScoutEngine) ensureOrgGeoFallbackLink(ctx context.Context, frag *models
 		TenantID:         "global",
 		SourceFragmentID: orgID,
 		TargetFragmentID: geoID,
-		Relation:             DependencyTypeLocatedIn,
+		Relation:             ah.RelationNameIncorporatedIn,
 		Properties: models.EdgeProperties{
 			Criticality:   0.45,
 			Amplification: 1.0,
@@ -1456,7 +1455,7 @@ func (e *ScoutEngine) ensureFacilityGeoFallbackLink(ctx context.Context, frag *m
 	if e == nil || e.fragmentsRepo == nil || e.edgesRepo == nil || frag == nil {
 		return
 	}
-	if frag.Class != FragmentTypeFacility {
+	if frag.Class != ah.FragmentClassSite {
 		return
 	}
 	facilityID := strings.TrimSpace(frag.ID)
@@ -1482,13 +1481,13 @@ func (e *ScoutEngine) ensureFacilityGeoFallbackLink(ctx context.Context, frag *m
 		return
 	}
 
-	geoFrag, err := e.getOrCreateFragmentByPath(ctx, targetPath, FragmentTypeGeoRegion, bestEffortGeoLabel(geoToken), "", "facility_geo_fallback", sourceID)
+	geoFrag, err := e.getOrCreateFragmentByPath(ctx, targetPath, ah.FragmentClassGeo, bestEffortGeoLabel(geoToken), "", "facility_geo_fallback", sourceID)
 	if err != nil || geoFrag == nil || strings.TrimSpace(geoFrag.ID) == "" {
 		return
 	}
 	geoID := strings.TrimSpace(geoFrag.ID)
 
-	if existing, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", facilityID, geoID, DependencyTypeLocatedIn); err == nil && existing != nil {
+	if existing, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", facilityID, geoID, ah.RelationNameIncorporatedIn); err == nil && existing != nil {
 		return
 	}
 	now := time.Now().UTC()
@@ -1496,7 +1495,7 @@ func (e *ScoutEngine) ensureFacilityGeoFallbackLink(ctx context.Context, frag *m
 		TenantID:         "global",
 		SourceFragmentID: facilityID,
 		TargetFragmentID: geoID,
-		Relation:             DependencyTypeLocatedIn,
+		Relation:             ah.RelationNameIncorporatedIn,
 		Properties: models.EdgeProperties{
 			Criticality:   0.45,
 			Amplification: 1.0,
@@ -1525,8 +1524,8 @@ func (e *ScoutEngine) fragmentHasAnyGeoLocationEdge(ctx context.Context, fragmen
 		return false
 	}
 	types := []DependencyType{
-		DependencyTypeLocatedIn,
-		DependencyTypeOperatesIn,
+		ah.RelationNameIncorporatedIn,
+		ah.RelationNameOperates,
 	}
 	for _, t := range types {
 		tt := t
@@ -1542,7 +1541,7 @@ func (e *ScoutEngine) fragmentHasAnyGeoLocationEdge(ctx context.Context, fragmen
 			if gerr != nil || target == nil {
 				continue
 			}
-			if target.Class == FragmentTypeGeoRegion || strings.HasPrefix(strings.TrimSpace(target.CanonicalPath), "/loc/") {
+			if target.Class == ah.FragmentClassGeo || strings.HasPrefix(strings.TrimSpace(target.CanonicalPath), "/loc/") {
 				return true
 			}
 		}
@@ -1657,7 +1656,7 @@ func (e *ScoutEngine) bestEffortGeocodeRelationTargetCandidates(ctx context.Cont
 		}
 	}
 	add(henrich.BuildAddressFromFragment(fragment))
-	if fragment.Class == FragmentTypeFacility {
+	if fragment.Class == ah.FragmentClassSite {
 		add(henrich.BuildFacilityAddressCandidates(fragment, parent)...)
 	}
 	add(henrich.BuildLastSegmentAddressCandidates(fragment)...)
@@ -1682,7 +1681,7 @@ func (e *ScoutEngine) bestEffortEnrichRelationTargetGeo(ctx context.Context, fra
 	if bestEffortAttachCountryISOFromPath(fragment) {
 		updated = true
 	}
-	if fragment.Class == FragmentTypeFacility && parent != nil && henrich.EnrichCoordinatesFromParent(fragment, parent) {
+	if fragment.Class == ah.FragmentClassSite && parent != nil && henrich.EnrichCoordinatesFromParent(fragment, parent) {
 		updated = true
 	}
 	if !models.HasRealGeoCoordinates(fragment.Coordinates) && e.geonamesClient != nil {
@@ -1691,11 +1690,11 @@ func (e *ScoutEngine) bestEffortEnrichRelationTargetGeo(ctx context.Context, fra
 		}
 	}
 	if !models.HasRealGeoCoordinates(fragment.Coordinates) {
-		if fragment.Class == FragmentTypeFacility {
+		if fragment.Class == ah.FragmentClassSite {
 			if result, err := RevalidateFacilityGeo(ctx, fragment, e.geocodingClient); err == nil && result.Applied {
 				updated = true
 			}
-		} else if fragment.Class == FragmentTypeOrganization {
+		} else if fragment.Class == ah.FragmentClassOrg {
 			if result, err := RevalidateOrgGeo(ctx, fragment, e.geocodingClient); err == nil && result.Applied {
 				updated = true
 			}
@@ -3582,17 +3581,17 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				}
 				rt := strings.TrimSpace(rel.RelationType)
 				if rt == "" {
-					rt = string(DependencyTypeFocusesOn)
+					rt = string(DependencyType("focuses_on"))
 				}
 				rt = strings.TrimSpace(taxonomy.NormalizeRelationType(rt))
 				switch rt {
-				case string(DependencyTypeFocusesOn),
-					string(DependencyTypeInvolvesActor),
-					string(DependencyTypeInGeoScope),
-					string(DependencyTypeAbout),
-					string(DependencyTypeDependsOn),
-					string(DependencyTypeAffects),
-					string(DependencyTypeSurfaces):
+				case string(DependencyType("focuses_on")),
+					string(DependencyType("involves_actor")),
+					string(DependencyType("in_geo_scope")),
+					string(DependencyType("about")),
+					string(DependencyType("depends_on")),
+					string(ah.RelationNameDisrupts),
+					string(DependencyType("surfaces")):
 					// ok
 				default:
 					rt = canonicalDomainAnchorRelationType(rt, cp)
@@ -3830,9 +3829,9 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 					if err := taxonomy.ValidateCanonicalPath(loc); err == nil {
 						rels = append(rels, agents.DiscoveredRelation{
 							TargetName:          bestEffortDisplayLabel("", loc),
-							TargetType:          string(FragmentTypeGeoRegion),
+							TargetType:          string(ah.FragmentClassGeo),
 							TargetCanonicalPath: loc,
-							RelationType:        string(DependencyTypeInGeoScope),
+							RelationType:        string(ah.RelationNameConstrainedBy),
 							Reason:              "domain_expansion:facet_geo",
 							Confidence:          0.95,
 						})
@@ -3870,9 +3869,9 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				}
 				rels = append(rels, agents.DiscoveredRelation{
 					TargetName:          bestEffortDisplayLabel("", cp),
-					TargetType:          string(FragmentTypeProduct),
+					TargetType:          string(ah.FragmentClassProduct),
 					TargetCanonicalPath: cp,
-					RelationType:        string(DependencyTypeAbout),
+					RelationType:        string(ah.RelationNameInfluences),
 					Reason:              "domain_expansion:facet_" + key,
 					Confidence:          0.85,
 				})
@@ -3885,7 +3884,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 
 	for _, p := range firstOrder {
 		ft := InferFragmentTypeFromCanonicalPath(p)
-		rt := string(DependencyTypeFocusesOn)
+		rt := string(ah.RelationNameInfluences)
 		conf := 0.90
 		reason := "domain_expansion:first_order_entity"
 		if h, ok := researchRelByPath[strings.TrimSpace(p)]; ok {
@@ -3915,7 +3914,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			TargetName:          bestEffortDisplayLabel("", p),
 			TargetType:          "DOMAIN",
 			TargetCanonicalPath: p,
-			RelationType:        string(DependencyTypeRelatedDomain),
+			RelationType:        string(ah.RelationNameInfluences),
 			Reason:              "domain_expansion:related_domain",
 			Confidence:          0.50, // keep edge, but avoid recursion breadth
 		})
@@ -3925,7 +3924,7 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 			TargetName:          bestEffortDisplayLabel("", p),
 			TargetType:          "DOMAIN",
 			TargetCanonicalPath: p,
-			RelationType:        string(DependencyTypeAffects),
+			RelationType:        string(ah.RelationNameDisrupts),
 			Reason:              "domain_expansion:affected_domain",
 			Confidence:          0.50, // keep edge, but avoid recursion breadth
 		})
@@ -4570,10 +4569,10 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		if cp == "" || taxonomy.ValidateCanonicalPath(cp) != nil {
 			continue
 		}
-		f, err := e.getOrCreateFragmentByPath(ctx, cp, FragmentTypeDecisionPoint, dp.Title, dp.Description, "strategic_overlay", job.ID)
+		f, err := e.getOrCreateFragmentByPath(ctx, cp, ah.FragmentClassDecision, dp.Title, dp.Description, "strategic_overlay", job.ID)
 		if err == nil && f != nil {
-			if f.Class != FragmentTypeDecisionPoint {
-				f.Class = FragmentTypeDecisionPoint
+			if f.Class != ah.FragmentClassDecision {
+				f.Class = ah.FragmentClassDecision
 				if err := e.fragmentsRepo.Update(ctx, f); err != nil {
 					logGroundingErrorWithContext(job, "scout", "domain_overlay.update_fragment_type", "fragment_update_failed", "repo_update_error", true, err)
 					e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.update_fragment_type", "fragment_update_failed", "repo_update_error", true)
@@ -4598,7 +4597,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 					"lensId":          strings.TrimSpace(job.LensID),
 					"fragmentId":      strings.TrimSpace(f.ID),
 					"canonicalPath":   cp,
-					"type":            string(FragmentTypeDecisionPoint),
+					"type":            string(ah.FragmentClassDecision),
 					"label":           label,
 					"status":          "verified",
 					"epistemicStatus": string(f.Metadata.EpistemicStatus),
@@ -4615,10 +4614,10 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		if cp == "" || taxonomy.ValidateCanonicalPath(cp) != nil {
 			continue
 		}
-		f, err := e.getOrCreateFragmentByPath(ctx, cp, FragmentTypeMechanism, mech.Title, mech.Description, "strategic_overlay", job.ID)
+		f, err := e.getOrCreateFragmentByPath(ctx, cp, ah.FragmentClassMechanism, mech.Title, mech.Description, "strategic_overlay", job.ID)
 		if err == nil && f != nil {
-			if f.Class != FragmentTypeMechanism {
-				f.Class = FragmentTypeMechanism
+			if f.Class != ah.FragmentClassMechanism {
+				f.Class = ah.FragmentClassMechanism
 				if err := e.fragmentsRepo.Update(ctx, f); err != nil {
 					logGroundingErrorWithContext(job, "scout", "domain_overlay.update_fragment_type", "fragment_update_failed", "repo_update_error", true, err)
 					e.emitGroundingErrorTelemetry(ctx, job, "scout", "domain_overlay.update_fragment_type", "fragment_update_failed", "repo_update_error", true)
@@ -4643,7 +4642,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 					"lensId":          strings.TrimSpace(job.LensID),
 					"fragmentId":      strings.TrimSpace(f.ID),
 					"canonicalPath":   cp,
-					"type":            string(FragmentTypeMechanism),
+					"type":            string(ah.FragmentClassMechanism),
 					"label":           label,
 					"status":          "verified",
 					"epistemicStatus": string(f.Metadata.EpistemicStatus),
@@ -4662,7 +4661,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 			continue
 		}
 		// Check if edge already exists
-		existing, _ := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", fragmentID, targetFrag.ID, DependencyTypeSurfaces)
+		existing, _ := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", fragmentID, targetFrag.ID, ah.RelationNameInfluences)
 		if existing != nil {
 			continue
 		}
@@ -4670,7 +4669,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 			TenantID:         "global",
 			SourceFragmentID: fragmentID,
 			TargetFragmentID: targetFrag.ID,
-			Relation:             DependencyTypeSurfaces,
+			Relation:             ah.RelationNameInfluences,
 			Properties: models.EdgeProperties{
 				Criticality:   0.8,
 				Amplification: 1.0,
@@ -4747,22 +4746,22 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 			continue
 		}
 		// Strategic overlay guardrails: fix or drop invalid endpoint combinations early.
-		if relType == string(DependencyTypeUsesMechanism) {
+		if relType == string(ah.RelationNameWields) {
 			if !strings.HasPrefix(tgt, "/mechanism/") {
 				// If LLM linked to a decision point, reinterpret as GATEKEEPS_DECISION.
 				if strings.HasPrefix(tgt, "/decision/") {
-					relType = string(DependencyTypeGatekeepsDecision)
+					relType = string(ah.RelationNameGatekeeps)
 				} else {
 					continue
 				}
 			}
 		}
-		if relType == string(DependencyTypeGatekeepsDecision) {
+		if relType == string(ah.RelationNameGatekeeps) {
 			if !strings.HasPrefix(tgt, "/decision/") {
 				continue
 			}
 		}
-		if relType == string(DependencyTypeAppliesTo) {
+		if relType == string(ah.RelationNameImposes) {
 			if strings.HasPrefix(tgt, "/decision/") || strings.HasPrefix(tgt, "/mechanism/") {
 				continue
 			}
@@ -5169,14 +5168,14 @@ func (e *ScoutEngine) processRelationsInternal(
 
 		// General mode: exclude known noisy edge types
 		switch rt {
-		case string(DependencyTypeCompetesWith),
-			string(DependencyTypeInfluences),
+		case string(ah.RelationNameAlternateTo),
+			string(ah.RelationNameInfluences),
 			// OSINT-lite / social edges can explode recursion breadth; keep nodes/edges but don't auto-expand.
-			string(DependencyTypeRelatedTo),
-			string(DependencyTypeRelativeOf),
+			string(DependencyType("related_to")),
+			string(DependencyType("relative_of")),
 			// Auditors/assurers are governance facts; not useful to recursively expand by default.
-			string(DependencyTypeAssures),
-			string(DependencyTypeAuditedBy):
+			string(ah.RelationNameAssures),
+			string(DependencyType("audited_by")):
 			return false
 		default:
 			return true
@@ -5241,7 +5240,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		}
 		// Early strictification for GEO paths to avoid creating legacy non-strict nodes
 		// like /loc/{cc}/{admin1}. Reuse shared canonicalization helper.
-		if targetType == FragmentTypeGeoRegion {
+		if targetType == ah.FragmentClassGeo {
 			if norm := normalizeGeoPathToStrict(targetPath); norm != "" && norm != targetPath {
 				targetPath = norm
 			}
@@ -5400,7 +5399,7 @@ func (e *ScoutEngine) processRelationsInternal(
 				ft = InferFragmentTypeFromCanonicalPath(targetPath)
 			}
 			if ft == "" {
-				ft = FragmentTypeOrganization
+				ft = ah.FragmentClassOrg
 			}
 			targetType = ft
 			now := time.Now().UTC()
@@ -5437,7 +5436,7 @@ func (e *ScoutEngine) processRelationsInternal(
 				newFragment.Identifiers["shortName"] = rel.TargetShortName
 			}
 			// AFFECTED_ZONE: extract radiusKm from relation qualifiers when creating zone fragment.
-			// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeAffectedZone folds onto
+			// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassGeo folds onto
 			// (geo, affected_zone). The class-only `ft` no longer carries the subtype, so
 			// we detect the affected-zone shape via the canonical-path prefix instead.
 			if strings.HasPrefix(strings.TrimSpace(targetPath), "/zone/") && rel.Qualifiers != nil {
@@ -6109,7 +6108,7 @@ func (e *ScoutEngine) processRelationsInternal(
 					srcType = InferFragmentTypeFromCanonicalPath(explicitSourcePath)
 				}
 				if srcType == "" {
-					srcType = FragmentTypeOrganization
+					srcType = ah.FragmentClassOrg
 				}
 				now := time.Now().UTC()
 				srcName := rel.SourceName
@@ -6138,7 +6137,7 @@ func (e *ScoutEngine) processRelationsInternal(
 					},
 				}
 				// AFFECTED_ZONE: extract radiusKm from relation qualifiers when creating zone as explicit source.
-				// MIGRATION NOTE: legacy FragmentTypeAffectedZone folds onto (geo, affected_zone);
+				// MIGRATION NOTE: legacy ah.FragmentClassGeo folds onto (geo, affected_zone);
 				// detect via canonical-path prefix instead of class-only equality.
 				if strings.HasPrefix(strings.TrimSpace(explicitSourcePath), "/zone/") && rel.Qualifiers != nil {
 					if v, ok := extractRadiusKmFromQualifiers(rel.Qualifiers); ok && v > 0 {
@@ -6172,7 +6171,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		switch edgeType {
 		case "SUBSIDIARY_OF":
 			// Canonical representation: OWNS from parent -> subsidiary.
-			edgeType = DependencyTypeOwns
+			edgeType = ah.RelationNameBeneficiallyOwns
 			edgeSourceID, edgeTargetID = targetID, sourceFragment.ID
 			directionChanged = true
 		}
@@ -6754,7 +6753,7 @@ func (e *ScoutEngine) runStrategicOverlayCritic(
 		if frag == nil {
 			continue
 		}
-		if frag.Class != FragmentTypeDecisionPoint && frag.Class != FragmentTypeMechanism {
+		if frag.Class != ah.FragmentClassDecision && frag.Class != ah.FragmentClassMechanism {
 			continue
 		}
 		rel := relationsBySource[strings.TrimSpace(frag.CanonicalPath)]
@@ -6894,12 +6893,12 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 		return sourceID, targetID, edgeType, false
 	}
 	srcType := sourceFrag.Class
-	isGeo := func(t FragmentType) bool { return t == FragmentTypeGeoRegion }
-	isOrg := func(t FragmentType) bool { return t == FragmentTypeOrganization }
-	isFac := func(t FragmentType) bool { return t == FragmentTypeFacility }
-	isProd := func(t FragmentType) bool { return t == FragmentTypeProduct }
-	isPerson := func(t FragmentType) bool { return t == FragmentTypePerson }
-	isCommunity := func(t FragmentType) bool { return t == FragmentTypeCommunity }
+	isGeo := func(t FragmentType) bool { return t == ah.FragmentClassGeo }
+	isOrg := func(t FragmentType) bool { return t == ah.FragmentClassOrg }
+	isFac := func(t FragmentType) bool { return t == ah.FragmentClassSite }
+	isProd := func(t FragmentType) bool { return t == ah.FragmentClassProduct }
+	isPerson := func(t FragmentType) bool { return t == ah.FragmentClassPerson }
+	isCommunity := func(t FragmentType) bool { return t == ah.FragmentClassCommunity }
 
 	changed := false
 
@@ -6911,31 +6910,31 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 	}
 
 	switch edgeType {
-	case DependencyTypeOperatesIn:
+	case DependencyType("operates_in"):
 		// "X operates in Y": X is typically ORG/FAC, Y is GEO.
 		if isGeo(srcType) && (isOrg(targetType) || isFac(targetType)) {
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}
-	case DependencyTypeLocatedIn:
+	case DependencyType("located_in"):
 		// "X located in Y": X is non-geo, Y is GEO. Geo->Geo can be used for containment.
 		if isGeo(srcType) && !isGeo(targetType) {
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}
-	case DependencyTypeRegulates:
+	case ah.RelationNameRegulates:
 		// GEO->GEO is almost certainly containment, not regulation.
 		if isGeo(srcType) && isGeo(targetType) {
-			edgeType = DependencyTypeLocatedIn
+			edgeType = DependencyType("located_in")
 			changed = true
 		}
 		// GEO->ORG/FAC likely means the org/fac operates in the geo.
 		if isGeo(srcType) && (isOrg(targetType) || isFac(targetType)) {
 			sourceID, targetID = targetID, sourceID
-			edgeType = DependencyTypeOperatesIn
+			edgeType = DependencyType("operates_in")
 			changed = true
 		}
-	case DependencyTypeOwns:
+	case ah.RelationNameBeneficiallyOwns:
 		// Ownership is never "X OWNS a person" in our graph semantics.
 		// If target is a PERSON and source is an ORG, assume inversion and swap.
 		if isOrg(srcType) && isPerson(targetType) {
@@ -6949,24 +6948,24 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}
-	case DependencyTypeProduces:
+	case ah.RelationNameProduces:
 		// "X produces Y": X is ORG/FAC, Y is PRODUCT.
 		if isProd(srcType) && !isProd(targetType) {
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}
-	case DependencyTypeSuppliesTo:
+	case ah.RelationNameSupplies:
 		// "X supplies to Y": X is ORG (supplier), Y can be ORG/FAC/PRODUCT/GEO (recipient).
 		// If GEO -> ORG/FAC/PRODUCT, it's almost certainly inverted.
 		if isGeo(srcType) && (isOrg(targetType) || isFac(targetType) || isProd(targetType)) {
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}
-	case DependencyTypeManages, DependencyTypeEmployedBy, DependencyTypeBoardMemberOf, DependencyTypeFounded:
+	case ah.RelationNameManagedBy, DependencyType("employed_by"), ah.RelationNameHoldsBoardSeat, DependencyType("founded"):
 		// Leadership/people relationships are directional and typically originate from PERSON -> ORG/COMMUNITY.
 		// FOUNDED: Person founds org/community, never the reverse. Always swap COMMUNITY/ORG -> PERSON.
-		if edgeType == DependencyTypeFounded &&
-			(srcType == FragmentTypeCommunity || isOrg(srcType)) && isPerson(targetType) {
+		if edgeType == DependencyType("founded") &&
+			(srcType == ah.FragmentClassCommunity || isOrg(srcType)) && isPerson(targetType) {
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		} else if enableManagement && isOrg(srcType) && isPerson(targetType) {
@@ -6978,17 +6977,17 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 	// === STRATEGIC EDGE TYPE NORMALIZATION (Phase 2) ===
 	// These edge types have strict directional semantics that must be enforced.
 
-	case DependencyTypeGatekeepsDecision:
+	case ah.RelationNameGatekeeps:
 		// GATEKEEPS_DECISION: source MUST be ORG/GOV/COMMUNITY, target MUST be DECISION_POINT
 		// If source is DECISION_POINT, the edge is inverted and must be swapped.
-		isDecisionPoint := func(t FragmentType) bool { return t == FragmentTypeDecisionPoint }
-		if isDecisionPoint(srcType) && (isOrg(targetType) || targetType == FragmentTypeCommunity) {
+		isDecisionPoint := func(t FragmentType) bool { return t == ah.FragmentClassDecision }
+		if isDecisionPoint(srcType) && (isOrg(targetType) || targetType == ah.FragmentClassCommunity) {
 			// Inverted: DECISION_POINT → ORG [GATEKEEPS_DECISION] should be ORG → DECISION_POINT
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}
 		// Also catch MECHANISM as source (completely invalid)
-		isMechanism := func(t FragmentType) bool { return t == FragmentTypeMechanism }
+		isMechanism := func(t FragmentType) bool { return t == ah.FragmentClassMechanism }
 		if isMechanism(srcType) {
 			// MECHANISM cannot gatekeep decisions. This is likely a semantic error.
 			// Swap and hope target is a decision point.
@@ -6996,39 +6995,39 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 			changed = true
 		}
 
-	case DependencyTypeUsesMechanism:
+	case ah.RelationNameWields:
 		// USES_MECHANISM: source MUST be DECISION_POINT/ORG/GOV/COMMUNITY, target MUST be MECHANISM
 		// If source is MECHANISM and target is something else, swap.
-		isMechanism := func(t FragmentType) bool { return t == FragmentTypeMechanism }
+		isMechanism := func(t FragmentType) bool { return t == ah.FragmentClassMechanism }
 		if isMechanism(srcType) && !isMechanism(targetType) {
 			// Inverted: MECHANISM → DECISION_POINT [USES_MECHANISM] should be DECISION_POINT → MECHANISM
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}
 
-	case DependencyTypeAppliesTo:
+	case DependencyType("applies_to"):
 		// APPLIES_TO: source MUST be MECHANISM, target MUST be entity (ORG/FACILITY/PRODUCT/MARKET)
 		// If source is NOT MECHANISM and target IS MECHANISM, swap.
-		isMechanism := func(t FragmentType) bool { return t == FragmentTypeMechanism }
+		isMechanism := func(t FragmentType) bool { return t == ah.FragmentClassMechanism }
 		if !isMechanism(srcType) && isMechanism(targetType) {
 			// Inverted: ORG → MECHANISM [APPLIES_TO] should be MECHANISM → ORG
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}
 
-	case DependencyTypeControlsAccess, DependencyTypeImposesCondition:
+	case DependencyType("controls_access"), ah.RelationNameImposes:
 		// CONTROLS_ACCESS / IMPOSES_CONDITION: source MUST be DECISION_POINT/ORG/GOV/COMMUNITY
 		// Target MUST be entity (ORG/FACILITY/PRODUCT/MARKET/PROGRAM)
 		// If source is a "controlled" entity type and target is a controller type, swap.
 		isController := func(t FragmentType) bool {
-			return t == FragmentTypeDecisionPoint || isOrg(t) || t == FragmentTypeCommunity
+			return t == ah.FragmentClassDecision || isOrg(t) || t == ah.FragmentClassCommunity
 		}
-		// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeProgram folds onto
+		// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassOrg folds onto
 		// (org, program). Since `t` is class-only here, program-class fragments
 		// are caught by isOrg in isController; we drop the explicit Program
 		// arm in isControlled (org+program is a controller, not controlled).
 		isControlled := func(t FragmentType) bool {
-			return isFac(t) || isProd(t) || t == FragmentTypeMarket
+			return isFac(t) || isProd(t) || t == ah.FragmentClassMarket
 		}
 		if isControlled(srcType) && isController(targetType) {
 			// Inverted: FACILITY → ORG [CONTROLS_ACCESS] should be ORG → FACILITY
@@ -7036,20 +7035,20 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 			changed = true
 		}
 
-	case DependencyTypeAdministers:
+	case ah.RelationNameOperates:
 		// ADMINISTERS: source MUST be ORGANIZATION/GEO_REGION. FACILITY and DEPOSIT cannot administer.
-		// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeDeposit folds onto
-		// (site, deposit) and FragmentTypeProgram onto (org, program). The
+		// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassSite folds onto
+		// (site, deposit) and ah.FragmentClassOrg onto (org, program). The
 		// class-only check now treats deposit just like any other site
 		// (already covered by isFac) and program just like any other org
 		// (already covered by isOrg in tgtValid).
-		tgtValid := isOrg(targetType) || targetType == FragmentTypeGeoRegion
+		tgtValid := isOrg(targetType) || targetType == ah.FragmentClassGeo
 		if isFac(srcType) && tgtValid {
 			sourceID, targetID = targetID, sourceID
 			changed = true
 		}
 
-	case DependencyTypeControls:
+	case ah.RelationNameControlsVia:
 		// CONTROLS: source MUST be ORG/PERSON/COMMUNITY. PRODUCT cannot control.
 		if isProd(srcType) && (isOrg(targetType) || isFac(targetType)) {
 			sourceID, targetID = targetID, sourceID
@@ -7088,18 +7087,18 @@ func (e *ScoutEngine) canonicalizeQualifierFacilityPaths(ctx context.Context, qu
 			return strings.TrimSpace(rp)
 		}
 		if e.canonicalPathResolver != nil {
-			if resolved, err := e.canonicalPathResolver.Resolve(ctx, p, FragmentTypeFacility); err == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
+			if resolved, err := e.canonicalPathResolver.Resolve(ctx, p, ah.FragmentClassSite); err == nil && resolved != nil && strings.TrimSpace(resolved.CanonicalPath) != "" {
 				return strings.TrimSpace(resolved.CanonicalPath)
 			}
 		}
 		return p
 	}
-	if v := out[QualifierAtFacility]; v != nil {
+	if v := out[wirekeys.QualifierAtFacility]; v != nil {
 		if s, ok := v.(string); ok {
-			out[QualifierAtFacility] = resolvePath(s)
+			out[wirekeys.QualifierAtFacility] = resolvePath(s)
 		}
 	}
-	if v := out[QualifierTransportVia]; v != nil {
+	if v := out[wirekeys.QualifierTransportVia]; v != nil {
 		switch arr := v.(type) {
 		case []interface{}:
 			canon := make([]string, 0, len(arr))
@@ -7110,7 +7109,7 @@ func (e *ScoutEngine) canonicalizeQualifierFacilityPaths(ctx context.Context, qu
 					}
 				}
 			}
-			out[QualifierTransportVia] = canon
+			out[wirekeys.QualifierTransportVia] = canon
 		case []string:
 			canon := make([]string, 0, len(arr))
 			for _, s := range arr {
@@ -7118,7 +7117,7 @@ func (e *ScoutEngine) canonicalizeQualifierFacilityPaths(ctx context.Context, qu
 					canon = append(canon, r)
 				}
 			}
-			out[QualifierTransportVia] = canon
+			out[wirekeys.QualifierTransportVia] = canon
 		}
 	}
 	return out
@@ -7168,7 +7167,7 @@ func (e *ScoutEngine) enrichRouteFacilityGeoContext(ctx context.Context, fragmen
 		for _, key := range []string{"route", "route_path", "routePath", "route_waypoints", "routeWaypoints"} {
 			transportRefs = append(transportRefs, parseStateStringSlice(fragment.Qualifiers[key])...)
 		}
-		transportRefs = append(transportRefs, parseStateStringSlice(fragment.Qualifiers[QualifierTransportVia])...)
+		transportRefs = append(transportRefs, parseStateStringSlice(fragment.Qualifiers[wirekeys.QualifierTransportVia])...)
 	}
 	if scoutResult != nil {
 		fragCP := strings.TrimSpace(fragment.CanonicalPath)
@@ -7180,12 +7179,12 @@ func (e *ScoutEngine) enrichRouteFacilityGeoContext(ctx context.Context, fragmen
 				continue
 			}
 			targetPath := strings.TrimSpace(rel.TargetCanonicalPath)
-			if (rt == string(DependencyTypeLocatedIn) || rt == string(DependencyTypeOperatesIn)) &&
+			if (rt == string(ah.RelationNameIncorporatedIn) || rt == string(ah.RelationNameOperates)) &&
 				strings.HasPrefix(targetPath, "/loc/") {
 				regionPaths = append(regionPaths, targetPath)
 			}
 			if rel.Qualifiers != nil {
-				transportRefs = append(transportRefs, parseStateStringSlice(rel.Qualifiers[QualifierTransportVia])...)
+				transportRefs = append(transportRefs, parseStateStringSlice(rel.Qualifiers[wirekeys.QualifierTransportVia])...)
 			}
 		}
 		for _, ch := range scoutResult.SupplyChains {
@@ -9457,16 +9456,16 @@ func (e *ScoutEngine) processSupplyChains(
 		if ft == "" {
 			return nil
 		}
-		// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeProgram and
-		// FragmentTypeDeposit collapsed into (org, program) and (site, deposit)
-		// respectively; they are now matched by the FragmentTypeOrganization
-		// and FragmentTypeFacility arms below at the class level. Subtype
+		// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassOrg and
+		// ah.FragmentClassSite collapsed into (org, program) and (site, deposit)
+		// respectively; they are now matched by the ah.FragmentClassOrg
+		// and ah.FragmentClassSite arms below at the class level. Subtype
 		// disambiguation (program vs bare org, deposit vs bare site) is not
 		// required at this allow-listing site.
 		switch ft {
-		case FragmentTypeMarket, FragmentTypeCommunity,
-			FragmentTypeOrganization, FragmentTypeFacility, FragmentTypeProduct,
-			FragmentTypeGeoRegion:
+		case ah.FragmentClassMarket, ah.FragmentClassCommunity,
+			ah.FragmentClassOrg, ah.FragmentClassSite, ah.FragmentClassProduct,
+			ah.FragmentClassGeo:
 		default:
 			return nil
 		}

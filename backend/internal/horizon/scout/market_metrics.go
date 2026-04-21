@@ -1,9 +1,9 @@
 package scout
 
 import (
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 // Canonical market metric keys (preferred).
@@ -44,7 +44,7 @@ func normalizeMarketMetricKeys(fragment *models.HorizonFragment) {
 		return
 	}
 	// Only apply to MARKET nodes (by type or path prefix).
-	if fragment.Class != FragmentTypeMarket && !strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/market/") {
+	if fragment.Class != ah.FragmentClassMarket && !strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/market/") {
 		return
 	}
 

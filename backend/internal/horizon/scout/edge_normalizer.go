@@ -151,7 +151,7 @@ func buildScoutEdgeDirectionPolicies() map[ah.RelationName]edgesemantics.EdgeDir
 	// (now site -> site via subtype=deposit, but at the parent class
 	// level the edge is fac -> site). Use the legacy DependencyType key
 	// so existing scout call sites resolve.
-	out[DependencyTypeExtractsFrom] = edgesemantics.EdgeDirectionRule{
+	out[DependencyType("extracts_from")] = edgesemantics.EdgeDirectionRule{
 		ValidSourceClasses: []ah.FragmentClass{ah.FragmentClassSite},
 		ValidTargetClasses: []ah.FragmentClass{ah.FragmentClassSite},
 		Pairs:              []ah.EndpointKindRow{{From: ah.FragmentClassSite, To: ah.FragmentClassSite, Kind: "legacy_extracts_from"}},
@@ -161,7 +161,7 @@ func buildScoutEdgeDirectionPolicies() map[ah.RelationName]edgesemantics.EdgeDir
 	// LEGACY (read-side only): LOCATED_IN — historical site/org/community
 	// "is located in" a geo region. AH folds location into attribute
 	// scaffolding; scout keeps the edge for back-compat queries.
-	out[DependencyTypeLocatedIn] = edgesemantics.EdgeDirectionRule{
+	out[DependencyType("located_in")] = edgesemantics.EdgeDirectionRule{
 		ValidSourceClasses: []ah.FragmentClass{ah.FragmentClassSite, ah.FragmentClassOrg, ah.FragmentClassCommunity},
 		ValidTargetClasses: []ah.FragmentClass{ah.FragmentClassGeo},
 		Pairs: []ah.EndpointKindRow{
@@ -175,7 +175,7 @@ func buildScoutEdgeDirectionPolicies() map[ah.RelationName]edgesemantics.EdgeDir
 	// LEGACY (read-side only): OPERATES_IN — historical org/community
 	// "operates in" a geo region or site (deposit). Mirror of the
 	// pre-migration policy.
-	out[DependencyTypeOperatesIn] = edgesemantics.EdgeDirectionRule{
+	out[DependencyType("operates_in")] = edgesemantics.EdgeDirectionRule{
 		ValidSourceClasses: []ah.FragmentClass{ah.FragmentClassOrg, ah.FragmentClassCommunity},
 		ValidTargetClasses: []ah.FragmentClass{ah.FragmentClassGeo, ah.FragmentClassSite, ah.FragmentClassMarket},
 		Pairs: []ah.EndpointKindRow{
@@ -190,14 +190,14 @@ func buildScoutEdgeDirectionPolicies() map[ah.RelationName]edgesemantics.EdgeDir
 	// LEGACY (read-side only): ASSOCIATED_WITH — symmetric "vague"
 	// affiliation. AH dropped this as LLM noise; scout retains it for
 	// read-side Firestore back-compat with pre-migration scaffolds.
-	out[DependencyTypeAssociatedWith] = edgesemantics.EdgeDirectionRule{
+	out[DependencyType("associated_with")] = edgesemantics.EdgeDirectionRule{
 		ValidSourceClasses: []ah.FragmentClass{ah.FragmentClassOrg, ah.FragmentClassPerson, ah.FragmentClassCommunity},
 		ValidTargetClasses: []ah.FragmentClass{ah.FragmentClassOrg, ah.FragmentClassPerson, ah.FragmentClassCommunity},
 		Description:        "LEGACY (read-side only): symmetric affiliation between actors.",
 	}
 
 	// LEGACY (read-side only): CORPORATE_TRANSITION wrapper edge.
-	out[DependencyTypeCorporateTransition] = edgesemantics.EdgeDirectionRule{
+	out[DependencyType("corporate_transition")] = edgesemantics.EdgeDirectionRule{
 		ValidSourceClasses: []ah.FragmentClass{ah.FragmentClassOrg},
 		ValidTargetClasses: []ah.FragmentClass{ah.FragmentClassOrg},
 		Description:        "LEGACY (read-side only): umbrella edge for renamed_to / merged_into / spun_off_from / acquired_by.",
@@ -206,7 +206,7 @@ func buildScoutEdgeDirectionPolicies() map[ah.RelationName]edgesemantics.EdgeDir
 	// LEGACY (read-side only): DOMAIN_RELATION lattice edge. AH folds
 	// DOMAIN into evidence overlays; scout keeps the lattice link for
 	// backwards-compatible domain bookkeeping.
-	out[DependencyTypeDomainRelation] = edgesemantics.EdgeDirectionRule{
+	out[DependencyType("domain_relation")] = edgesemantics.EdgeDirectionRule{
 		ValidSourceClasses: []ah.FragmentClass{ah.FragmentClassEvidence},
 		ValidTargetClasses: []ah.FragmentClass{ah.FragmentClassEvidence},
 		Description:        "LEGACY (read-side only): symmetric domain<->domain bookkeeping link.",
@@ -215,7 +215,7 @@ func buildScoutEdgeDirectionPolicies() map[ah.RelationName]edgesemantics.EdgeDir
 	// LEGACY (read-side only): RELATIVE_OF — symmetric kinship link
 	// between persons. AH folds into attributes.relations[]; scout
 	// keeps the edge for back-compat reads + LLM prompt vocabulary.
-	out[DependencyTypeRelativeOf] = edgesemantics.EdgeDirectionRule{
+	out[DependencyType("relative_of")] = edgesemantics.EdgeDirectionRule{
 		ValidSourceClasses: []ah.FragmentClass{ah.FragmentClassPerson},
 		ValidTargetClasses: []ah.FragmentClass{ah.FragmentClassPerson},
 		Description:        "LEGACY (read-side only): kinship link between persons.",
@@ -225,8 +225,8 @@ func buildScoutEdgeDirectionPolicies() map[ah.RelationName]edgesemantics.EdgeDir
 	// rename succession. AH folds into HorizonFragment.nameHistory[];
 	// scout keeps the edge for back-compat queries + LLM prompts.
 	for _, rel := range []DependencyType{
-		DependencyTypeRenamedTo,
-		DependencyTypeRebrandedTo,
+		DependencyType("renamed_to"),
+		DependencyType("rebranded_to"),
 	} {
 		out[rel] = edgesemantics.EdgeDirectionRule{
 			ValidSourceClasses: []ah.FragmentClass{ah.FragmentClassOrg},
@@ -243,11 +243,11 @@ func buildScoutEdgeDirectionPolicies() map[ah.RelationName]edgesemantics.EdgeDir
 	// the LLM prompt vocabulary stays stable + scaffold paths can
 	// validate during the migration window.
 	for _, rel := range []DependencyType{
-		DependencyTypeEmployedBy,
-		DependencyTypeWorksFor,
-		DependencyTypeKeyPerson,
-		DependencyTypeHasKeyPerson,
-		DependencyTypeFounded,
+		DependencyType("employed_by"),
+		DependencyType("works_for"),
+		DependencyType("key_person"),
+		DependencyType("has_key_person"),
+		DependencyType("founded"),
 	} {
 		out[rel] = edgesemantics.EdgeDirectionRule{
 			ValidSourceClasses: []ah.FragmentClass{ah.FragmentClassPerson, ah.FragmentClassOrg},
@@ -258,7 +258,7 @@ func buildScoutEdgeDirectionPolicies() map[ah.RelationName]edgesemantics.EdgeDir
 
 	// LEGACY (read-side only): AUDITED_BY — covered by AH assures
 	// (assurance_type=audit). Scout keeps for back-compat reads.
-	out[DependencyTypeAuditedBy] = edgesemantics.EdgeDirectionRule{
+	out[DependencyType("audited_by")] = edgesemantics.EdgeDirectionRule{
 		ValidSourceClasses: []ah.FragmentClass{ah.FragmentClassOrg},
 		ValidTargetClasses: []ah.FragmentClass{ah.FragmentClassOrg},
 		Description:        "LEGACY (read-side only): organisational audit relation (canonical AH form is `assures` with assurance_type=audit).",
@@ -267,7 +267,7 @@ func buildScoutEdgeDirectionPolicies() map[ah.RelationName]edgesemantics.EdgeDir
 	// LEGACY (read-side only): HAS_SUBMARKET hierarchy. AH folded into
 	// attributes.submarkets[]; scout keeps the legacy edge for read-side
 	// back-compat with pre-migration market lattices.
-	out[DependencyTypeHasSubmarket] = edgesemantics.EdgeDirectionRule{
+	out[DependencyType("has_submarket")] = edgesemantics.EdgeDirectionRule{
 		ValidSourceClasses: []ah.FragmentClass{ah.FragmentClassMarket},
 		ValidTargetClasses: []ah.FragmentClass{ah.FragmentClassMarket},
 		Pairs:              []ah.EndpointKindRow{{From: ah.FragmentClassMarket, To: ah.FragmentClassMarket, Kind: "legacy_market_has_submarket"}},

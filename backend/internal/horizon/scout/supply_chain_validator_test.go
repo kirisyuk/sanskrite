@@ -1,9 +1,9 @@
 package scout
 
 import (
-	"testing"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"testing"
 )
 
 func TestSupplyChainStrictValidatorAllowsDistributionFacilityProducingPhysicalGoods(t *testing.T) {
@@ -15,7 +15,7 @@ func TestSupplyChainStrictValidatorAllowsDistributionFacilityProducingPhysicalGo
 	}
 	source := &models.HorizonFragment{
 		CanonicalPath: "/fac/kz/almaty-distribution-center",
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		Labels:        map[string]string{"en": "Almaty Distribution Center"},
 		Identifiers: map[string]string{
 			"facilityType": "distribution",
@@ -24,7 +24,7 @@ func TestSupplyChainStrictValidatorAllowsDistributionFacilityProducingPhysicalGo
 	}
 	target := &models.HorizonFragment{
 		CanonicalPath: "/product/finished/electronics/mobile/smartphones",
-		Class:          FragmentTypeProduct,
+		Class:          ah.FragmentClassProduct,
 	}
 
 	err := validator.ValidateEdgeAgainstFragments(edge, source, target, "job-1", 0)
@@ -42,7 +42,7 @@ func TestSupplyChainStrictValidatorAllowsDistributionFacilityProducingService(t 
 	}
 	source := &models.HorizonFragment{
 		CanonicalPath: "/fac/de/dhl-leipzig-hub",
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		Labels:        map[string]string{"en": "DHL Leipzig Hub"},
 		Identifiers: map[string]string{
 			"facilityType": "logistics",
@@ -51,7 +51,7 @@ func TestSupplyChainStrictValidatorAllowsDistributionFacilityProducingService(t 
 	}
 	target := &models.HorizonFragment{
 		CanonicalPath: "/product/service/logistics/parcel-sorting",
-		Class:          FragmentTypeProduct,
+		Class:          ah.FragmentClassProduct,
 	}
 
 	if err := validator.ValidateEdgeAgainstFragments(edge, source, target, "job-1", 0); err != nil {
@@ -68,13 +68,13 @@ func TestSupplyChainStrictValidatorAllowsWarehouseByInference(t *testing.T) {
 	}
 	source := &models.HorizonFragment{
 		CanonicalPath: "/fac/kz/almaty-distribution-center",
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		Labels:        map[string]string{"en": "Almaty Distribution Center"},
 		Identifiers:   map[string]string{},
 	}
 	target := &models.HorizonFragment{
 		CanonicalPath: "/product/finished/electronics/mobile/smartphones",
-		Class:          FragmentTypeProduct,
+		Class:          ah.FragmentClassProduct,
 	}
 
 	if err := validator.ValidateEdgeAgainstFragments(edge, source, target, "job-1", 0); err != nil {
@@ -91,7 +91,7 @@ func TestSupplyChainStrictValidatorAllowsManufacturingFacilityProducingPhysicalG
 	}
 	source := &models.HorizonFragment{
 		CanonicalPath: "/fac/kr/samsung-gumi-plant",
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		Labels:        map[string]string{"en": "Samsung Gumi Plant"},
 		Identifiers: map[string]string{
 			"facilityType": "manufacturing",
@@ -100,7 +100,7 @@ func TestSupplyChainStrictValidatorAllowsManufacturingFacilityProducingPhysicalG
 	}
 	target := &models.HorizonFragment{
 		CanonicalPath: "/product/finished/electronics/mobile/smartphones",
-		Class:          FragmentTypeProduct,
+		Class:          ah.FragmentClassProduct,
 	}
 
 	if err := validator.ValidateEdgeAgainstFragments(edge, source, target, "job-1", 0); err != nil {

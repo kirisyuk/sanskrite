@@ -379,29 +379,29 @@ func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, conte
 			scoutResult.Fragment.Class = ah.FragmentClassOrg
 			scoutResult.Fragment.Subtype = "media_channel"
 		case strings.Contains(targetCanonicalPath, "/person/"):
-			scoutResult.Fragment.Class = FragmentTypePerson
+			scoutResult.Fragment.Class = ah.FragmentClassPerson
 		case strings.Contains(targetCanonicalPath, "/org/"):
-			scoutResult.Fragment.Class = FragmentTypeOrganization
+			scoutResult.Fragment.Class = ah.FragmentClassOrg
 		case strings.Contains(targetCanonicalPath, "/gov/"):
-			scoutResult.Fragment.Class = FragmentTypeOrganization
+			scoutResult.Fragment.Class = ah.FragmentClassOrg
 		case strings.Contains(targetCanonicalPath, "/product/"):
-			scoutResult.Fragment.Class = FragmentTypeProduct
+			scoutResult.Fragment.Class = ah.FragmentClassProduct
 		case strings.Contains(targetCanonicalPath, "/program/"):
 			scoutResult.Fragment.Class = ah.FragmentClassOrg
 			scoutResult.Fragment.Subtype = "program"
 		case strings.Contains(targetCanonicalPath, "/market/"):
-			scoutResult.Fragment.Class = FragmentTypeMarket
+			scoutResult.Fragment.Class = ah.FragmentClassMarket
 		case strings.Contains(targetCanonicalPath, "/fac/"):
-			scoutResult.Fragment.Class = FragmentTypeFacility
+			scoutResult.Fragment.Class = ah.FragmentClassSite
 		case strings.Contains(targetCanonicalPath, "/deposit/"):
 			scoutResult.Fragment.Class = ah.FragmentClassSite
 			scoutResult.Fragment.Subtype = "deposit"
 		case strings.Contains(targetCanonicalPath, "/loc/") || strings.Contains(targetCanonicalPath, "/region/"):
-			scoutResult.Fragment.Class = FragmentTypeGeoRegion
+			scoutResult.Fragment.Class = ah.FragmentClassGeo
 		case strings.Contains(targetCanonicalPath, "/event/"):
-			scoutResult.Fragment.Class = FragmentTypeEvent
+			scoutResult.Fragment.Class = ah.FragmentClassEvidence
 		default:
-			scoutResult.Fragment.Class = FragmentTypeOrganization
+			scoutResult.Fragment.Class = ah.FragmentClassOrg
 		}
 	}
 

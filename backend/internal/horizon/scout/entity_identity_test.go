@@ -1,19 +1,19 @@
 package scout
 
 import (
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"strings"
 	"testing"
-
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 )
 
 func TestBuildRelationTargetIdentityKey_ProductSlugStable(t *testing.T) {
 	rel := agents.DiscoveredRelation{
 		TargetName: "Avatr 12",
-		TargetType: string(FragmentTypeProduct),
+		TargetType: string(ah.FragmentClassProduct),
 	}
-	k1 := buildRelationTargetIdentityKey(rel, "/product/avatr-12", FragmentTypeProduct)
-	k2 := buildRelationTargetIdentityKey(rel, "/product/finished/ev/sedan/avatr-12", FragmentTypeProduct)
+	k1 := buildRelationTargetIdentityKey(rel, "/product/avatr-12", ah.FragmentClassProduct)
+	k2 := buildRelationTargetIdentityKey(rel, "/product/finished/ev/sedan/avatr-12", ah.FragmentClassProduct)
 	if k1 == "" || k2 == "" {
 		t.Fatalf("identity key must not be empty: k1=%q k2=%q", k1, k2)
 	}
@@ -23,10 +23,10 @@ func TestBuildRelationTargetIdentityKey_ProductSlugStable(t *testing.T) {
 }
 
 func TestBuildRelationTargetIdentityKey_MarketIncludesGeoDomain(t *testing.T) {
-	rel := agents.DiscoveredRelation{TargetType: string(FragmentTypeMarket)}
-	k1 := buildRelationTargetIdentityKey(rel, "/market/sa/finance/banking", FragmentTypeMarket)
-	k2 := buildRelationTargetIdentityKey(rel, "/market/sa/technology/banking", FragmentTypeMarket)
-	k3 := buildRelationTargetIdentityKey(rel, "/market/ae/finance/banking", FragmentTypeMarket)
+	rel := agents.DiscoveredRelation{TargetType: string(ah.FragmentClassMarket)}
+	k1 := buildRelationTargetIdentityKey(rel, "/market/sa/finance/banking", ah.FragmentClassMarket)
+	k2 := buildRelationTargetIdentityKey(rel, "/market/sa/technology/banking", ah.FragmentClassMarket)
+	k3 := buildRelationTargetIdentityKey(rel, "/market/ae/finance/banking", ah.FragmentClassMarket)
 	if k1 == "" || k2 == "" || k3 == "" {
 		t.Fatalf("identity keys must not be empty: k1=%q k2=%q k3=%q", k1, k2, k3)
 	}
@@ -43,15 +43,15 @@ func TestBuildRelationTargetIdentityKey_MarketIncludesGeoDomain(t *testing.T) {
 
 func TestBuildRelationTargetIdentityKey_OrgNameBeatsSlug(t *testing.T) {
 	rel1 := agents.DiscoveredRelation{
-		TargetType:      string(FragmentTypeOrganization),
+		TargetType:      string(ah.FragmentClassOrg),
 		TargetShortName: "Changan Automobile",
 	}
 	rel2 := agents.DiscoveredRelation{
-		TargetType:      string(FragmentTypeOrganization),
+		TargetType:      string(ah.FragmentClassOrg),
 		TargetLegalName: "Changan Automobile",
 	}
-	k1 := buildRelationTargetIdentityKey(rel1, "/org/cn/chongqing-changan-automobile-ltd", FragmentTypeOrganization)
-	k2 := buildRelationTargetIdentityKey(rel2, "/org/cn/changan-automobile-ltd", FragmentTypeOrganization)
+	k1 := buildRelationTargetIdentityKey(rel1, "/org/cn/chongqing-changan-automobile-ltd", ah.FragmentClassOrg)
+	k2 := buildRelationTargetIdentityKey(rel2, "/org/cn/changan-automobile-ltd", ah.FragmentClassOrg)
 	if k1 == "" || k2 == "" {
 		t.Fatalf("identity key must not be empty: k1=%q k2=%q", k1, k2)
 	}

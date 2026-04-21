@@ -2,14 +2,14 @@ package scout
 
 import (
 	"context"
-	"strings"
-
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/addressvalidate"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
-	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
+	"strings"
 )
 
 // FacilityGeoRevalidationResult captures deterministic geo corrections applied to a facility.
@@ -38,7 +38,7 @@ func RevalidateFacilityGeo(
 	geocodingClient coreontology.GeocodingClientInterface,
 ) (FacilityGeoRevalidationResult, error) {
 	var result FacilityGeoRevalidationResult
-	if fragment == nil || geocodingClient == nil || fragment.Class != FragmentTypeFacility {
+	if fragment == nil || geocodingClient == nil || fragment.Class != ah.FragmentClassSite {
 		return result, nil
 	}
 
@@ -211,7 +211,7 @@ func RevalidateFacilityGeo(
 }
 
 func facilityGeoValidationQueries(fragment *models.HorizonFragment) []string {
-	if fragment == nil || fragment.Class != FragmentTypeFacility {
+	if fragment == nil || fragment.Class != ah.FragmentClassSite {
 		return nil
 	}
 	requireStrongName := facilityHasStrongGeoResolvableName(fragment)

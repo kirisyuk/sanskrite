@@ -2,17 +2,17 @@ package scout
 
 import (
 	"context"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"strings"
 	"testing"
-
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 func TestRepairInvalidPath_FinancialProductNotGeneric(t *testing.T) {
 	v := NewPreCreateValidator(nil, nil, nil)
 
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeProduct,
+		Class:          ah.FragmentClassProduct,
 		CanonicalPath: "/product/x",
 		Labels:        map[string]string{"en": "Corporate Loan"},
 		Identifiers:   map[string]string{},
@@ -39,7 +39,7 @@ func TestRepairInvalidPath_NonFinancialProductUsesGeneric(t *testing.T) {
 	v := NewPreCreateValidator(nil, nil, nil)
 
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeProduct,
+		Class:          ah.FragmentClassProduct,
 		CanonicalPath: "/product/x",
 		Labels:        map[string]string{"en": "Lithium Battery"},
 		Identifiers:   map[string]string{},

@@ -1,10 +1,10 @@
 package scout
 
 import (
-	"testing"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"testing"
 )
 
 func TestFacilityPathHasLowInformationSlug(t *testing.T) {
@@ -52,12 +52,12 @@ func TestFacilitySlugCriticalDedupAnchor(t *testing.T) {
 
 func TestFacilityPlaceholderMatchCandidateRejectsTwoPlaceholders(t *testing.T) {
 	incoming := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/na/port-of-rotterdam",
 		Labels:        map[string]string{"en": "Port of Rotterdam"},
 	}
 	candidate := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/na/port-of-rotterdam",
 		Labels:        map[string]string{"en": "Port of Rotterdam"},
 	}

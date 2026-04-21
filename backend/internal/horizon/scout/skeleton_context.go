@@ -3,10 +3,10 @@ package scout
 import (
 	"context"
 	"encoding/json"
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 // buildGraphSkeletonContext produces a compact context block for Critic/Research to reason about
@@ -156,10 +156,10 @@ func (e *ScoutEngine) buildMarketSkeletonContext(ctx context.Context, canonicalP
 
 	// Edges (only if fragment exists in DB; otherwise we can't query edges by ID).
 	if out.FragmentID != "" {
-		edgeType := DependencyTypeHasMarketSegment
+		edgeType := ah.RelationNameInfluences
 		parents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &edgeType, 5)
 		children, _ := e.edgesRepo.ListBySource(ctx, "global", out.FragmentID, &edgeType, 15)
-		legacyType := DependencyTypeHasSubmarket
+		legacyType := ah.RelationNameInfluences
 		if legParents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &legacyType, 5); len(legParents) > 0 {
 			parents = append(parents, legParents...)
 		}
@@ -321,7 +321,7 @@ func (e *ScoutEngine) buildGovSkeletonContext(ctx context.Context, canonicalPath
 	}
 
 	if out.FragmentID != "" {
-		edgeType := DependencyTypeAdministers
+		edgeType := ah.RelationNameOperates
 		parents, _ := e.edgesRepo.ListByTarget(ctx, "global", out.FragmentID, &edgeType, 5)
 		children, _ := e.edgesRepo.ListBySource(ctx, "global", out.FragmentID, &edgeType, 15)
 
@@ -457,12 +457,12 @@ func (e *ScoutEngine) buildGovSkeletonContext(ctx context.Context, canonicalPath
 
 // govStrategicEdgeTypes lists edge types that connect gov entities to the decision/mechanism layer.
 var govStrategicEdgeTypes = []DependencyType{
-	DependencyTypeGatekeepsDecision,
-	DependencyTypeControlsAccess,
-	DependencyTypeUsesMechanism,
-	DependencyTypeImposesCondition,
-	DependencyTypeAppliesTo,
-	DependencyTypeRegulates,
+	ah.RelationNameGatekeeps,
+	DependencyType("controls_access"),
+	ah.RelationNameWields,
+	DependencyType("applies_to"),
+	ah.RelationNameImposes,
+	ah.RelationNameRegulates,
 }
 
 // queryGovStrategicEdgesOutgoing returns outgoing strategic edges from this gov entity

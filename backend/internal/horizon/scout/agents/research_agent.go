@@ -4,8 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
@@ -13,6 +11,8 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 // ResearchAgent выполняет дообогащение данных через LLM с Search Grounding
@@ -395,7 +395,7 @@ func (a *ResearchAgent) mergeFragment(main *models.HorizonFragment, partial *mod
 			out = append(out, t)
 		}
 		main.Tags = out
-		if main.Class == FragmentTypeMarket {
+		if main.Class == ah.FragmentClassMarket {
 			main.Tags = taxonomy.NormalizeMarketTags(main.Tags)
 		}
 	}
@@ -549,7 +549,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 
 	// Add MARKET decomposition block if applicable
 	decompositionBlock := ""
-	if !isDomain && fragment != nil && (fragment.Class == FragmentTypeMarket || fragment.IsLegacyProgram() || strings.HasPrefix(fragment.CanonicalPath, "/market/") || strings.HasPrefix(fragment.CanonicalPath, "/program/")) {
+	if !isDomain && fragment != nil && (fragment.Class == ah.FragmentClassMarket || fragment.IsLegacyProgram() || strings.HasPrefix(fragment.CanonicalPath, "/market/") || strings.HasPrefix(fragment.CanonicalPath, "/program/")) {
 		// Find matching decomposition hint
 		var hint *DecompositionHint
 		for i := range decompositionHints {

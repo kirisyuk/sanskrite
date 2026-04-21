@@ -2,10 +2,10 @@ package scout
 
 import (
 	"context"
-	"testing"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"testing"
 )
 
 func TestResolveCanonicalPathsBatch_UsesCache(t *testing.T) {
@@ -68,7 +68,7 @@ func TestResolveCanonicalPathsBatch_SessionGraphHit(t *testing.T) {
 	sg.Add(&models.HorizonFragment{
 		ID:            "frag-123",
 		CanonicalPath: "/org/tr/botas",
-		Class:          FragmentTypeOrganization,
+		Class:          ah.FragmentClassOrg,
 		Labels:        map[string]string{"en": "BOTAS"},
 	})
 

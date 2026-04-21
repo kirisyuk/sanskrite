@@ -2,11 +2,11 @@ package scout
 
 import (
 	"fmt"
-	"sort"
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"sort"
+	"strings"
 )
 
 // =============================================================================
@@ -46,74 +46,74 @@ func SemanticGroupForEdgeType(t DependencyType) string {
 }
 
 var edgeTypeToSemanticGroup = map[DependencyType]string{
-	DependencyTypeProduces:       SemanticGroupSupplyChain,
-	DependencyTypeSuppliesTo:     SemanticGroupSupplyChain,
-	DependencyTypeTransformsInto: SemanticGroupSupplyChain,
-	DependencyTypeAssemblesInto:  SemanticGroupSupplyChain,
-	DependencyTypeUsedIn:         SemanticGroupSupplyChain,
-	DependencyTypeExtractsFrom:   SemanticGroupSupplyChain,
-	DependencyTypeLocatedIn:      SemanticGroupSupplyChain,
-	DependencyTypeOperatesIn:     SemanticGroupSupplyChain,
+	ah.RelationNameProduces:        SemanticGroupSupplyChain,
+	ah.RelationNameSupplies:        SemanticGroupSupplyChain,
+	DependencyType("transforms_into"): SemanticGroupSupplyChain,
+	DependencyType("assembles_into"):  SemanticGroupSupplyChain,
+	DependencyType("used_in"):         SemanticGroupSupplyChain,
+	DependencyType("extracts_from"):   SemanticGroupSupplyChain,
+	DependencyType("located_in"):      SemanticGroupSupplyChain,
+	DependencyType("operates_in"):     SemanticGroupSupplyChain,
 
-	DependencyTypeOwns:          SemanticGroupGovernance,
-	DependencyTypeSubsidiaryOf:  SemanticGroupGovernance,
-	DependencyTypeControls:      SemanticGroupGovernance,
-	DependencyTypeInvestsIn:     SemanticGroupGovernance,
-	DependencyTypeBoardMemberOf: SemanticGroupGovernance,
-	DependencyTypeEmployedBy:    SemanticGroupGovernance,
-	DependencyTypeFounded:       SemanticGroupGovernance,
-	DependencyTypeAdministers:   SemanticGroupGovernance,
+	ah.RelationNameBeneficiallyOwns: SemanticGroupGovernance,
+	ah.RelationNameSubsidiaryOf:     SemanticGroupGovernance,
+	ah.RelationNameControlsVia:      SemanticGroupGovernance,
+	ah.RelationNameInvestedIn:       SemanticGroupGovernance,
+	ah.RelationNameHoldsBoardSeat:   SemanticGroupGovernance,
+	DependencyType("employed_by"):     SemanticGroupGovernance,
+	DependencyType("founded"):       SemanticGroupGovernance,
+	ah.RelationNameOperates:         SemanticGroupGovernance,
 
-	DependencyTypeAssures:   SemanticGroupAssurance,
-	DependencyTypeAuditedBy: SemanticGroupAssurance,
-	DependencyTypeRegulates: SemanticGroupAssurance,
+	ah.RelationNameAssures:    SemanticGroupAssurance,
+	DependencyType("audited_by"): SemanticGroupAssurance,
+	ah.RelationNameRegulates:  SemanticGroupAssurance,
 
-	DependencyTypeParticipatesIn:   SemanticGroupMarket,
-	DependencyTypeTradedIn:         SemanticGroupMarket,
-	DependencyTypeHasMarketSegment: SemanticGroupMarket,
-	DependencyTypeDominates:        SemanticGroupMarket,
+	DependencyType("participates_in"): SemanticGroupMarket,
+	ah.RelationNameListedOn:           SemanticGroupMarket,
+	DependencyType("has_market_segment"): SemanticGroupMarket,
+	DependencyType("dominates"):        SemanticGroupMarket,
 
-	DependencyTypeControlsAccess:    SemanticGroupStrategic,
-	DependencyTypeImposesCondition:  SemanticGroupStrategic,
-	DependencyTypeGatekeepsDecision: SemanticGroupStrategic,
-	DependencyTypeUsesMechanism:     SemanticGroupStrategic,
-	DependencyTypeAppliesTo:         SemanticGroupStrategic,
+	DependencyType("controls_access"): SemanticGroupStrategic,
+	ah.RelationNameImposes:            SemanticGroupStrategic,
+	ah.RelationNameGatekeeps:          SemanticGroupStrategic,
+	ah.RelationNameWields:             SemanticGroupStrategic,
+	DependencyType("applies_to"):      SemanticGroupStrategic,
 
-	DependencyTypeFocusesOn:      SemanticGroupDomain,
-	DependencyTypeDomainRelation: SemanticGroupDomain,
-	DependencyTypeRelatedDomain:  SemanticGroupDomain,
-	DependencyTypeBroadensTo:     SemanticGroupDomain,
-	DependencyTypeNarrowsTo:      SemanticGroupDomain,
-	DependencyTypeAffects:        SemanticGroupDomain,
-	DependencyTypeAbout:          SemanticGroupDomain,
-	DependencyTypeSurfaces:       SemanticGroupDomain,
-	DependencyTypeInvolvesActor:  SemanticGroupDomain,
-	DependencyTypeInGeoScope:     SemanticGroupDomain,
+	DependencyType("focuses_on"):      SemanticGroupDomain,
+	DependencyType("domain_relation"):  SemanticGroupDomain,
+	DependencyType("related_domain"):   SemanticGroupDomain,
+	DependencyType("broadens_to"):      SemanticGroupDomain,
+	DependencyType("narrows_to"):       SemanticGroupDomain,
+	ah.RelationNameDisrupts:           SemanticGroupDomain,
+	DependencyType("about"):           SemanticGroupDomain,
+	DependencyType("surfaces"):        SemanticGroupDomain,
+	DependencyType("involves_actor"):  SemanticGroupDomain,
+	DependencyType("in_geo_scope"):    SemanticGroupDomain,
 
-	DependencyTypeRelativeOf:     SemanticGroupPerson,
-	DependencyTypeAssociatedWith: SemanticGroupPerson,
-	DependencyTypeRelatedTo:      SemanticGroupPerson,
-	DependencyTypeMemberOf:       SemanticGroupPerson,
-	DependencyTypeAffiliatedWith: SemanticGroupPerson,
-	DependencyTypePartnersWith:   SemanticGroupPerson,
-	DependencyTypeWorksFor:       SemanticGroupPerson,
-	DependencyTypeKeyPerson:      SemanticGroupPerson,
-	DependencyTypeHasKeyPerson:   SemanticGroupPerson,
+	DependencyType("relative_of"):      SemanticGroupPerson,
+	DependencyType("associated_with"):  SemanticGroupPerson,
+	DependencyType("related_to"):       SemanticGroupPerson,
+	ah.RelationNameMemberOf:           SemanticGroupPerson,
+	DependencyType("affiliated_with"): SemanticGroupPerson,
+	ah.RelationNameJointVentureWith:   SemanticGroupPerson,
+	DependencyType("works_for"):       SemanticGroupPerson,
+	DependencyType("key_person"):      SemanticGroupPerson,
+	DependencyType("has_key_person"):  SemanticGroupPerson,
 
-	DependencyTypeCorporateTransition: SemanticGroupTransition,
-	DependencyTypeRenamedTo:           SemanticGroupTransition,
-	DependencyTypeRebrandedTo:         SemanticGroupTransition,
-	DependencyTypeLegalSuccessorOf:    SemanticGroupTransition,
-	DependencyTypeMergedInto:          SemanticGroupTransition,
-	DependencyTypeSpunOffFrom:         SemanticGroupTransition,
-	DependencyTypeAcquiredBy:          SemanticGroupTransition,
+	DependencyType("corporate_transition"): SemanticGroupTransition,
+	DependencyType("renamed_to"):            SemanticGroupTransition,
+	DependencyType("rebranded_to"):          SemanticGroupTransition,
+	DependencyType("legal_successor_of"):  SemanticGroupTransition,
+	ah.RelationNameMergedInto:             SemanticGroupTransition,
+	DependencyType("spun_off_from"):        SemanticGroupTransition,
+	DependencyType("acquired_by"):          SemanticGroupTransition,
 
-	DependencyTypeCompetesWith: SemanticGroupOther,
-	DependencyTypeInfluences:   SemanticGroupOther,
-	DependencyTypeDependsOn:    SemanticGroupOther,
-	DependencyTypeManages:      SemanticGroupOther,
-	DependencyTypeOperatesVia:  SemanticGroupOther,
-	DependencyTypeHasSubgroup:  SemanticGroupOther,
+	DependencyType("competes_with"): SemanticGroupOther,
+	ah.RelationNameInfluences:       SemanticGroupOther,
+	DependencyType("depends_on"):    SemanticGroupOther,
+	DependencyType("manages"):       SemanticGroupOther,
+	DependencyType("operates_via"):  SemanticGroupOther,
+	DependencyType("has_subgroup"):  SemanticGroupOther,
 }
 
 // -----------------------------------------------------------------------------
@@ -301,7 +301,7 @@ func DetectFacilitySemanticFromFragment(fragment *models.HorizonFragment) Facili
 		return FacilitySemanticNone
 	}
 	cp := strings.TrimSpace(fragment.CanonicalPath)
-	if !strings.HasPrefix(strings.ToLower(cp), "/fac/") && fragment.Class != FragmentTypeFacility {
+	if !strings.HasPrefix(strings.ToLower(cp), "/fac/") && fragment.Class != ah.FragmentClassSite {
 		return FacilitySemanticNone
 	}
 	return DetectFacilitySemantic(cp, fragment.Qualifiers, fragment.Identifiers, fragment.Labels)
@@ -417,33 +417,33 @@ func AllObjectQualifierStrings() []string {
 // as a sorted slice of upper-case wire labels.
 func AllEdgeTypesForPromptList() []string {
 	rels := []DependencyType{
-		DependencyTypeOwns, DependencyTypeSubsidiaryOf, DependencyTypeControls,
-		DependencyTypeInvestsIn, DependencyTypeBoardMemberOf, DependencyTypeEmployedBy,
-		DependencyTypeFounded, DependencyTypeAdministers, DependencyTypeManages,
-		DependencyTypeMemberOf, DependencyTypeAffiliatedWith, DependencyTypeAssociatedWith,
-		DependencyTypePartnersWith, DependencyTypeRelativeOf, DependencyTypeKeyPerson,
-		DependencyTypeHasKeyPerson, DependencyTypeWorksFor, DependencyTypeRelatedTo,
+		ah.RelationNameBeneficiallyOwns, ah.RelationNameSubsidiaryOf, ah.RelationNameControlsVia,
+		ah.RelationNameInvestedIn, ah.RelationNameHoldsBoardSeat, ah.RelationNameMemberOf,
+		ah.RelationNameInfluences, ah.RelationNameOperates, ah.RelationNameManagedBy,
+		ah.RelationNameMemberOf, ah.RelationNameJointVentureWith, ah.RelationNameJointVentureWith,
+		ah.RelationNameJointVentureWith, ah.RelationNameInfluences, ah.RelationNameInfluences,
+		ah.RelationNameInfluences, ah.RelationNameMemberOf, ah.RelationNameInfluences,
 
-		DependencyTypeSuppliesTo, DependencyTypeProduces, DependencyTypeTransformsInto,
-		DependencyTypeAssemblesInto, DependencyTypeUsedIn, DependencyTypeExtractsFrom,
-		DependencyTypeOperatesIn, DependencyTypeOperatesVia, DependencyTypeLocatedIn,
-		DependencyTypeDependsOn,
+		ah.RelationNameSupplies, ah.RelationNameProduces, ah.RelationNameProduces,
+		ah.RelationNameProduces, ah.RelationNameSupplies, ah.RelationNameProduces,
+		ah.RelationNameOperates, ah.RelationNameWields, ah.RelationNameIncorporatedIn,
+		ah.RelationNameSupplies,
 
-		DependencyTypeRegulates, DependencyTypeAssures, DependencyTypeAuditedBy,
-		DependencyTypeImposesCondition, DependencyTypeGatekeepsDecision,
-		DependencyTypeUsesMechanism, DependencyTypeControlsAccess, DependencyTypeAppliesTo,
+		ah.RelationNameRegulates, ah.RelationNameAssures, ah.RelationNameAssures,
+		ah.RelationNameImposes, ah.RelationNameGatekeeps,
+		ah.RelationNameWields, ah.RelationNameImposes, ah.RelationNameImposes,
 
-		DependencyTypeTradedIn, DependencyTypeParticipatesIn, DependencyTypeHasMarketSegment,
-		DependencyTypeHasSubmarket, DependencyTypeDominates, DependencyTypeCompetesWith,
+		ah.RelationNameListedOn, ah.RelationNameMemberOf, ah.RelationNameInfluences,
+		ah.RelationNameInfluences, ah.RelationNameInfluences, ah.RelationNameAlternateTo,
 
-		DependencyTypeFocusesOn, DependencyTypeDomainRelation, DependencyTypeRelatedDomain,
-		DependencyTypeBroadensTo, DependencyTypeNarrowsTo,
-		DependencyTypeAffects, DependencyTypeAbout, DependencyTypeSurfaces,
-		DependencyTypeInvolvesActor, DependencyTypeInGeoScope, DependencyTypeInfluences,
+		ah.RelationNameInfluences, ah.RelationNameInfluences, ah.RelationNameInfluences,
+		ah.RelationNameInfluences, ah.RelationNameInfluences,
+		ah.RelationNameDisrupts, ah.RelationNameInfluences, ah.RelationNameInfluences,
+		ah.RelationNameInfluences, ah.RelationNameConstrainedBy, ah.RelationNameInfluences,
 
-		DependencyTypeCorporateTransition, DependencyTypeRenamedTo, DependencyTypeRebrandedTo,
-		DependencyTypeLegalSuccessorOf, DependencyTypeMergedInto, DependencyTypeSpunOffFrom,
-		DependencyTypeAcquiredBy,
+		ah.RelationNameMergedInto, ah.RelationNameInfluences, ah.RelationNameInfluences,
+		ah.RelationNameMergedInto, ah.RelationNameMergedInto, ah.RelationNameSpunOut,
+		ah.RelationNameAcquiredStakeFrom,
 	}
 	seen := map[string]struct{}{}
 	out := make([]string, 0, len(rels))
@@ -498,25 +498,25 @@ func AllowedObjectQualifierStringsForType(class FragmentType, canonicalPath stri
 	_ = canonicalPath
 	var out []string
 	switch class {
-	case FragmentTypeFacility:
+	case ah.FragmentClassSite:
 		out = []string{
 			string(ObjectQualifierRoute), string(ObjectQualifierSupply),
 			string(ObjectQualifierProcurement), string(ObjectQualifierHub),
 			string(ObjectQualifierWarehouse), string(ObjectQualifierProduction),
 		}
-	case FragmentTypeOrganization:
+	case ah.FragmentClassOrg:
 		out = []string{
 			string(ObjectQualifierHolding), string(ObjectQualifierOperator),
 			string(ObjectQualifierDistributor), string(ObjectQualifierContractor),
 			string(ObjectQualifierRegulator), string(ObjectQualifierProcurer),
 			string(ObjectQualifierOwnerOperator),
 		}
-	case FragmentTypeMarket:
+	case ah.FragmentClassMarket:
 		out = []string{
 			string(ObjectQualifierRegulated), string(ObjectQualifierConcentrated),
 			string(ObjectQualifierImportDependent),
 		}
-	case FragmentTypeProduct:
+	case ah.FragmentClassProduct:
 		out = []string{
 			string(ObjectQualifierCriticalInput), string(ObjectQualifierRegulatedGood),
 		}
@@ -531,10 +531,10 @@ func AllowedObjectQualifierStringsForType(class FragmentType, canonicalPath stri
 // interchangeable (the relation is reciprocal). Mirror of the legacy
 // models.SymmetricEdgeTypes map.
 var SymmetricEdgeTypes = map[DependencyType]bool{
-	DependencyTypeCompetesWith:   true,
-	DependencyTypeRelativeOf:     true,
-	DependencyTypeAssociatedWith: true,
-	DependencyTypeDomainRelation: true,
+	DependencyType("competes_with"):   true,
+	DependencyType("relative_of"):     true,
+	DependencyType("associated_with"): true,
+	DependencyType("domain_relation"):  true,
 }
 
 // IsAllowedObjectQualifierForType reports whether qualifier `q` is in the
@@ -559,10 +559,10 @@ func IsAllowedObjectQualifierForType(class FragmentType, canonicalPath string, q
 // edgesemantics.IsDomainScaffoldRelationType helper.
 func IsDomainScaffoldRelationType(t DependencyType) bool {
 	switch t {
-	case DependencyTypeDependsOn, DependencyTypeInfluences, DependencyTypeRelatedTo,
-		DependencyTypeAssociatedWith, DependencyTypeAffects, DependencyTypeAbout,
-		DependencyTypeSurfaces, DependencyTypeInvolvesActor, DependencyTypeInGeoScope,
-		DependencyTypeFocusesOn, DependencyTypeDomainRelation, DependencyTypeRelatedDomain:
+	case DependencyType("depends_on"), ah.RelationNameInfluences, DependencyType("related_to"),
+		DependencyType("associated_with"), ah.RelationNameDisrupts, DependencyType("about"),
+		DependencyType("surfaces"), DependencyType("involves_actor"), DependencyType("in_geo_scope"),
+		DependencyType("focuses_on"), DependencyType("domain_relation"), DependencyType("related_domain"):
 		return true
 	}
 	return false
@@ -572,9 +572,9 @@ func IsDomainScaffoldRelationType(t DependencyType) bool {
 // Mirror of the legacy edgesemantics.IsMarketRelationType helper.
 func IsMarketRelationType(t DependencyType) bool {
 	switch t {
-	case DependencyTypeParticipatesIn, DependencyTypeTradedIn,
-		DependencyTypeHasMarketSegment, DependencyTypeHasSubmarket,
-		DependencyTypeDominates, DependencyTypeCompetesWith:
+	case DependencyType("participates_in"), ah.RelationNameListedOn,
+		DependencyType("has_market_segment"), DependencyType("has_submarket"),
+		DependencyType("dominates"), DependencyType("competes_with"):
 		return true
 	}
 	return false
@@ -586,9 +586,9 @@ func IsMarketRelationType(t DependencyType) bool {
 // TRANSFORMS_INTO. Mirror of the legacy models helper.
 func ProductToProductEdgeTypeFromPaths(sourcePath, targetPath string) DependencyType {
 	if shouldPreferAssemblesIntoByProductPaths(sourcePath, targetPath) {
-		return DependencyTypeAssemblesInto
+		return DependencyType("assembles_into")
 	}
-	return DependencyTypeTransformsInto
+	return DependencyType("transforms_into")
 }
 
 func shouldPreferAssemblesIntoByProductPaths(sourcePath, targetPath string) bool {
@@ -656,7 +656,7 @@ func ProductStageRankFromCanonicalPath(path string) (int, bool) {
 // legacy IsProductTransitionEdgeType helper.
 func IsProductTransitionEdgeType(edgeType DependencyType) bool {
 	switch edgeType {
-	case DependencyTypeTransformsInto, DependencyTypeAssemblesInto, DependencyTypeUsedIn:
+	case DependencyType("transforms_into"), DependencyType("assembles_into"), DependencyType("used_in"):
 		return true
 	default:
 		return false

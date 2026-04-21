@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // DomainContract captures the domain-intent contract layer extracted from intent resolution or job state.
@@ -34,8 +35,8 @@ type FragmentsReader interface {
 
 // EdgesReader is a minimal edges repository interface for contract handlers.
 type EdgesReader interface {
-	ListBySource(ctx context.Context, tenantID, sourceFragmentID string, edgeType *DependencyType, limit int) ([]*models.DependencyEdge, error)
-	ListByTarget(ctx context.Context, tenantID, targetFragmentID string, edgeType *DependencyType, limit int) ([]*models.DependencyEdge, error)
+	ListBySource(ctx context.Context, tenantID, sourceFragmentID string, edgeType *ah.RelationName, limit int) ([]*models.DependencyEdge, error)
+	ListByTarget(ctx context.Context, tenantID, targetFragmentID string, edgeType *ah.RelationName, limit int) ([]*models.DependencyEdge, error)
 }
 
 type ContractInput struct {

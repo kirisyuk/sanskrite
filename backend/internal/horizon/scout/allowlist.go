@@ -1,12 +1,12 @@
 package scout
 
 import (
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 // EdgeAllowlistByDomainMode delegates to contract semantics as the source of truth
@@ -131,69 +131,70 @@ func scoutLegacyAllowlistFor(mode string) []DependencyType {
 // during the migration window).
 //
 // MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
-// keep this set in sync with the const block in legacy_aliases.go.
+// keep this set in sync with the former legacy_aliases const block (AH
+// RelationName plus prompt-only snake_case literals).
 var scoutKnownDependencyTypes = map[DependencyType]struct{}{
-	DependencyTypeOwns:                {},
-	DependencyTypeSubsidiaryOf:        {},
-	DependencyTypeControls:            {},
-	DependencyTypeInvestsIn:           {},
-	DependencyTypeSuppliesTo:          {},
-	DependencyTypeProduces:            {},
-	DependencyTypeRegulates:           {},
-	DependencyTypeAssures:             {},
-	DependencyTypeInfluences:          {},
-	DependencyTypeGatekeepsDecision:   {},
-	DependencyTypeUsesMechanism:       {},
-	DependencyTypeImposesCondition:    {},
-	DependencyTypeAdministers:         {},
-	DependencyTypeMemberOf:            {},
-	DependencyTypeTradedIn:            {},
-	DependencyTypePartnersWith:        {},
-	DependencyTypeAffects:             {},
-	DependencyTypeBoardMemberOf:       {},
-	DependencyTypeMergedInto:          {},
-	DependencyTypeOperatesIn:          {},
-	DependencyTypeOperatesVia:         {},
-	DependencyTypeManages:             {},
-	DependencyTypeHasSubgroup:         {},
-	DependencyTypeHasSubmarket:        {},
-	DependencyTypeHasMarketSegment:    {},
-	DependencyTypeAffiliatedWith:      {},
-	DependencyTypeAssociatedWith:      {},
-	DependencyTypeEmployedBy:          {},
-	DependencyTypeWorksFor:            {},
-	DependencyTypeFounded:             {},
-	DependencyTypeKeyPerson:           {},
-	DependencyTypeHasKeyPerson:        {},
-	DependencyTypeLocatedIn:           {},
-	DependencyTypeDependsOn:           {},
-	DependencyTypeFocusesOn:           {},
-	DependencyTypeCompetesWith:        {},
-	DependencyTypeParticipatesIn:      {},
-	DependencyTypeInGeoScope:          {},
-	DependencyTypeControlsAccess:      {},
-	DependencyTypeAppliesTo:           {},
-	DependencyTypeTransformsInto:      {},
-	DependencyTypeAssemblesInto:       {},
-	DependencyTypeExtractsFrom:        {},
-	DependencyTypeUsedIn:              {},
-	DependencyTypeAuditedBy:           {},
-	DependencyTypeInvolvesActor:       {},
-	DependencyTypeAbout:               {},
-	DependencyTypeSurfaces:            {},
-	DependencyTypeRelatedTo:           {},
-	DependencyTypeRelativeOf:          {},
-	DependencyTypeRenamedTo:           {},
-	DependencyTypeRebrandedTo:         {},
-	DependencyTypeLegalSuccessorOf:    {},
-	DependencyTypeSpunOffFrom:         {},
-	DependencyTypeAcquiredBy:          {},
-	DependencyTypeCorporateTransition: {},
-	DependencyTypeDominates:           {},
-	DependencyTypeDomainRelation:      {},
-	DependencyTypeRelatedDomain:       {},
-	DependencyTypeBroadensTo:          {},
-	DependencyTypeNarrowsTo:           {},
+	ah.RelationNameBeneficiallyOwns:   {},
+	ah.RelationNameSubsidiaryOf:       {},
+	ah.RelationNameControlsVia:        {},
+	ah.RelationNameInvestedIn:         {},
+	ah.RelationNameSupplies:           {},
+	ah.RelationNameProduces:           {},
+	ah.RelationNameRegulates:          {},
+	ah.RelationNameAssures:            {},
+	ah.RelationNameInfluences:         {},
+	ah.RelationNameGatekeeps:          {},
+	ah.RelationNameWields:             {},
+	ah.RelationNameImposes:            {},
+	ah.RelationNameOperates:           {},
+	ah.RelationNameMemberOf:           {},
+	ah.RelationNameListedOn:           {},
+	ah.RelationNameJointVentureWith:   {},
+	ah.RelationNameDisrupts:           {},
+	ah.RelationNameHoldsBoardSeat:     {},
+	ah.RelationNameMergedInto:         {},
+	DependencyType("operates_in"):      {},
+	DependencyType("operates_via"):     {},
+	DependencyType("manages"):          {},
+	DependencyType("has_subgroup"):     {},
+	DependencyType("has_submarket"):    {},
+	DependencyType("has_market_segment"): {},
+	DependencyType("affiliated_with"):  {},
+	DependencyType("associated_with"):  {},
+	DependencyType("employed_by"):      {},
+	DependencyType("works_for"):        {},
+	DependencyType("founded"):          {},
+	DependencyType("key_person"):      {},
+	DependencyType("has_key_person"):  {},
+	DependencyType("located_in"):       {},
+	DependencyType("depends_on"):       {},
+	DependencyType("focuses_on"):       {},
+	DependencyType("competes_with"):    {},
+	DependencyType("participates_in"):  {},
+	DependencyType("in_geo_scope"):     {},
+	DependencyType("controls_access"):  {},
+	DependencyType("applies_to"):        {},
+	DependencyType("transforms_into"):  {},
+	DependencyType("assembles_into"):   {},
+	DependencyType("extracts_from"):    {},
+	DependencyType("used_in"):          {},
+	DependencyType("audited_by"):       {},
+	DependencyType("involves_actor"):   {},
+	DependencyType("about"):            {},
+	DependencyType("surfaces"):         {},
+	DependencyType("related_to"):       {},
+	DependencyType("relative_of"):      {},
+	DependencyType("renamed_to"):       {},
+	DependencyType("rebranded_to"):     {},
+	DependencyType("legal_successor_of"): {},
+	DependencyType("spun_off_from"):    {},
+	DependencyType("acquired_by"):      {},
+	DependencyType("corporate_transition"): {},
+	DependencyType("dominates"):        {},
+	DependencyType("domain_relation"):  {},
+	DependencyType("related_domain"):   {},
+	DependencyType("broadens_to"):      {},
+	DependencyType("narrows_to"):       {},
 }
 
 // normalizeToScoutRelation maps any wire-format relation token to the
@@ -210,8 +211,8 @@ var scoutKnownDependencyTypes = map[DependencyType]struct{}{
 //     during the migration window.
 //   - Otherwise we delegate to the wire→AH alias map so legacy
 //     UPPER_SNAKE tokens (OWNS, INFLUENCES, ASSURES, …) reach the scout
-//     constants that hold their AH RelationName (DependencyTypeOwns,
-//     DependencyTypeInfluences, DependencyTypeAssures, …).
+//     constants that hold their AH RelationName (ah.RelationNameBeneficiallyOwns,
+//     ah.RelationNameInfluences, ah.RelationNameAssures, …).
 //   - Unknown / dropped tokens fall back to lowercase so the caller can
 //     still see them (e.g. for filtering decisions).
 func normalizeToScoutRelation(s string) DependencyType {
@@ -285,7 +286,7 @@ func IsAllowedSupplyChainRuntimeRelation(sourcePath, targetPath string, relation
 		return false
 	}
 	switch relationType {
-	case DependencyTypeCompetesWith, DependencyTypePartnersWith, DependencyTypeOperatesVia, DependencyTypeMemberOf, DependencyTypeInvestsIn:
+	case ah.RelationNameAlternateTo, ah.RelationNameJointVentureWith, ah.RelationNameWields, ah.RelationNameMemberOf, ah.RelationNameInvestedIn:
 		return allowSupplyChainOverlayByPath(sourcePath, targetPath, relationType)
 	}
 	if IsSupplyChainEdgeType(string(relationType)) {
@@ -314,7 +315,7 @@ func IsAllowedSupplyChainPersistRelation(sourcePath, targetPath string, relation
 
 func allowReversibleSupplyChainOverlayByPath(sourcePath, targetPath string, relationType DependencyType) bool {
 	switch relationType {
-	case DependencyTypeAdministers:
+	case ah.RelationNameOperates:
 	default:
 		return false
 	}

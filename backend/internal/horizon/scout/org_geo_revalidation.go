@@ -2,14 +2,14 @@ package scout
 
 import (
 	"context"
-	"fmt"
-	"strings"
-
-	"github.com/igorkirisyuk/sanskrite/internal/addressvalidate"
-	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"fmt"
+	"github.com/igorkirisyuk/sanskrite/internal/addressvalidate"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
+	"strings"
 )
 
 type OrgGeoRevalidationResult struct {
@@ -32,7 +32,7 @@ func RevalidateOrgGeo(
 	geocodingClient coreontology.GeocodingClientInterface,
 ) (OrgGeoRevalidationResult, error) {
 	var result OrgGeoRevalidationResult
-	if fragment == nil || geocodingClient == nil || fragment.Class != FragmentTypeOrganization {
+	if fragment == nil || geocodingClient == nil || fragment.Class != ah.FragmentClassOrg {
 		return result, nil
 	}
 	if !strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/org/") && !strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/gov/") {

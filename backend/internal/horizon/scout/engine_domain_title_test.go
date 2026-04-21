@@ -1,12 +1,12 @@
 package scout
 
 import (
+	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	hmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"strings"
 	"testing"
-
-	hmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
-	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
 func TestBestEffortDisplayLabel_SkipsNaSegment(t *testing.T) {
@@ -89,11 +89,11 @@ func TestShouldSkipRecursivePlaceholderTarget(t *testing.T) {
 
 func TestIsSoftDeniedRelationForRecurse_GeoToMarketOperatesIn(t *testing.T) {
 	if !isSoftDeniedRelationForRecurse(
-		FragmentTypeGeoRegion,
-		FragmentTypeMarket,
+		ah.FragmentClassGeo,
+		ah.FragmentClassMarket,
 		"/loc/ch/zg/na",
 		"/market/ch/technology/blockchain",
-		string(DependencyTypeOperatesIn),
+		string(ah.RelationNameOperates),
 	) {
 		t.Fatalf("expected soft deny for GEO_REGION OPERATES_IN MARKET")
 	}

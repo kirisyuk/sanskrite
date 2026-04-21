@@ -3,13 +3,13 @@ package contracts
 import (
 	"context"
 	"fmt"
-	"sort"
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"sort"
+	"strings"
 )
 
 type OwnershipStructureHandler struct{}
@@ -18,23 +18,21 @@ type ownershipEdgeRef struct {
 	Edge *models.DependencyEdge
 }
 
-var ownershipPrimaryEdgeTypes = []DependencyType{
-	DependencyTypeOwns,
-	DependencyTypeSubsidiaryOf,
-	DependencyTypeControls,
-	DependencyTypeInvestsIn,
+var ownershipPrimaryEdgeTypes = []ah.RelationName{
+	ah.RelationNameBeneficiallyOwns,
+	ah.RelationNameSubsidiaryOf,
+	ah.RelationNameControlsVia,
+	ah.RelationNameInvestedIn,
 }
 
-var ownershipSupportEdgeTypes = []DependencyType{
-	DependencyTypeHasSubgroup,
-	DependencyTypeMemberOf,
-	DependencyTypeAffiliatedWith,
-	DependencyTypeOperatesVia,
-	DependencyTypeBoardMemberOf,
-	DependencyTypeEmployedBy,
-	DependencyTypeFounded,
-	DependencyTypeManages,
-	DependencyTypeAdministers,
+var ownershipSupportEdgeTypes = []ah.RelationName{
+	ah.RelationNameMemberOf,
+	ah.RelationNameJointVentureWith,
+	ah.RelationNameWields,
+	ah.RelationNameHoldsBoardSeat,
+	ah.RelationNameInfluences,
+	ah.RelationNameManagedBy,
+	ah.RelationNameOperates,
 }
 
 var ownershipFilterRelTypes = []string{
@@ -608,22 +606,22 @@ func ownershipThinNodePaths(
 		// the scout DependencyType constants so the comparison stays
 		// case-aligned.
 		switch frag.Class {
-		case FragmentTypeOrganization:
+		case ah.FragmentClassOrg:
 			needsResearch = !hasEvidence || !hasSupport
-		case FragmentTypeCommunity:
+		case ah.FragmentClassCommunity:
 			needsResearch = !supportContainsAny(support,
-				string(DependencyTypeHasSubgroup),
-				string(DependencyTypeMemberOf),
-				string(DependencyTypeAffiliatedWith),
-				string(DependencyTypeOperatesVia),
+				string(ah.RelationNameMemberOf),
+				string(ah.RelationNameMemberOf),
+				string(ah.RelationNameJointVentureWith),
+				string(ah.RelationNameWields),
 			)
-		case FragmentTypePerson:
+		case ah.FragmentClassPerson:
 			needsResearch = !supportContainsAny(support,
-				string(DependencyTypeMemberOf),
-				string(DependencyTypeAffiliatedWith),
-				string(DependencyTypeBoardMemberOf),
-				string(DependencyTypeEmployedBy),
-				string(DependencyTypeFounded),
+				string(ah.RelationNameMemberOf),
+				string(ah.RelationNameJointVentureWith),
+				string(ah.RelationNameHoldsBoardSeat),
+				string(ah.RelationNameMemberOf),
+				string(ah.RelationNameInfluences),
 			)
 		default:
 			needsResearch = !hasEvidence && !hasSupport

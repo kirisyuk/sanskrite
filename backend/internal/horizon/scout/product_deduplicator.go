@@ -2,13 +2,13 @@ package scout
 
 import (
 	"context"
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"os"
 	"strings"
 	"unicode"
-
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
-	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
 
 func isProductModelAliasDedupEnabled() bool {
@@ -76,7 +76,7 @@ func (d *ProductDeduplicator) DeduplicateProduct(ctx context.Context, fragment *
 	if d == nil || d.fragmentsRepo == nil {
 		return fragment, nil
 	}
-	if fragment == nil || fragment.Class != FragmentTypeProduct {
+	if fragment == nil || fragment.Class != ah.FragmentClassProduct {
 		return fragment, nil
 	}
 
@@ -199,7 +199,7 @@ func (d *ProductDeduplicator) findByWikidataID(ctx context.Context, wikidataID s
 	if err == nil && len(existing) > 0 {
 		// Filter by product type
 		for _, frag := range existing {
-			if frag.Class == FragmentTypeProduct {
+			if frag.Class == ah.FragmentClassProduct {
 				return frag, nil
 			}
 		}
@@ -217,7 +217,7 @@ func (d *ProductDeduplicator) findByCASNumber(ctx context.Context, casNumber str
 	existing, err := d.fragmentsRepo.FindByIdentifier(ctx, "casNumber", casNumber)
 	if err == nil && len(existing) > 0 {
 		for _, frag := range existing {
-			if frag.Class == FragmentTypeProduct {
+			if frag.Class == ah.FragmentClassProduct {
 				return frag, nil
 			}
 		}
@@ -235,7 +235,7 @@ func (d *ProductDeduplicator) findByChemicalFormula(ctx context.Context, formula
 	existing, err := d.fragmentsRepo.FindByIdentifier(ctx, "chemicalFormula", formula)
 	if err == nil && len(existing) > 0 {
 		for _, frag := range existing {
-			if frag.Class != FragmentTypeProduct {
+			if frag.Class != ah.FragmentClassProduct {
 				continue
 			}
 			// Check category and type match
@@ -255,7 +255,7 @@ func (d *ProductDeduplicator) findByExactNameAndTaxonomy(ctx context.Context, na
 		return nil, nil
 	}
 
-	existing, err := d.fragmentsRepo.FindByLabel(ctx, "en", name, FragmentTypeProduct)
+	existing, err := d.fragmentsRepo.FindByLabel(ctx, "en", name, ah.FragmentClassProduct)
 	if err == nil && len(existing) > 0 {
 		for _, frag := range existing {
 			fragCategory, fragType, fragStage, _ := parseProductCanonicalPath(frag.CanonicalPath)
@@ -273,10 +273,10 @@ func (d *ProductDeduplicator) findByLabelExact(ctx context.Context, name string)
 	if name == "" || d == nil || d.fragmentsRepo == nil {
 		return nil, nil
 	}
-	existing, err := d.fragmentsRepo.FindByLabel(ctx, "en", name, FragmentTypeProduct)
+	existing, err := d.fragmentsRepo.FindByLabel(ctx, "en", name, ah.FragmentClassProduct)
 	if err == nil && len(existing) > 0 {
 		for _, frag := range existing {
-			if frag != nil && frag.Class == FragmentTypeProduct {
+			if frag != nil && frag.Class == ah.FragmentClassProduct {
 				return frag, nil
 			}
 		}
@@ -293,7 +293,7 @@ func (d *ProductDeduplicator) findByIdentifierExact(ctx context.Context, key, va
 	existing, err := d.fragmentsRepo.FindByIdentifier(ctx, key, value)
 	if err == nil && len(existing) > 0 {
 		for _, frag := range existing {
-			if frag != nil && frag.Class == FragmentTypeProduct {
+			if frag != nil && frag.Class == ah.FragmentClassProduct {
 				return frag, nil
 			}
 		}
@@ -320,7 +320,7 @@ func (d *ProductDeduplicator) findByCanonicalPathVariants(ctx context.Context, f
 		if err != nil || existing == nil || strings.TrimSpace(existing.ID) == "" {
 			continue
 		}
-		if existing.Class != "" && existing.Class != FragmentTypeProduct {
+		if existing.Class != "" && existing.Class != ah.FragmentClassProduct {
 			continue
 		}
 		return existing, nil

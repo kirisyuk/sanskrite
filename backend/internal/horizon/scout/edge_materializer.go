@@ -3,14 +3,14 @@ package scout
 import (
 	"context"
 	"fmt"
-	"strings"
-	"time"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
+	"time"
 )
 
 // materializeRelationEdge centralizes edge normalization/validation/persistence for discovered relations.
@@ -78,7 +78,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 					srcType = InferFragmentTypeFromCanonicalPath(explicitSourcePath)
 				}
 				if srcType == "" {
-					srcType = FragmentTypeOrganization
+					srcType = ah.FragmentClassOrg
 				}
 				now := time.Now().UTC()
 				srcName := strings.TrimSpace(rel.SourceName)
@@ -135,7 +135,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 	edgeSourceID, edgeTargetID, edgeType, directionChanged := normalizeRelationEdge(explicitSourceFragment, edgeSourceID, edgeTargetID, edgeType, targetType, enableManagement, rel.Qualifiers)
 	switch edgeType {
 	case "SUBSIDIARY_OF":
-		edgeType = DependencyTypeOwns
+		edgeType = ah.RelationNameBeneficiallyOwns
 		edgeSourceID, edgeTargetID = targetID, sourceFragment.ID
 		directionChanged = true
 	}
@@ -574,7 +574,7 @@ func (e *ScoutEngine) materializeRelationEdge(
 		edge.Qualifiers["canonicalizedGovRegulatesSwap"] = true
 		edge.Qualifiers["govRegulatesSwapReason"] = canon.GovRegulatesSwapReason
 	}
-	if edge.Relation == DependencyTypeAssures {
+	if edge.Relation == ah.RelationNameAssures {
 		if normalizeAssuranceTypeQualifier(edge.Qualifiers) == "" {
 			if dedupVariant := edgeDedupVariant(edge.Relation, rawRelationType, edge.Qualifiers, rel.Reason); dedupVariant == "assurance_type=audit" {
 				edge.Qualifiers["assurance_type"] = "audit"
@@ -669,7 +669,7 @@ func edgeDedupVariant(
 	qualifiers map[string]interface{},
 	reason string,
 ) string {
-	if edgeType != DependencyTypeAssures {
+	if edgeType != ah.RelationNameAssures {
 		return ""
 	}
 	if t := normalizeAssuranceTypeQualifier(qualifiers); t != "" {
@@ -761,8 +761,8 @@ func isCrossJurisdictionSuspicious(edgeType DependencyType, srcPath, dstPath str
 
 	// Check if edge type is "local" (should typically be same jurisdiction)
 	localEdgeTypes := map[DependencyType]bool{
-		DependencyTypeRegulates:      true,
-		DependencyTypeControlsAccess: true,
+		ah.RelationNameRegulates:      true,
+		ah.RelationNameImposes: true,
 		"GATEKEEPS":                         true,
 		"GATEKEEPS_DECISION":                true,
 		"LICENSED_BY":                       true,
@@ -867,8 +867,8 @@ func (b *EdgeBatchBuffer) Flush(ctx context.Context, e *ScoutEngine) error {
 // is inverted (e.g. "owned by" implies target->source but we have source->target).
 func detectLikelyInvertedOwnershipEdge(edgeType DependencyType, rel agents.DiscoveredRelation) bool {
 	switch edgeType {
-	case DependencyTypeOwns, DependencyTypeInvestsIn,
-		DependencyTypeControls, DependencyTypeAssures:
+	case ah.RelationNameBeneficiallyOwns, ah.RelationNameInvestedIn,
+		ah.RelationNameControlsVia, ah.RelationNameAssures:
 		// check
 	default:
 		return false

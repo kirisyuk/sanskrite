@@ -3,9 +3,9 @@ package scout
 import (
 	"context"
 	"fmt"
-	"testing"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"testing"
 )
 
 // TestContractNormalizer_NonRetryableContractError verifies that PreCreateValidator block
@@ -18,7 +18,7 @@ func TestContractNormalizer_NonRetryableContractError(t *testing.T) {
 
 	base := &models.HorizonFragment{
 		CanonicalPath: "/org/us/acme",
-		Class:          FragmentTypeOrganization,
+		Class:          ah.FragmentClassOrg,
 		Governance:    models.Governance{Owner: "SYSTEM", Status: "ACTIVE"},
 		TenantID:      "global",
 	}

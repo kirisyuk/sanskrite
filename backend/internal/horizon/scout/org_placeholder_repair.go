@@ -1,11 +1,11 @@
 package scout
 
 import (
-	"regexp"
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"regexp"
+	"strings"
 )
 
 var genericGovernmentLabelRE = regexp.MustCompile(`(?i)^government of [a-z][a-z .'-]+$`)
@@ -67,7 +67,7 @@ func inferOrgGeoTokenFromHints(label string, fragment *models.HorizonFragment) s
 }
 
 func inferOrgCanonicalPathFromHints(fragment *models.HorizonFragment) string {
-	if fragment == nil || fragment.Class != FragmentTypeOrganization {
+	if fragment == nil || fragment.Class != ah.FragmentClassOrg {
 		return ""
 	}
 	label := orgCanonicalizationLabel(fragment, strings.TrimSpace(fragment.CanonicalPath))

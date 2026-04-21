@@ -3,11 +3,11 @@ package contracts
 import (
 	"context"
 	"fmt"
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 type ControlMapHandler struct{}
@@ -91,20 +91,19 @@ func (h *ControlMapHandler) Execute(ctx context.Context, eng pipeline.Engine, in
 		}, nil
 	}
 
-	primaryTypes := []DependencyType{
-		DependencyTypeControls,
-		DependencyTypeManages,
-		DependencyTypeAdministers,
+	primaryTypes := []ah.RelationName{
+		ah.RelationNameControlsVia,
+		ah.RelationNameManagedBy,
+		ah.RelationNameOperates,
 	}
-	supportingTypes := []DependencyType{
-		DependencyTypeOwns,
-		DependencyTypeInvestsIn,
-		DependencyTypeHasSubgroup,
-		DependencyTypeMemberOf,
-		DependencyTypeAffiliatedWith,
-		DependencyTypeOperatesVia,
+	supportingTypes := []ah.RelationName{
+		ah.RelationNameBeneficiallyOwns,
+		ah.RelationNameInvestedIn,
+		ah.RelationNameMemberOf,
+		ah.RelationNameJointVentureWith,
+		ah.RelationNameWields,
 	}
-	edgeTypes := append(append([]DependencyType(nil), primaryTypes...), supportingTypes...)
+	edgeTypes := append(append([]ah.RelationName(nil), primaryTypes...), supportingTypes...)
 
 	nodeCache := map[string]*models.HorizonFragment{}
 	focusNodePaths := make([]string, 0, len(focusFragments))

@@ -3,13 +3,13 @@ package contracts
 import (
 	"context"
 	"fmt"
-	"sort"
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"sort"
+	"strings"
 )
 
 type CommonalityAnalysisHandler struct{}
@@ -378,11 +378,10 @@ func commonalityEdgeTypeAllowed(edgeType string) bool {
 		return false
 	}
 	switch edgeType {
-	case string(DependencyTypeLocatedIn),
-		string(DependencyTypeOperatesIn),
-		string(DependencyTypeParticipatesIn),
-		string(DependencyTypeHasMarketSegment),
-		string(DependencyTypeInfluences):
+	case string(ah.RelationNameIncorporatedIn),
+		string(ah.RelationNameOperates),
+		string(ah.RelationNameMemberOf),
+		string(ah.RelationNameInfluences):
 		return false
 	default:
 		return true

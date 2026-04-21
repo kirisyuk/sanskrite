@@ -1,10 +1,10 @@
 package scout
 
 import (
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 // RegulatoryImpactStrictValidator applies deterministic edge-type × path-prefix rules for policy impact graphs.
@@ -46,33 +46,33 @@ func regulatoryImpactEdgeStructurallyValid(rel agents.DiscoveredRelation) (bool,
 	}
 	dt := DependencyType(strings.ToUpper(rt))
 	switch dt {
-	case DependencyTypeRegulates:
+	case ah.RelationNameRegulates:
 		return prefixAny(src, "/gov/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/"), "regulates"
-	case DependencyTypeControlsAccess:
+	case DependencyType("controls_access"):
 		return prefixAny(src, "/gov/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/", "/program/"), "controls_access"
-	case DependencyTypeGatekeepsDecision:
+	case ah.RelationNameGatekeeps:
 		return prefixAny(src, "/gov/", "/org/") && strings.HasPrefix(tgt, "/decision/"), "gatekeeps_decision"
-	case DependencyTypeUsesMechanism:
+	case ah.RelationNameWields:
 		return strings.HasPrefix(src, "/decision/") && strings.HasPrefix(tgt, "/mechanism/"), "uses_mechanism"
-	case DependencyTypeAppliesTo:
+	case DependencyType("applies_to"):
 		return strings.HasPrefix(src, "/mechanism/") && prefixAny(tgt, "/market/", "/org/", "/fac/", "/product/", "/community/", "/program/"), "applies_to"
-	case DependencyTypeImposesCondition:
+	case ah.RelationNameImposes:
 		return prefixAny(src, "/mechanism/", "/gov/", "/program/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/", "/program/"), "imposes_condition"
-	case DependencyTypeInGeoScope:
+	case DependencyType("in_geo_scope"):
 		return prefixAny(src, "/mechanism/", "/decision/", "/program/", "/gov/") && prefixAny(tgt, "/loc/"), "in_geo_scope"
-	case DependencyTypeAffects:
+	case ah.RelationNameDisrupts:
 		return prefixAny(src, "/mechanism/", "/program/", "/gov/", "/community/", "/market/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/", "/program/", "/loc/", "/media/"), "affects"
-	case DependencyTypeInfluences:
+	case ah.RelationNameInfluences:
 		return src != "" && tgt != "", "influences"
-	case DependencyTypeAdministers:
+	case ah.RelationNameOperates:
 		return prefixAny(src, "/gov/", "/org/") && prefixAny(tgt, "/program/", "/org/"), "administers"
-	case DependencyTypeHasSubgroup:
+	case DependencyType("has_subgroup"):
 		return strings.HasPrefix(src, "/community/") && strings.HasPrefix(tgt, "/community/"), "has_subgroup"
-	case DependencyTypeMemberOf:
+	case ah.RelationNameMemberOf:
 		return strings.HasPrefix(src, "/person/") && strings.HasPrefix(tgt, "/community/"), "member_of"
-	case DependencyTypeAffiliatedWith:
+	case DependencyType("affiliated_with"):
 		return prefixAny(src, "/community/", "/person/") && prefixAny(tgt, "/org/", "/gov/", "/program/"), "affiliated_with"
-	case DependencyTypeOperatesVia:
+	case DependencyType("operates_via"):
 		return prefixAny(src, "/community/", "/org/") && prefixAny(tgt, "/media/"), "operates_via"
 	default:
 		return true, "unlisted_type_ok"

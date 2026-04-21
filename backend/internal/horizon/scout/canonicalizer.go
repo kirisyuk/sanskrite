@@ -4,15 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
-	"sync"
-
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
+	"sync"
 )
 
 // canonCache provides a cascade-scoped LRU-style cache for resolved canonical paths.
@@ -158,17 +158,17 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 	}
 
 	switch {
-	case t == FragmentTypeOrganization && subtype == "program":
+	case t == ah.FragmentClassOrg && subtype == "program":
 		return []string{"/program/global/" + slug}
-	case t == FragmentTypeOrganization && subtype == "media_channel":
+	case t == ah.FragmentClassOrg && subtype == "media_channel":
 		return []string{"/media/" + slug}
-	case t == FragmentTypeOrganization:
+	case t == ah.FragmentClassOrg:
 		return []string{"/org/na/" + slug}
-	case t == FragmentTypeFacility && subtype == "deposit":
+	case t == ah.FragmentClassSite && subtype == "deposit":
 		return []string{"/deposit/other/" + slug}
-	case t == FragmentTypeFacility:
+	case t == ah.FragmentClassSite:
 		return nil
-	case t == FragmentTypeProduct:
+	case t == ah.FragmentClassProduct:
 		ls := strings.TrimSpace(strings.ToLower(short))
 		if ls == "na" || ls == "n/a" || ls == "unknown" || ls == "none" {
 			return nil
@@ -182,19 +182,19 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 			return nil
 		}
 		return []string{BuildProductCanonicalPath("", "", "", slug)}
-	case t == FragmentTypeMarket:
+	case t == ah.FragmentClassMarket:
 		return []string{"/market/global/" + slug}
-	case t == FragmentTypeEvent && subtype == "domain":
+	case t == ah.FragmentClassEvidence && subtype == "domain":
 		return []string{"/domain/v1/other/" + slug}
-	case t == FragmentTypeEvent && subtype == "sphere":
+	case t == ah.FragmentClassEvidence && subtype == "sphere":
 		return []string{"/sphere/" + slug}
-	case t == FragmentTypeEvent:
+	case t == ah.FragmentClassEvidence:
 		return []string{"/event/" + slug}
-	case t == FragmentTypeGeoRegion:
+	case t == ah.FragmentClassGeo:
 		return nil
-	case t == FragmentTypePerson:
+	case t == ah.FragmentClassPerson:
 		return []string{"/person/" + slug}
-	case t == FragmentTypeCommunity:
+	case t == ah.FragmentClassCommunity:
 		return []string{"/community/global/interest/" + slug}
 	default:
 		return []string{"/org/na/" + slug}
@@ -310,14 +310,14 @@ func normalizeFragmentTypeHardcoded(s string) FragmentType {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
 	case "DOMAIN", "SPHERE":
 		// LEGACY (read-side only): both folded to evidence overlays.
-		return FragmentTypeEvent
+		return ah.FragmentClassEvidence
 	case "SUPPLY_LINK", "SUPPLYLINK":
 		// LEGACY (read-side only): collapsed onto site parent class
 		// (subtype=supply_link recovered via models.ClassSubtypeSupplyLink).
-		return FragmentTypeFacility
+		return ah.FragmentClassSite
 	case "NETWORK":
 		// LEGACY (read-side only): networks now expressed as communities.
-		return FragmentTypeCommunity
+		return ah.FragmentClassCommunity
 	}
 	cls, _, _ := models.NormalizeFragmentClassName(s, "")
 	return cls
@@ -394,7 +394,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 	}
 
 	// GEO special-case: normalize legacy /region/... into /loc/... when possible.
-	if relType == FragmentTypeGeoRegion {
+	if relType == ah.FragmentClassGeo {
 		if norm := normalizeLegacyGeoPath(rel.TargetCanonicalPath); norm != "" {
 			if e.fragmentsRepo != nil {
 				if f, err := e.fragmentsRepo.GetByCanonicalPath(ctx, norm); err == nil && f != nil && f.ID != "" {
@@ -406,7 +406,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 	}
 
 	// PRODUCT special-case: use ProductCanonicalizer for hierarchical canonicalization
-	if relType == FragmentTypeProduct {
+	if relType == ah.FragmentClassProduct {
 		productName := strings.TrimSpace(rel.TargetShortName)
 		if productName == "" {
 			productName = strings.TrimSpace(rel.TargetLegalName)
@@ -569,7 +569,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 
 			// 1.9) Normalized legal name fallback: catches "Gazprom PJSC" vs "Gazprom",
 			// "BOTAS A.S." vs "BOTAS", etc. by stripping legal suffixes + diacritics.
-			if relType == FragmentTypeOrganization || relType == "" {
+			if relType == ah.FragmentClassOrg || relType == "" {
 				normalizedTarget := naming.NormalizeEntityName(targetName)
 				if normalizedTarget != "" && normalizedTarget != strings.ToLower(targetName) {
 					normCandidates, normErr := e.fragmentsRepo.FindByNormalizedLegalName(ctx, normalizedTarget)
@@ -647,7 +647,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 				}
 			}
 			// For GEO_REGION: strongly prefer already-valid /loc hierarchy.
-			if relType == FragmentTypeGeoRegion {
+			if relType == ah.FragmentClassGeo {
 				for _, r := range resp.Results {
 					if r.Document.StructData == nil {
 						continue
@@ -805,9 +805,9 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 
 	// Enforce namespace consistency when targetType is known.
 	if relType != "" {
-		// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeProgram /
-		// FragmentTypeMediaChannel / FragmentTypeDeposit / FragmentTypeSupplyLink /
-		// FragmentTypeAffectedZone collapsed onto parent classes
+		// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassOrg /
+		// ah.FragmentClassOrg / ah.FragmentClassSite / ah.FragmentClassSite /
+		// ah.FragmentClassGeo collapsed onto parent classes
 		// (org/site/geo). The class-only switch can no longer assert a single
 		// dedicated prefix for those subtypes, so the org case now allows
 		// /org, /gov, /program, /media; the site case now allows /fac,
@@ -816,25 +816,25 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		// policy.IsCanonicalPathAllowedForType (called via PreCreateValidator).
 		var allowed []string
 		switch relType {
-		case FragmentTypeOrganization:
+		case ah.FragmentClassOrg:
 			allowed = []string{"/org/", "/gov/", "/program/", "/media/"}
-		case FragmentTypeFacility:
+		case ah.FragmentClassSite:
 			allowed = []string{"/fac/", "/deposit/", "/supply-link/"}
-		case FragmentTypeProduct:
+		case ah.FragmentClassProduct:
 			allowed = []string{"/product/"}
-		case FragmentTypeMarket:
+		case ah.FragmentClassMarket:
 			allowed = []string{"/market/"}
-		case FragmentTypeGeoRegion:
+		case ah.FragmentClassGeo:
 			allowed = []string{"/loc/", "/zone/"}
-		case FragmentTypeEvent:
+		case ah.FragmentClassEvidence:
 			allowed = []string{"/event/", "/domain/", "/sphere/"}
-		case FragmentTypePerson:
+		case ah.FragmentClassPerson:
 			allowed = []string{"/person/"}
-		case FragmentTypeCommunity:
+		case ah.FragmentClassCommunity:
 			allowed = []string{"/community/"}
-		case FragmentTypeDecisionPoint:
+		case ah.FragmentClassDecision:
 			allowed = []string{"/decision/"}
-		case FragmentTypeMechanism:
+		case ah.FragmentClassMechanism:
 			allowed = []string{"/mechanism/"}
 		}
 		if len(allowed) > 0 {
@@ -854,7 +854,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 
 	// Normalize market domain segment (e.g., "financials" → "finance") to prevent
 	// near-duplicate markets with variant domain names.
-	if relType == FragmentTypeMarket && strings.HasPrefix(out.CanonicalPath, "/market/") {
+	if relType == ah.FragmentClassMarket && strings.HasPrefix(out.CanonicalPath, "/market/") {
 		out.CanonicalPath = normalizeMarketCanonicalDomain(out.CanonicalPath)
 	}
 
@@ -884,7 +884,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 	}
 
 	// GEO strictness: require valid /loc hierarchy with valid country/region token.
-	if relType == FragmentTypeGeoRegion {
+	if relType == ah.FragmentClassGeo {
 		cp := out.CanonicalPath
 		if !strings.HasPrefix(cp, "/loc/") {
 			return "", fmt.Errorf("geo canonicalization must return /loc/{country}[/{level1}[/{level2}]], got: %s", cp)
@@ -946,7 +946,7 @@ func (e *ScoutEngine) acceptVertexCanonicalPath(
 			return "", false
 		}
 		if relType != "" && frag.Class != "" && frag.Class != relType {
-			if !(relType == FragmentTypeOrganization && strings.HasPrefix(cp, "/gov/")) {
+			if !(relType == ah.FragmentClassOrg && strings.HasPrefix(cp, "/gov/")) {
 				return "", false
 			}
 		}
@@ -961,33 +961,33 @@ func canonicalPathMatchesType(canonicalPath string, relType FragmentType) bool {
 		return true
 	}
 	// MIGRATION NOTE (AH taxonomy): see preferredCanonicalPaths — legacy
-	// FragmentTypeProgram / MediaChannel / Deposit / SupplyLink / AffectedZone
+	// ah.FragmentClassOrg / MediaChannel / Deposit / SupplyLink / AffectedZone
 	// collapsed onto parent classes. Allow the corresponding subtype path
 	// prefixes inside the parent-class arms; precise subtype validation is
 	// done elsewhere via models.ClassSubtype helpers.
 	switch relType {
-	case FragmentTypeOrganization:
+	case ah.FragmentClassOrg:
 		return strings.HasPrefix(cp, "/org/") ||
 			strings.HasPrefix(cp, "/gov/") ||
 			strings.HasPrefix(cp, "/program/") ||
 			strings.HasPrefix(cp, "/media/")
-	case FragmentTypeFacility:
+	case ah.FragmentClassSite:
 		return strings.HasPrefix(cp, "/fac/") ||
 			strings.HasPrefix(cp, "/deposit/") ||
 			strings.HasPrefix(cp, "/supply-link/")
-	case FragmentTypeProduct:
+	case ah.FragmentClassProduct:
 		return strings.HasPrefix(cp, "/product/")
-	case FragmentTypeMarket:
+	case ah.FragmentClassMarket:
 		return strings.HasPrefix(cp, "/market/")
-	case FragmentTypeGeoRegion:
+	case ah.FragmentClassGeo:
 		return strings.HasPrefix(cp, "/loc/") || strings.HasPrefix(cp, "/zone/")
-	case FragmentTypeEvent:
+	case ah.FragmentClassEvidence:
 		return strings.HasPrefix(cp, "/event/") ||
 			strings.HasPrefix(cp, "/domain/") ||
 			strings.HasPrefix(cp, "/sphere/")
-	case FragmentTypePerson:
+	case ah.FragmentClassPerson:
 		return strings.HasPrefix(cp, "/person/")
-	case FragmentTypeCommunity:
+	case ah.FragmentClassCommunity:
 		return strings.HasPrefix(cp, "/community/")
 	default:
 		return true
@@ -1002,7 +1002,7 @@ func (e *ScoutEngine) finalizeRelationCanonicalPath(ctx context.Context, rel age
 	if candidate == "" || e.canonicalPathResolver == nil || relType == "" {
 		return candidate
 	}
-	if relType == FragmentTypeOrganization {
+	if relType == ah.FragmentClassOrg {
 		label := strings.TrimSpace(rel.TargetLegalName)
 		if label == "" {
 			label = strings.TrimSpace(rel.TargetName)

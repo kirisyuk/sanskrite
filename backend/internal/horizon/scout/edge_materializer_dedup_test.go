@@ -1,13 +1,13 @@
 package scout
 
 import (
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"testing"
-
 )
 
 func TestEdgeDedupVariant_AssuresByQualifier(t *testing.T) {
 	got := edgeDedupVariant(
-		DependencyTypeAssures,
+		ah.RelationNameAssures,
 		"ASSURES",
 		map[string]interface{}{"assurance_type": "certification"},
 		"",
@@ -19,7 +19,7 @@ func TestEdgeDedupVariant_AssuresByQualifier(t *testing.T) {
 
 func TestEdgeDedupVariant_AssuresFromLegacyRaw(t *testing.T) {
 	got := edgeDedupVariant(
-		DependencyTypeAssures,
+		ah.RelationNameAssures,
 		"AUDITED_BY",
 		nil,
 		"",
@@ -31,7 +31,7 @@ func TestEdgeDedupVariant_AssuresFromLegacyRaw(t *testing.T) {
 
 func TestEdgeDedupVariant_NonAssuresEmpty(t *testing.T) {
 	got := edgeDedupVariant(
-		DependencyTypeOwns,
+		ah.RelationNameBeneficiallyOwns,
 		"AUDITED_BY",
 		map[string]interface{}{"assurance_type": "audit"},
 		"",

@@ -4,15 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
-	"strconv"
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"log"
+	"strconv"
+	"strings"
 )
 
 const (
@@ -2187,7 +2187,7 @@ func buildResearchDecompositionGuidanceBlock(fragment *models.HorizonFragment, h
 		return ""
 	}
 	cp := strings.TrimSpace(fragment.CanonicalPath)
-	isAnchor := fragment.Class == FragmentTypeMarket ||
+	isAnchor := fragment.Class == ah.FragmentClassMarket ||
 		fragment.IsLegacyProgram() ||
 		strings.HasPrefix(cp, "/market/") ||
 		strings.HasPrefix(cp, "/program/")
@@ -4319,47 +4319,47 @@ Return ONLY valid JSON. No markdown.`,
 	return a.runResearchPrompt(ctx, prompt, frag)
 }
 
-func entityTypeHolisticFocusAreas(ft FragmentType) string {
+func entityTypeHolisticFocusAreas(ft ah.FragmentClass) string {
 	switch ft {
-	case FragmentTypeOrganization:
+	case ah.FragmentClassOrg:
 		return `- Ownership structure and parent/subsidiary relationships
 - Products and services offered
 - Key markets and geographic presence
 - Financial overview (revenue, employees, market cap if public)
 - Key personnel (CEO, board members)
 - Principal facilities and operations`
-	case FragmentTypeFacility:
+	case ah.FragmentClassSite:
 		return `- Operator and owner
 - Capacity and throughput
 - Geographic location and coordinates
 - Inputs and outputs (what it processes/produces)
 - Connected infrastructure (pipelines, ports, grids)
 - Operational status and commissioning date`
-	case FragmentTypeProduct:
+	case ah.FragmentClassProduct:
 		return `- Major producers and suppliers
 - Key consumers and end markets
 - Alternative products and substitutes
 - Price dynamics and benchmarks
 - Position in supply chains
 - Quality grades and specifications`
-	case FragmentTypeGeoRegion:
+	case ah.FragmentClassGeo:
 		return `- Key industries and economic base
 - Major organizations and employers
 - Infrastructure and logistics
 - Regulatory environment
 - Demographics and population
 - Political structure and governance`
-	// FragmentTypeDeposit collapses to FragmentClassSite under AH; the
+	// ah.FragmentClassSite collapses to FragmentClassSite under AH; the
 	// "deposit" lane is recovered via fragment.Subtype == "deposit".
 	// Skipped here to avoid a duplicate switch case.
-	case FragmentTypeCommunity:
+	case ah.FragmentClassCommunity:
 		return `- Geographic scope and boundaries
 - Demographics and population
 - Economic base and key industries
 - Political structure and governance
 - Key institutions and organizations
 - Infrastructure and services`
-	case FragmentTypeMarket:
+	case ah.FragmentClassMarket:
 		return `- Market size and value
 - Growth dynamics and trends
 - Key players and market shares

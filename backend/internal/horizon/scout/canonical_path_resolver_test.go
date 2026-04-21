@@ -1,8 +1,8 @@
 package scout
 
 import (
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"testing"
-
 )
 
 func TestNormalizeGeoPathToStrict(t *testing.T) {
@@ -29,19 +29,19 @@ func TestNormalizeGeoPathToStrict(t *testing.T) {
 }
 
 func TestValidateRedirectCompatibility_MarketSameDomain(t *testing.T) {
-	if !ValidateRedirectCompatibility("/market/sa/finance/banking", "/market/sa/finance/islamic-banking", FragmentTypeMarket) {
+	if !ValidateRedirectCompatibility("/market/sa/finance/banking", "/market/sa/finance/islamic-banking", ah.FragmentClassMarket) {
 		t.Fatalf("same domain (finance) redirect should be compatible")
 	}
 }
 
 func TestValidateRedirectCompatibility_MarketCrossDomainRejected(t *testing.T) {
-	if ValidateRedirectCompatibility("/market/sa/finance/banking", "/market/sa/technology/banking", FragmentTypeMarket) {
+	if ValidateRedirectCompatibility("/market/sa/finance/banking", "/market/sa/technology/banking", ah.FragmentClassMarket) {
 		t.Fatalf("cross-domain redirect (finance->technology) should be rejected")
 	}
 }
 
 func TestValidateRedirectCompatibility_NonMarketAllowed(t *testing.T) {
-	if !ValidateRedirectCompatibility("/org/na/foo", "/org/us/foo-inc", FragmentTypeOrganization) {
+	if !ValidateRedirectCompatibility("/org/na/foo", "/org/us/foo-inc", ah.FragmentClassOrg) {
 		t.Fatalf("non-MARKET redirect should be allowed")
 	}
 }
@@ -63,19 +63,19 @@ func TestInferFragmentTypeFromCanonicalPath(t *testing.T) {
 		in   string
 		want FragmentType
 	}{
-		{in: "/gov/sa/sfda", want: FragmentTypeOrganization},
-		{in: "/org/us/tesla", want: FragmentTypeOrganization},
-		{in: "/product/raw/mineral/extraction/lithium-ore", want: FragmentTypeProduct},
-		{in: "/fac/us/gigafactory-texas", want: FragmentTypeFacility},
-		{in: "/loc/us/tx/austin", want: FragmentTypeGeoRegion},
-		{in: "/region/na/us/tx/austin", want: FragmentTypeGeoRegion},
-		{in: "/event/ces-2026", want: FragmentTypeEvent},
-		{in: "/person/elon-musk", want: FragmentTypePerson},
+		{in: "/gov/sa/sfda", want: ah.FragmentClassOrg},
+		{in: "/org/us/tesla", want: ah.FragmentClassOrg},
+		{in: "/product/raw/mineral/extraction/lithium-ore", want: ah.FragmentClassProduct},
+		{in: "/fac/us/gigafactory-texas", want: ah.FragmentClassSite},
+		{in: "/loc/us/tx/austin", want: ah.FragmentClassGeo},
+		{in: "/region/na/us/tx/austin", want: ah.FragmentClassGeo},
+		{in: "/event/ces-2026", want: ah.FragmentClassEvidence},
+		{in: "/person/elon-musk", want: ah.FragmentClassPerson},
 		// Legacy collapsed types fold to parent class. Subtype info is checked
 		// via InferClassSubtypeFromCanonicalPath in canonical_path_utils_domain_test.go.
-		{in: "/media/telegram/v-kazani-poymut", want: FragmentTypeOrganization},
-		{in: "/deposit/oil/gawar", want: FragmentTypeFacility},
-		{in: "/community/global/interest/osint-researchers", want: FragmentTypeCommunity},
+		{in: "/media/telegram/v-kazani-poymut", want: ah.FragmentClassOrg},
+		{in: "/deposit/oil/gawar", want: ah.FragmentClassSite},
+		{in: "/community/global/interest/osint-researchers", want: ah.FragmentClassCommunity},
 	}
 
 	for _, tc := range cases {

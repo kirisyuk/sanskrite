@@ -1,25 +1,26 @@
 package agents
 
 import (
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"testing"
 )
 
 func TestResolveResearchProfile(t *testing.T) {
 	tests := []struct {
 		name          string
-		fragmentType  FragmentType
+		fragmentType  ah.FragmentClass
 		canonicalPath string
 		communityType string
 		want          ResearchProfile
 	}{
-		{"market", FragmentTypeMarket, "/market/us/finance/banking", "", ResearchProfileMarket},
-		{"product", FragmentTypeProduct, "/product/raw/mineral/extraction/lithium", "", ResearchProfileProduct},
-		{"facility", FragmentTypeFacility, "/fac/cn/gigafactory-shanghai", "", ResearchProfileFacility},
-		{"deposit", FragmentTypeFacility, "/deposit/lithium/atacama-salar", "", ResearchProfileDeposit},
-		{"gov", FragmentTypeOrganization, "/gov/us/sec", "", ResearchProfileGov},
-		{"dynasty", FragmentTypeCommunity, "/community/sa/dynasty/house-of-saud", "dynasty", ResearchProfileCommunityDynastyTribe},
+		{"market", ah.FragmentClassMarket, "/market/us/finance/banking", "", ResearchProfileMarket},
+		{"product", ah.FragmentClassProduct, "/product/raw/mineral/extraction/lithium", "", ResearchProfileProduct},
+		{"facility", ah.FragmentClassSite, "/fac/cn/gigafactory-shanghai", "", ResearchProfileFacility},
+		{"deposit", ah.FragmentClassSite, "/deposit/lithium/atacama-salar", "", ResearchProfileDeposit},
+		{"gov", ah.FragmentClassOrg, "/gov/us/sec", "", ResearchProfileGov},
+		{"dynasty", ah.FragmentClassCommunity, "/community/sa/dynasty/house-of-saud", "dynasty", ResearchProfileCommunityDynastyTribe},
 		{"domain", "", "/domain/v1/supply-chain/geo/us", "", ResearchProfileDomain},
-		{"general", FragmentTypeOrganization, "/org/us/tesla-inc", "", ResearchProfileGeneral},
+		{"general", ah.FragmentClassOrg, "/org/us/tesla-inc", "", ResearchProfileGeneral},
 	}
 
 	for _, tt := range tests {

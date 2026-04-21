@@ -2,8 +2,8 @@ package scout
 
 import (
 	"encoding/json"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"testing"
-
 )
 
 func TestGovSkeletonContext_DecisionEdgesFieldExists(t *testing.T) {
@@ -14,24 +14,24 @@ func TestGovSkeletonContext_DecisionEdgesFieldExists(t *testing.T) {
 		FragmentID:    "f1",
 		DecisionEdges: []skeletonEdgeView{
 			{
-				Type:       string(DependencyTypeGatekeepsDecision),
+				Type:       string(ah.RelationNameGatekeeps),
 				SourcePath: "/gov/sa/sama",
 				TargetPath: "/decision/sa-banking/grant-banking-license",
 			},
 			{
-				Type:       string(DependencyTypeControlsAccess),
+				Type:       string(DependencyType("controls_access")),
 				SourcePath: "/gov/sa/sama",
 				TargetPath: "/org/sa/some-bank",
 			},
 			{
-				Type:       string(DependencyTypeUsesMechanism),
+				Type:       string(ah.RelationNameWields),
 				SourcePath: "/gov/sa/sama",
 				TargetPath: "/mechanism/regulatory/banking-license",
 			},
 		},
 		IncomingStratEdges: []skeletonEdgeView{
 			{
-				Type:       string(DependencyTypeAppliesTo),
+				Type:       string(DependencyType("applies_to")),
 				SourcePath: "/mechanism/regulatory/capital-adequacy",
 				TargetPath: "/gov/sa/sama",
 			},
@@ -92,12 +92,12 @@ func TestGovSkeletonContext_EmptyDecisionEdgesOmitted(t *testing.T) {
 
 func TestGovStrategicEdgeTypes_ContainsExpected(t *testing.T) {
 	expected := map[DependencyType]bool{
-		DependencyTypeGatekeepsDecision: false,
-		DependencyTypeControlsAccess:    false,
-		DependencyTypeUsesMechanism:     false,
-		DependencyTypeImposesCondition:   false,
-		DependencyTypeAppliesTo:          false,
-		DependencyTypeRegulates:          false,
+		ah.RelationNameGatekeeps:          false,
+		DependencyType("controls_access"): false,
+		ah.RelationNameWields:             false,
+		DependencyType("applies_to"):      false,
+		ah.RelationNameImposes:            false,
+		ah.RelationNameRegulates:          false,
 	}
 
 	for _, et := range govStrategicEdgeTypes {

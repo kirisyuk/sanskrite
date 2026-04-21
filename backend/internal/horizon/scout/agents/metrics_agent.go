@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/igorkirisyuk/sanskrite/internal/ai"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"regexp"
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 // MetricsAgent computes standard risk metrics for a HorizonFragment.State using an LLM.
@@ -105,18 +105,18 @@ func metricBaseName(metricPathOrName string) string {
 	return s
 }
 
-func defaultMetricSpecsForType(t FragmentType) []metricSpec {
+func defaultMetricSpecsForType(t ah.FragmentClass) []metricSpec {
 	// Standardized, type-aware defaults.
 	// Note: these are intentionally conservative; dynamic requested metrics can extend this set.
 	switch t {
-	case FragmentTypePerson:
+	case ah.FragmentClassPerson:
 		return []metricSpec{
 			{Path: "/metric/risk/public_perception", Kind: metricKindDirectional},
 			{Path: "/metric/risk/market_sentiment", Kind: metricKindDirectional},
 			{Path: "/metric/risk/geopolitical_alignment", Kind: metricKindDirectional},
 			{Path: "/metric/risk/sanction_exposure", Kind: metricKindMagnitude},
 		}
-	case FragmentTypeGeoRegion:
+	case ah.FragmentClassGeo:
 		return []metricSpec{
 			{Path: "/metric/risk/stability_index", Kind: metricKindMagnitude},
 			{Path: "/metric/risk/corruption_vulnerability", Kind: metricKindMagnitude},
@@ -124,14 +124,14 @@ func defaultMetricSpecsForType(t FragmentType) []metricSpec {
 			{Path: "/metric/risk/geopolitical_alignment", Kind: metricKindDirectional},
 			{Path: "/metric/risk/public_perception", Kind: metricKindDirectional},
 		}
-	case FragmentTypeEvent:
+	case ah.FragmentClassEvidence:
 		return []metricSpec{
 			{Path: "/metric/risk/market_sentiment", Kind: metricKindDirectional},
 			{Path: "/metric/risk/public_perception", Kind: metricKindDirectional},
 			{Path: "/metric/risk/geopolitical_alignment", Kind: metricKindDirectional},
 			{Path: "/metric/risk/sanction_exposure", Kind: metricKindMagnitude},
 		}
-	case FragmentTypeFacility:
+	case ah.FragmentClassSite:
 		return []metricSpec{
 			{Path: "/metric/risk/operational_health", Kind: metricKindMagnitude},
 			{Path: "/metric/risk/capacity_utilization", Kind: metricKindMagnitude},
@@ -140,13 +140,13 @@ func defaultMetricSpecsForType(t FragmentType) []metricSpec {
 			{Path: "/metric/risk/corruption_vulnerability", Kind: metricKindMagnitude},
 			{Path: "/metric/risk/sanction_exposure", Kind: metricKindMagnitude},
 		}
-	case FragmentTypeProduct:
+	case ah.FragmentClassProduct:
 		return []metricSpec{
 			{Path: "/metric/risk/supply_chain_criticality", Kind: metricKindMagnitude},
 			{Path: "/metric/risk/market_sentiment", Kind: metricKindDirectional},
 			{Path: "/metric/risk/public_perception", Kind: metricKindDirectional},
 		}
-	case FragmentTypeOrganization:
+	case ah.FragmentClassOrg:
 		fallthrough
 	default:
 		return []metricSpec{
@@ -165,7 +165,7 @@ func defaultMetricSpecsForType(t FragmentType) []metricSpec {
 
 // RequiredMetricPathsForType is the metrics schema contract for runtime refresh decisions:
 // it returns canonical metric paths that must exist (type defaults + explicit requested metrics).
-func RequiredMetricPathsForType(t FragmentType, requestedMetrics []string) []string {
+func RequiredMetricPathsForType(t ah.FragmentClass, requestedMetrics []string) []string {
 	specs := defaultMetricSpecsForType(t)
 	for _, rm := range requestedMetrics {
 		p := canonicalizeMetricPath(rm)

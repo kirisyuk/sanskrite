@@ -4,15 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"sort"
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/edgesemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"sort"
+	"strings"
 )
 
 // PairType defines allowed entity pair types for intra-graph inference.
@@ -29,18 +29,18 @@ const (
 	PairTypeOrgProduct PairType = "org_product"
 )
 
-// fragmentTypes maps pair type to (source, target) FragmentType using the same
-// ontology as EdgeDirectionPolicies. /gov/ and /org/ entities share FragmentTypeOrganization.
-func (p PairType) fragmentTypes() (FragmentType, FragmentType) {
+// fragmentTypes maps pair type to (source, target) FragmentClass using the same
+// ontology as EdgeDirectionPolicies. /gov/ and /org/ entities share ah.FragmentClassOrg.
+func (p PairType) fragmentTypes() (ah.FragmentClass, ah.FragmentClass) {
 	switch p {
 	case PairTypeOrgOrg, PairTypeOrgGov, PairTypeGovOrg, PairTypeGovGov:
-		return FragmentTypeOrganization, FragmentTypeOrganization
+		return ah.FragmentClassOrg, ah.FragmentClassOrg
 	case PairTypePersonOrg, PairTypePersonGov:
-		return FragmentTypePerson, FragmentTypeOrganization
+		return ah.FragmentClassPerson, ah.FragmentClassOrg
 	case PairTypeOrgMarket:
-		return FragmentTypeOrganization, FragmentTypeMarket
+		return ah.FragmentClassOrg, ah.FragmentClassMarket
 	case PairTypeOrgProduct:
-		return FragmentTypeOrganization, FragmentTypeProduct
+		return ah.FragmentClassOrg, ah.FragmentClassProduct
 	default:
 		return "", ""
 	}
@@ -73,7 +73,7 @@ func (p PairType) AllowedRelationTypes() []string {
 	return out
 }
 
-func containsFT(types []FragmentType, t FragmentType) bool {
+func containsFT(types []ah.FragmentClass, t ah.FragmentClass) bool {
 	for _, vt := range types {
 		if vt == t {
 			return true
@@ -230,7 +230,7 @@ func fragGovPath(f *models.HorizonFragment) bool {
 	return f != nil && strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/gov/")
 }
 func fragPersonPath(f *models.HorizonFragment) bool {
-	return f != nil && f.Class == FragmentTypePerson && strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/person/")
+	return f != nil && f.Class == ah.FragmentClassPerson && strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/person/")
 }
 func fragMarketPath(f *models.HorizonFragment) bool {
 	return f != nil && strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/market/")

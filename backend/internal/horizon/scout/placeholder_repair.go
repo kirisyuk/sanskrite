@@ -2,12 +2,12 @@ package scout
 
 import (
 	"context"
-	"strings"
-
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 func RepairSyntheticFacilityCanonicalPath(
@@ -15,7 +15,7 @@ func RepairSyntheticFacilityCanonicalPath(
 	fragment *models.HorizonFragment,
 	geocodingClient coreontology.GeocodingClientInterface,
 ) (string, string, bool) {
-	if fragment == nil || fragment.Class != FragmentTypeFacility {
+	if fragment == nil || fragment.Class != ah.FragmentClassSite {
 		return "", "", false
 	}
 	if _, blocked := forbiddenPlaceholderFacilitySlug(strings.TrimSpace(fragment.CanonicalPath)); !blocked {
@@ -59,7 +59,7 @@ func RepairSyntheticFacilityCanonicalPath(
 }
 
 func RepairSyntheticOrgCanonicalPath(fragment *models.HorizonFragment) (string, string, bool) {
-	if fragment == nil || fragment.Class != FragmentTypeOrganization {
+	if fragment == nil || fragment.Class != ah.FragmentClassOrg {
 		return "", "", false
 	}
 	cp := strings.TrimSpace(fragment.CanonicalPath)

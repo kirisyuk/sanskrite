@@ -1,12 +1,12 @@
 package agents
 
 import (
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"testing"
-
 )
 
 func TestRequiredMetricPathsForType_IncludesDefaultsAndRequested(t *testing.T) {
-	paths := RequiredMetricPathsForType(FragmentTypePerson, []string{
+	paths := RequiredMetricPathsForType(ah.FragmentClassPerson, []string{
 		"risk/custom_pressure",
 		"/metric/custom/special_signal",
 		"risk/custom_pressure", // duplicate

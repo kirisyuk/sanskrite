@@ -4,14 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/contractsemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 // CriticAgent проверяет извлеченные данные на соответствие источникам
@@ -185,7 +185,7 @@ func dedupWorkingProductScopeRefs(in []string) []string {
 	return out
 }
 
-func fragmentTypeOrEmpty(f *models.HorizonFragment) FragmentType {
+func fragmentTypeOrEmpty(f *models.HorizonFragment) ah.FragmentClass {
 	if f == nil {
 		return ""
 	}
@@ -262,9 +262,9 @@ GRAPH CONTEXT (existing Lens graph):
 	}
 	var entityType string
 	switch fragment.Class {
-	case FragmentTypeDecisionPoint:
+	case ah.FragmentClassDecision:
 		entityType = "DECISION_POINT"
-	case FragmentTypeMechanism:
+	case ah.FragmentClassMechanism:
 		entityType = "MECHANISM"
 	default:
 		entityType = "UNKNOWN"
@@ -730,19 +730,19 @@ func buildCriticRelevanceGate(fragment *models.HorizonFragment) string {
 	ft := fragment.Class
 
 	switch {
-	case ft == FragmentTypePerson || strings.HasPrefix(cp, "/person/"):
+	case ft == ah.FragmentClassPerson || strings.HasPrefix(cp, "/person/"):
 		return `CRITICAL RELEVANCE GATE (PERSON):
 - Focus ONLY on person-relevant completeness: identity, affiliations, roles, relatives, associates, and person-specific relationship evidence.
 - Do NOT request org/fac/market operational packages for PERSON:
   no orgSize, marketSegments, TAM/CAGR/CR4/HHI, supply-chain suppliers/customers, facility lifecycle, audit-assurance, products/services catalogs, ownership cap-table requests.
 - If uncertain, prefer fewer high-quality PERSON questions over broad business checklists.
 `
-	case ft == FragmentTypeMarket || strings.HasPrefix(cp, "/market/"):
+	case ft == ah.FragmentClassMarket || strings.HasPrefix(cp, "/market/"):
 		return `CRITICAL RELEVANCE GATE (MARKET):
 - Focus on market hierarchy, participants, sizing and concentration metrics.
 - Avoid person-family/biography requests unless explicitly evidenced as relevant to this market.
 `
-	case ft == FragmentTypeCommunity || strings.HasPrefix(cp, "/community/"):
+	case ft == ah.FragmentClassCommunity || strings.HasPrefix(cp, "/community/"):
 		return `CRITICAL RELEVANCE GATE (COMMUNITY):
 - Focus on community type, channels, affiliations, subgroup hierarchy, and influence links.
 - Avoid generic corporate audit/market-sizing checklists unless explicitly grounded.
@@ -761,7 +761,7 @@ func enforceValidationRelevance(fragment *models.HorizonFragment, out *Validatio
 	}
 	cp := strings.ToLower(strings.TrimSpace(fragment.CanonicalPath))
 	ft := fragment.Class
-	isPerson := ft == FragmentTypePerson || strings.HasPrefix(cp, "/person/")
+	isPerson := ft == ah.FragmentClassPerson || strings.HasPrefix(cp, "/person/")
 	if !isPerson {
 		return out
 	}

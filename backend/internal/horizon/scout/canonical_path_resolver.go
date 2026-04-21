@@ -2,13 +2,8 @@ package scout
 
 import (
 	"context"
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"fmt"
-	"log"
-	"math"
-	"strings"
-	"sync/atomic"
-	"time"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/geoambiguity"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/govdict"
@@ -18,8 +13,13 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
-	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"log"
+	"math"
+	"strings"
+	"sync/atomic"
+	"time"
 )
 
 // CanonicalPathResolverStats is a lightweight in-memory counter snapshot for observability.
@@ -218,7 +218,7 @@ func (r *CanonicalPathResolver) Resolve(
 	}
 
 	// Step 1.5: Normalize GEO paths into canonical variable-depth /loc hierarchy.
-	if fragmentType == FragmentTypeGeoRegion {
+	if fragmentType == ah.FragmentClassGeo {
 		if norm := normalizeGeoPathToStrict(result.CanonicalPath); norm != "" && norm != result.CanonicalPath {
 			atomic.AddInt64(&r.geoStrictified, 1)
 			result.NormalizationSteps = append(result.NormalizationSteps,
@@ -228,7 +228,7 @@ func (r *CanonicalPathResolver) Resolve(
 	}
 
 	// Step 1.55: GeoNames-backed GEO normalization/validation for /loc paths.
-	if fragmentType == FragmentTypeGeoRegion && r.geonamesClient != nil {
+	if fragmentType == ah.FragmentClassGeo && r.geonamesClient != nil {
 		if norm, step, confPenalty := normalizeGeoPathViaGeoNames(ctx, result.CanonicalPath, r.geonamesClient); norm != "" && norm != result.CanonicalPath {
 			atomic.AddInt64(&r.geoNamesRewrites, 1)
 			result.NormalizationSteps = append(result.NormalizationSteps, step)
@@ -243,7 +243,7 @@ func (r *CanonicalPathResolver) Resolve(
 	// Handles:
 	// - flat /product/{slug} -> hierarchical taxonomy when possible
 	// - legacy/malformed product paths (e.g. /product/{x}/{y}/{slug}) -> stable canonical fallback
-	if fragmentType == FragmentTypeProduct {
+	if fragmentType == ah.FragmentClassProduct {
 		if norm := normalizeProductPathForResolve(ctx, result.CanonicalPath); norm != "" && norm != result.CanonicalPath {
 			atomic.AddInt64(&r.productTaxonomyRewrites, 1)
 			result.NormalizationSteps = append(result.NormalizationSteps,
@@ -262,7 +262,7 @@ func (r *CanonicalPathResolver) Resolve(
 	}
 
 	// Step 1.65: Mechanism and /gov/ synonym dictionaries (regulatory identity control plane).
-	if fragmentType == FragmentTypeMechanism && r.mechanismDictionary != nil {
+	if fragmentType == ah.FragmentClassMechanism && r.mechanismDictionary != nil {
 		cp := strings.TrimSpace(result.CanonicalPath)
 		if strings.HasPrefix(cp, "/mechanism/") {
 			if canonicalPath, matched, err := r.mechanismDictionary.CanonicalizeMechanismPath(ctx, cp); err == nil && matched && canonicalPath != "" && canonicalPath != cp {
@@ -308,7 +308,7 @@ func (r *CanonicalPathResolver) Resolve(
 		}
 		// Product cross-shape dedup fallback:
 		// if exact path misses, probe stable product path variants sharing the same identity slug.
-		if fragmentType == FragmentTypeProduct {
+		if fragmentType == ah.FragmentClassProduct {
 			for _, variantPath := range productCanonicalPathVariants(ctx, result.CanonicalPath) {
 				variantPath = strings.TrimSpace(variantPath)
 				if variantPath == "" || variantPath == strings.TrimSpace(result.CanonicalPath) {
@@ -318,7 +318,7 @@ func (r *CanonicalPathResolver) Resolve(
 				if verr != nil || candidate == nil || strings.TrimSpace(candidate.ID) == "" {
 					continue
 				}
-				if candidate.Class != "" && candidate.Class != FragmentTypeProduct {
+				if candidate.Class != "" && candidate.Class != ah.FragmentClassProduct {
 					continue
 				}
 				atomic.AddInt64(&r.foundExistingByPath, 1)
@@ -337,14 +337,14 @@ func (r *CanonicalPathResolver) Resolve(
 	// Step 2.25: For skeletal AFFECTED_ZONE inputs, reuse an existing richer sibling
 	// with the same geo + normalized identity slug inside the same condition family.
 	//
-	// MIGRATION NOTE: legacy FragmentTypeAffectedZone collapses onto
+	// MIGRATION NOTE: legacy ah.FragmentClassGeo collapses onto
 	// (geo, affected_zone) under AH. Detect it via the canonical-path
 	// inference (class=geo, subtype=affected_zone) instead of class-only
 	// equality which can no longer distinguish a generic geo from an
 	// affected zone.
 	resolvedCS := InferClassSubtypeFromCanonicalPath(result.CanonicalPath)
 	if result.ExistingFragment == nil &&
-		(resolvedCS.Class == FragmentTypeGeoRegion && resolvedCS.Subtype == "affected_zone") &&
+		(resolvedCS.Class == ah.FragmentClassGeo && resolvedCS.Subtype == "affected_zone") &&
 		r.fragmentsRepo != nil {
 		incoming := &models.HorizonFragment{
 			CanonicalPath: result.CanonicalPath,
@@ -384,7 +384,7 @@ func (r *CanonicalPathResolver) Resolve(
 	}
 
 	// Step 3: For organizations, try deduplication by name/Wikidata ID
-	if fragmentType == FragmentTypeOrganization && r.orgDeduplicator != nil {
+	if fragmentType == ah.FragmentClassOrg && r.orgDeduplicator != nil {
 		// Create a minimal fragment for deduplication check
 		testFragment := &models.HorizonFragment{
 			CanonicalPath: result.CanonicalPath,
@@ -981,7 +981,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 	}
 
 	// Step 1.2: Government body correction (org path with gov-like label).
-	if fragmentType == FragmentTypeOrganization {
+	if fragmentType == ah.FragmentClassOrg {
 		label := strings.TrimSpace(metadata["legalName"])
 		if label == "" {
 			label = strings.TrimSpace(metadata["shortName"])
@@ -1000,7 +1000,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 	}
 
 	// Step 1.25: Best-effort PRODUCT normalization to a stable shape.
-	if fragmentType == FragmentTypeProduct {
+	if fragmentType == ah.FragmentClassProduct {
 		nameHints := make([]string, 0, 3)
 		if s := strings.TrimSpace(metadata["shortName"]); s != "" {
 			nameHints = append(nameHints, s)
@@ -1025,7 +1025,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 	}
 
 	// Step 1.3: Market deduplication using tags (metadata-driven).
-	if fragmentType == FragmentTypeMarket && r.fragmentsRepo != nil && len(metadata) > 0 {
+	if fragmentType == ah.FragmentClassMarket && r.fragmentsRepo != nil && len(metadata) > 0 {
 		rawTags := parseTagMetadata(metadata["tags"])
 		normalizedTags := taxonomy.NormalizeMarketTags(rawTags)
 		if len(normalizedTags) >= 5 {
@@ -1045,7 +1045,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 							if cand == nil || cand.ID == "" {
 								continue
 							}
-							if cand.Class != FragmentTypeMarket && !strings.HasPrefix(strings.TrimSpace(cand.CanonicalPath), "/market/") {
+							if cand.Class != ah.FragmentClassMarket && !strings.HasPrefix(strings.TrimSpace(cand.CanonicalPath), "/market/") {
 								continue
 							}
 							cGeo, cSector, cVertical := parseMarketGeoSector(cand.CanonicalPath)
@@ -1086,7 +1086,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 	}
 
 	// Step 2: For organizations with metadata, try deduplication first (before checking by path)
-	if fragmentType == FragmentTypeOrganization && r.orgDeduplicator != nil && len(metadata) > 0 {
+	if fragmentType == ah.FragmentClassOrg && r.orgDeduplicator != nil && len(metadata) > 0 {
 		testFragment := &models.HorizonFragment{
 			CanonicalPath: result.CanonicalPath,
 			Class:          fragmentType,
@@ -1147,7 +1147,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 				fmt.Sprintf("found_existing_fragment: %s (id=%s)", result.CanonicalPath, existing.ID))
 			log.Printf("%s Found existing fragment: %s (id=%s)", logPrefix, result.CanonicalPath, existing.ID)
 		}
-		if result.ExistingFragment == nil && fragmentType == FragmentTypeProduct {
+		if result.ExistingFragment == nil && fragmentType == ah.FragmentClassProduct {
 			nameHints := []string{
 				strings.TrimSpace(metadata["shortName"]),
 				strings.TrimSpace(metadata["legalName"]),
@@ -1162,7 +1162,7 @@ func (r *CanonicalPathResolver) ResolveWithMetadata(
 				if verr != nil || candidate == nil || strings.TrimSpace(candidate.ID) == "" {
 					continue
 				}
-				if candidate.Class != "" && candidate.Class != FragmentTypeProduct {
+				if candidate.Class != "" && candidate.Class != ah.FragmentClassProduct {
 					continue
 				}
 				atomic.AddInt64(&r.foundExistingByPath, 1)
@@ -1257,7 +1257,7 @@ func ValidateRedirectCompatibility(sourcePath, targetPath string, fragmentType F
 	if sourcePath == "" || targetPath == "" {
 		return false
 	}
-	if fragmentType != FragmentTypeMarket {
+	if fragmentType != ah.FragmentClassMarket {
 		return true
 	}
 	srcDomain := extractMarketDomain(sourcePath)

@@ -1,9 +1,9 @@
 package scout
 
 import (
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 // InferSpherePaths infers sphere paths from canonical path, fragment type, and existing qualifiers.
@@ -17,23 +17,23 @@ func InferSpherePaths(cp string, fragType FragmentType, govType string, qualifie
 	var out []string
 
 	switch fragType {
-	case FragmentTypeOrganization:
+	case ah.FragmentClassOrg:
 		if strings.HasPrefix(cp, "/gov/") {
 			out = inferGovSpherePaths(cp, govType)
 		} else {
 			out = inferOrgSpherePaths(cp, qualifiers)
 		}
-	case FragmentTypeMarket:
+	case ah.FragmentClassMarket:
 		out = inferMarketSpherePaths(qualifiers)
-	case FragmentTypeProduct:
+	case ah.FragmentClassProduct:
 		out = inferProductSpherePaths(cp)
-	case FragmentTypeFacility:
+	case ah.FragmentClassSite:
 		out = inferFacilitySpherePaths(cp, qualifiers)
-	case FragmentTypeGeoRegion:
+	case ah.FragmentClassGeo:
 		out = inferLocSpherePaths(cp, qualifiers)
-	case FragmentTypeCommunity:
+	case ah.FragmentClassCommunity:
 		out = inferCommunitySpherePaths(qualifiers)
-	case FragmentTypeDecisionPoint, FragmentTypeMechanism:
+	case ah.FragmentClassDecision, ah.FragmentClassMechanism:
 		out = inferDomainSpherePaths(cp)
 	default:
 		return nil
@@ -245,7 +245,7 @@ func InferResolutionHint(fragType FragmentType, govType string, cp string, paren
 	govType = strings.ToLower(strings.TrimSpace(govType))
 
 	switch fragType {
-	case FragmentTypeOrganization:
+	case ah.FragmentClassOrg:
 		if strings.HasPrefix(cp, "/gov/") {
 			return inferGovResolution(govType)
 		}
@@ -253,7 +253,7 @@ func InferResolutionHint(fragType FragmentType, govType string, cp string, paren
 			return "unit"
 		}
 		return "macro"
-	case FragmentTypeMarket:
+	case ah.FragmentClassMarket:
 		if parentPath == "" {
 			return "macro"
 		}
@@ -262,7 +262,7 @@ func InferResolutionHint(fragType FragmentType, govType string, cp string, paren
 			return "unit"
 		}
 		return "detail"
-	case FragmentTypeProduct:
+	case ah.FragmentClassProduct:
 		depth := pathDepth(cp)
 		if depth <= 3 {
 			return "macro"
@@ -271,9 +271,9 @@ func InferResolutionHint(fragType FragmentType, govType string, cp string, paren
 			return "unit"
 		}
 		return "detail"
-	case FragmentTypeFacility:
+	case ah.FragmentClassSite:
 		return "detail"
-	case FragmentTypeGeoRegion:
+	case ah.FragmentClassGeo:
 		depth := pathDepth(cp)
 		if depth <= 1 {
 			return "macro"
@@ -282,14 +282,14 @@ func InferResolutionHint(fragType FragmentType, govType string, cp string, paren
 			return "unit"
 		}
 		return "detail"
-	case FragmentTypeCommunity:
+	case ah.FragmentClassCommunity:
 		if parentPath != "" {
 			return "unit"
 		}
 		return "macro"
-	case FragmentTypePerson:
+	case ah.FragmentClassPerson:
 		return "detail"
-	case FragmentTypeDecisionPoint, FragmentTypeMechanism:
+	case ah.FragmentClassDecision, ah.FragmentClassMechanism:
 		return "detail"
 	default:
 		return ""

@@ -1,9 +1,9 @@
 package scout
 
 import (
-	"testing"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"testing"
 )
 
 func TestDedupeDiscoveredRelations_KeepsHigherConfidence(t *testing.T) {
@@ -37,13 +37,13 @@ func TestPolicyImpactMaterializationRoot_FallsBackToMechanismFromRels(t *testing
 		{
 			SourceCanonicalPath: "/gov/eu/ec",
 			TargetCanonicalPath: "/decision/trade/cbam-review",
-			RelationType:        string(DependencyTypeGatekeepsDecision),
+			RelationType:        string(ah.RelationNameGatekeeps),
 			Confidence:          0.8,
 		},
 		{
 			SourceCanonicalPath: "/decision/trade/cbam-review",
 			TargetCanonicalPath: "/mechanism/regulatory/cbam",
-			RelationType:        string(DependencyTypeUsesMechanism),
+			RelationType:        string(ah.RelationNameWields),
 			Confidence:          0.75,
 		},
 	}
@@ -76,11 +76,11 @@ func TestSanitizeDomainResearchRelations_PolicyImpactAllowlist(t *testing.T) {
 	// sanitizeDomainResearchRelations now emits scout DependencyType
 	// values (snake_case AH RelationName) for non-domain-anchored
 	// edges so downstream materializers / allowlists can pin on the
-	// scout vocabulary directly. DependencyTypeRegulates ==
+	// scout vocabulary directly. ah.RelationNameRegulates ==
 	// ah.RelationNameRegulates == "regulates" (the lowercase canonical
 	// form) — the previous UPPER_SNAKE assertion belonged to the
 	// pre-migration wire-form pipeline.
-	if out[0].RelationType != string(DependencyTypeRegulates) {
+	if out[0].RelationType != string(ah.RelationNameRegulates) {
 		t.Fatalf("got relation %q", out[0].RelationType)
 	}
 }

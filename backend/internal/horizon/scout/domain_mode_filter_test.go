@@ -2,11 +2,11 @@ package scout
 
 import (
 	"context"
-	"testing"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"testing"
 )
 
 func TestEdgeAllowlistByDomainMode_SupplyChainIncludesMarketAnchors(t *testing.T) {
@@ -49,16 +49,16 @@ func TestEdgeAllowlistByDomainMode_AssuranceExcludesLegacyAuditedBy(t *testing.T
 func TestEdgeAllowlistByDomainModes_ComposedFromContractSemantics(t *testing.T) {
 	allow := EdgeAllowlistByDomainModes([]string{taxonomy.DomainModeGovernance, taxonomy.DomainModeSupplyChain})
 	for _, want := range []DependencyType{
-		DependencyTypeProduces,
-		DependencyTypeSuppliesTo,
-		DependencyTypeOwns,
-		DependencyTypeBoardMemberOf,
+		ah.RelationNameProduces,
+		ah.RelationNameSupplies,
+		ah.RelationNameBeneficiallyOwns,
+		ah.RelationNameHoldsBoardSeat,
 	} {
 		if !AllowlistContains(allow, want) {
 			t.Fatalf("composed allowlist must include %s", want)
 		}
 	}
-	if AllowlistContains(allow, DependencyTypeInfluences) {
+	if AllowlistContains(allow, ah.RelationNameInfluences) {
 		t.Fatalf("composed allowlist must not leak interpretive INFLUENCES into supply+governance runtime contract")
 	}
 }
@@ -115,7 +115,7 @@ func TestIsAllowedSupplyChainRuntimeRelation_DomainAnchorKeepsScaffold(t *testin
 	if !IsAllowedSupplyChainRuntimeRelation(
 		"/domain/v1/supply-chain/geo/kz/subject/samsung-electronics",
 		"/org/kr/samsung-electronics",
-		DependencyTypeFocusesOn,
+		DependencyType("focuses_on"),
 	) {
 		t.Fatal("domain supply-chain anchor must allow FOCUSES_ON at runtime")
 	}
@@ -125,7 +125,7 @@ func TestIsAllowedSupplyChainPersistRelation_DomainAnchorKeepsScaffold(t *testin
 	if !IsAllowedSupplyChainPersistRelation(
 		"/domain/v1/supply-chain/geo/kz/subject/samsung-electronics",
 		"/org/kr/samsung-electronics",
-		DependencyTypeFocusesOn,
+		DependencyType("focuses_on"),
 	) {
 		t.Fatal("domain supply-chain anchor must allow FOCUSES_ON at final persist gate")
 	}
@@ -145,7 +145,7 @@ func TestIsAllowedSupplyChainRuntimeRelation_OrgSourceStillRejectsFocusesOn(t *t
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/org/kr/samsung-electronics",
 		"/market/kz/consumer-electronics/retail",
-		DependencyTypeFocusesOn,
+		DependencyType("focuses_on"),
 	) {
 		t.Fatal("non-domain/non-market source must not allow FOCUSES_ON in supply-chain runtime gate")
 	}
@@ -155,7 +155,7 @@ func TestIsAllowedSupplyChainPersistRelation_OrgSourceStillRejectsFocusesOn(t *t
 	if IsAllowedSupplyChainPersistRelation(
 		"/org/kr/samsung-electronics",
 		"/market/kz/consumer-electronics/retail",
-		DependencyTypeFocusesOn,
+		DependencyType("focuses_on"),
 	) {
 		t.Fatal("non-domain/non-market source must not allow FOCUSES_ON at final persist gate")
 	}
@@ -314,28 +314,28 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantAdministersAndSubsidi
 	if !IsAllowedSupplyChainRuntimeRelation(
 		"/gov/us/department-of-the-navy",
 		"/gov/us/navy",
-		DependencyTypeAdministers,
+		ah.RelationNameOperates,
 	) {
 		t.Fatal("supply-chain runtime gate must allow ADMINISTERS for relevant governance overlays")
 	}
 	if !IsAllowedSupplyChainPersistRelation(
 		"/org/jp/toyota-industries",
 		"/org/jp/toyota-group",
-		DependencyTypeSubsidiaryOf,
+		ah.RelationNameSubsidiaryOf,
 	) {
 		t.Fatal("supply-chain persist gate must allow SUBSIDIARY_OF for relevant ownership overlays")
 	}
 	if !IsAllowedSupplyChainRuntimeRelation(
 		"/program/ae/saber",
 		"/gov/ae/ministry-of-industry-and-advanced-technology",
-		DependencyTypeAdministers,
+		ah.RelationNameOperates,
 	) {
 		t.Fatal("runtime gate must keep reversible PROGRAM -> GOV ADMINISTERS edges so canonicalization can swap them")
 	}
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/gov/us/department-of-the-navy",
 		"/market/us/defense/naval-systems",
-		DependencyTypeAdministers,
+		ah.RelationNameOperates,
 	) {
 		t.Fatal("market target must remain out of contract for supply-chain ADMINISTERS")
 	}
@@ -345,28 +345,28 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantManagesAndAffects(t *
 	if !IsAllowedSupplyChainRuntimeRelation(
 		"/org/kz/damu-entrepreneurship-development-fund",
 		"/program/kz/business-roadmap-2025",
-		DependencyTypeManages,
+		ah.RelationNameManagedBy,
 	) {
 		t.Fatal("supply-chain runtime gate must allow MANAGES for org->program overlays")
 	}
 	if !IsAllowedSupplyChainPersistRelation(
 		"/org/kz/damu-entrepreneurship-development-fund",
 		"/market/kz/logistics/cross-border-trade",
-		DependencyTypeAffects,
+		ah.RelationNameDisrupts,
 	) {
 		t.Fatal("supply-chain persist gate must allow AFFECTS for org->market overlays")
 	}
 	if !IsAllowedSupplyChainRuntimeRelation(
 		"/program/ae/saber",
 		"/community/global/professional/conformity-assessment-bodies",
-		DependencyTypeAffects,
+		ah.RelationNameDisrupts,
 	) {
 		t.Fatal("supply-chain runtime gate must allow AFFECTS for program->community overlays")
 	}
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/product/finished/consumer/footwear",
 		"/market/kz/logistics/cross-border-trade",
-		DependencyTypeAffects,
+		ah.RelationNameDisrupts,
 	) {
 		t.Fatal("product source must remain out of contract for supply-chain AFFECTS overlays")
 	}
@@ -383,79 +383,79 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantPolicyImpactOverlays(
 			name:   "influences program to market pricing",
 			source: "/program/kz/digital-footwear-labeling",
 			target: "/market/kz/retail/apparel/footwear/pricing",
-			typ:    DependencyTypeInfluences,
+			typ:    ah.RelationNameInfluences,
 		},
 		{
 			name:   "gatekeeps decision gov to decision",
 			source: "/gov/kz/ministry-of-industry-and-construction",
 			target: "/decision/trade/mandatory-labeling-enforcement",
-			typ:    DependencyTypeGatekeepsDecision,
+			typ:    ah.RelationNameGatekeeps,
 		},
 		{
 			name:   "uses mechanism decision to mechanism",
 			source: "/decision/trade/mandatory-labeling-enforcement",
 			target: "/mechanism/regulatory/compulsory-data-matrix-marking",
-			typ:    DependencyTypeUsesMechanism,
+			typ:    ah.RelationNameWields,
 		},
 		{
 			name:   "regulates gov to market",
 			source: "/gov/kz/ministry-of-industry-and-construction",
 			target: "/market/kz/retail/footwear",
-			typ:    DependencyTypeRegulates,
+			typ:    ah.RelationNameRegulates,
 		},
 		{
 			name:   "imposes condition mechanism to market",
 			source: "/mechanism/technological/is-mtt-traceability-system",
 			target: "/market/kz/retail/footwear",
-			typ:    DependencyTypeImposesCondition,
+			typ:    ah.RelationNameImposes,
 		},
 		{
 			name:   "controls access org to market",
 			source: "/org/kz/kazakhtelecom",
 			target: "/market/kz/retail/footwear",
-			typ:    DependencyTypeControlsAccess,
+			typ:    ah.RelationNameImposes,
 		},
 		{
 			name:   "in geo scope program to geo",
 			source: "/program/ae/saber",
 			target: "/loc/ae",
-			typ:    DependencyTypeInGeoScope,
+			typ:    DependencyType("in_geo_scope"),
 		},
 		{
 			name:   "operates via mechanism to mechanism",
 			source: "/mechanism/technological/is-mtt-traceability-system",
 			target: "/mechanism/regulatory/compulsory-data-matrix-marking",
-			typ:    DependencyTypeOperatesVia,
+			typ:    DependencyType("operates_via"),
 		},
 		{
 			name:   "direct competitor overlay on organizations",
 			source: "/org/de/infineon-technologies",
 			target: "/org/nl/nxp-semiconductors",
-			typ:    DependencyTypeCompetesWith,
+			typ:    ah.RelationNameAlternateTo,
 		},
 		{
 			name:   "partnership overlay from org to program",
 			source: "/org/be/imec",
 			target: "/program/eu/european-chips-act",
-			typ:    DependencyTypePartnersWith,
+			typ:    ah.RelationNameJointVentureWith,
 		},
 		{
 			name:   "operates via overlay from org to facility",
 			source: "/org/us/wolfspeed",
 			target: "/fac/de/ensdorf-fab",
-			typ:    DependencyTypeOperatesVia,
+			typ:    DependencyType("operates_via"),
 		},
 		{
 			name:   "membership overlay from org to program",
 			source: "/org/eu/chips-joint-undertaking",
 			target: "/program/eu/european-chips-act",
-			typ:    DependencyTypeMemberOf,
+			typ:    ah.RelationNameMemberOf,
 		},
 		{
 			name:   "investment overlay from gov to org",
 			source: "/gov/eu/european-commission",
 			target: "/org/de/infineon",
-			typ:    DependencyTypeInvestsIn,
+			typ:    ah.RelationNameInvestedIn,
 		},
 	}
 
@@ -471,21 +471,21 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantPolicyImpactOverlays(
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/product/finished/consumer/footwear",
 		"/decision/trade/mandatory-labeling-enforcement",
-		DependencyTypeGatekeepsDecision,
+		ah.RelationNameGatekeeps,
 	) {
 		t.Fatal("product source must remain out of contract for GATEKEEPS_DECISION")
 	}
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/decision/trade/mandatory-labeling-enforcement",
 		"/market/kz/retail/footwear",
-		DependencyTypeUsesMechanism,
+		ah.RelationNameWields,
 	) {
 		t.Fatal("USES_MECHANISM must still require a mechanism target")
 	}
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/product/finished/consumer/footwear",
 		"/mechanism/regulatory/compulsory-data-matrix-marking",
-		DependencyTypeOperatesVia,
+		ah.RelationNameWields,
 	) {
 		t.Fatal("OPERATES_VIA must still reject product sources")
 	}

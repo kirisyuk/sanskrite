@@ -3,12 +3,12 @@ package scout
 import (
 	"context"
 	"errors"
-	"strings"
-	"time"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
+	"time"
 )
 
 // =============================================================================
@@ -65,7 +65,7 @@ func (b *MarketHierarchyBuilder) EnsureMarketHierarchy(
 	if b == nil || b.fragmentsRepo == nil || b.edgesRepo == nil {
 		return nil
 	}
-	if fragment == nil || fragment.Class != FragmentTypeMarket {
+	if fragment == nil || fragment.Class != ah.FragmentClassMarket {
 		return nil
 	}
 	if fragmentID == "" {
@@ -209,7 +209,7 @@ func (b *MarketHierarchyBuilder) ensureParentMarket(ctx context.Context, path, s
 
 		f := &models.HorizonFragment{
 			CanonicalPath: path,
-			Class:          FragmentTypeMarket,
+			Class:          ah.FragmentClassMarket,
 			Labels: map[string]string{
 				"en": name,
 			},
@@ -251,14 +251,14 @@ func (b *MarketHierarchyBuilder) ensureParentMarket(ctx context.Context, path, s
 // ensureHasMarketSegmentEdge creates a HAS_MARKET_SEGMENT edge from parent to child if it doesn't exist.
 func (b *MarketHierarchyBuilder) ensureHasMarketSegmentEdge(ctx context.Context, parentID, childID, provenanceMethod, sourceID string) error {
 	// Check if edge already exists (HAS_MARKET_SEGMENT or legacy HAS_SUBMARKET)
-	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", parentID, childID, DependencyTypeHasMarketSegment)
+	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", parentID, childID, ah.RelationNameInfluences)
 	if err == nil {
 		return nil
 	}
 	if !errors.Is(err, repo.ErrEdgeNotFound) {
 		return err
 	}
-	_, err = b.edgesRepo.GetBySourceTargetAndType(ctx, "global", parentID, childID, DependencyTypeHasSubmarket)
+	_, err = b.edgesRepo.GetBySourceTargetAndType(ctx, "global", parentID, childID, ah.RelationNameInfluences)
 	if err == nil {
 		return nil
 	}
@@ -271,7 +271,7 @@ func (b *MarketHierarchyBuilder) ensureHasMarketSegmentEdge(ctx context.Context,
 		TenantID:         "global",
 		SourceFragmentID: parentID,
 		TargetFragmentID: childID,
-		Relation:             DependencyTypeHasMarketSegment,
+		Relation:             ah.RelationNameInfluences,
 		Properties: models.EdgeProperties{
 			Criticality:   0.5,
 			Amplification: 1.0,

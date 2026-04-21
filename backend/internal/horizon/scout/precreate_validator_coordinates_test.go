@@ -2,11 +2,11 @@ package scout
 
 import (
 	"context"
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"strings"
 	"testing"
-
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
 
 type fakeGeoNamesCoordinates struct{}
@@ -63,7 +63,7 @@ func TestPreCreateValidator_AttachesGeoNamesIDWithoutCoordinates(t *testing.T) {
 	v := NewPreCreateValidator(nil, nil, nil).WithGeoNamesClient(&fakeGeoNamesCoordinates{})
 
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeGeoRegion,
+		Class:          ah.FragmentClassGeo,
 		CanonicalPath: "/loc/ae/az/abu-dhabi",
 	}
 
@@ -87,7 +87,7 @@ func TestPreCreateValidator_UpgradesFacilityPathFromHomeLocation(t *testing.T) {
 
 	cc := "AE"
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/na/jebel-ali-port",
 		HomeLocation: &models.Location{
 			Name:      "Dubai",
@@ -121,7 +121,7 @@ func TestPreCreateValidator_RevalidatesFacilityGeoMismatchViaGeocoding(t *testin
 
 	cc := "US"
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/na/giga-shanghai",
 		Labels:        map[string]string{"en": "Giga Shanghai"},
 		HomeLocation: &models.Location{
@@ -161,7 +161,7 @@ func TestPreCreateValidator_RevalidatesHighSignalFacilityFromPlainName(t *testin
 	})
 
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/na/port-of-charleston",
 		Labels:        map[string]string{"en": "Port of Charleston"},
 	}
@@ -193,7 +193,7 @@ func TestPreCreateValidator_RevalidatesOrgGeoMismatchViaGeocoding(t *testing.T) 
 
 	cc := "US"
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeOrganization,
+		Class:          ah.FragmentClassOrg,
 		CanonicalPath: "/org/na/kazatomprom",
 		Labels:        map[string]string{"en": "Kazatomprom"},
 		HomeLocation: &models.Location{
@@ -235,7 +235,7 @@ func TestPreCreateValidator_RevalidationOverwritesExistingWrongCoordinates(t *te
 
 	cc := "KZ"
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeOrganization,
+		Class:          ah.FragmentClassOrg,
 		CanonicalPath: "/org/kz/kazatomprom",
 		Labels:        map[string]string{"en": "Kazatomprom"},
 		Coordinates:   &models.Coordinates{Lat: 0.1, Lon: 0.2},
@@ -264,7 +264,7 @@ func TestPreCreateValidator_BlocksForbiddenFacilityPlaceholder(t *testing.T) {
 	v := NewPreCreateValidator(nil, nil, nil)
 
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/na/general-plant",
 		Labels:        map[string]string{"en": "General Production"},
 	}
@@ -288,7 +288,7 @@ func TestPreCreateValidator_BlocksMalformedSyntheticFacilityPlaceholder(t *testi
 	v := NewPreCreateValidator(nil, nil, nil)
 
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/asml-japan-co-ltd/general-production",
 		Labels:        map[string]string{"en": "General Production"},
 	}
@@ -312,7 +312,7 @@ func TestPreCreateValidator_RepairsSyntheticFacilityPlaceholderFromSpecificLabel
 	v := NewPreCreateValidator(nil, nil, nil)
 
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/na/general-production",
 		Labels:        map[string]string{"en": "Canon Oita Manufacturing Facility"},
 	}
@@ -333,7 +333,7 @@ func TestPreCreateValidator_RepairsSyntheticFacilityPlaceholderUsingCountryHintI
 	v := NewPreCreateValidator(nil, nil, nil)
 
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/na/general-production",
 		Labels:        map[string]string{"en": "AEON Malaysia Distribution"},
 	}
@@ -354,7 +354,7 @@ func TestPreCreateValidator_BlocksSyntheticOrgPlaceholder(t *testing.T) {
 	v := NewPreCreateValidator(nil, nil, nil)
 
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeOrganization,
+		Class:          ah.FragmentClassOrg,
 		CanonicalPath: "/org/na/retailer",
 		Labels:        map[string]string{"en": "Retailer"},
 	}
@@ -378,7 +378,7 @@ func TestPreCreateValidator_BlocksSyntheticGovPlaceholder(t *testing.T) {
 	v := NewPreCreateValidator(nil, nil, nil)
 
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeOrganization,
+		Class:          ah.FragmentClassOrg,
 		CanonicalPath: "/gov/na/ministry-of",
 		Labels:        map[string]string{"en": "Ministry Of"},
 	}
@@ -402,7 +402,7 @@ func TestPreCreateValidator_RepairsSyntheticGovPlaceholderWithKnownGeo(t *testin
 	v := NewPreCreateValidator(nil, nil, nil)
 
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeOrganization,
+		Class:          ah.FragmentClassOrg,
 		CanonicalPath: "/gov/qa/na",
 		Labels:        map[string]string{"en": "Government of Qatar"},
 	}
@@ -442,7 +442,7 @@ func TestPreCreateValidator_DoesNotOverrideGovPathOnAmbiguousCityOnly(t *testing
 
 	cc := "PA"
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeOrganization,
+		Class:          ah.FragmentClassOrg,
 		CanonicalPath: "/gov/pa/senafront",
 		Labels:        map[string]string{"en": "National Border Service (SENAFRONT)"},
 		HomeLocation: &models.Location{

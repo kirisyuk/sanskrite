@@ -2,11 +2,11 @@ package scout
 
 import (
 	"context"
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"strings"
 	"testing"
-
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
-	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 )
 
 func TestInferPlaceHintFromFacilityLabel(t *testing.T) {
@@ -52,7 +52,7 @@ func TestShouldAcceptFacilityGeoResult_RejectsGenericPlaceOverrideQueries(t *tes
 		{
 			name: "manufacturing",
 			fragment: &models.HorizonFragment{
-				Class:          FragmentTypeFacility,
+				Class:          ah.FragmentClassSite,
 				CanonicalPath: "/fac/ae/nestle-dubai-factory",
 				Labels:        map[string]string{"en": "Nestle Dubai Manufacturing"},
 			},
@@ -64,7 +64,7 @@ func TestShouldAcceptFacilityGeoResult_RejectsGenericPlaceOverrideQueries(t *tes
 		{
 			name: "care factory",
 			fragment: &models.HorizonFragment{
-				Class:          FragmentTypeFacility,
+				Class:          ah.FragmentClassSite,
 				CanonicalPath: "/fac/ae/unilever-dubai-personal-care-factory",
 				Labels:        map[string]string{"en": "Unilever Dubai Personal Care Factory"},
 			},
@@ -76,7 +76,7 @@ func TestShouldAcceptFacilityGeoResult_RejectsGenericPlaceOverrideQueries(t *tes
 		{
 			name: "showroom",
 			fragment: &models.HorizonFragment{
-				Class:          FragmentTypeFacility,
+				Class:          ah.FragmentClassSite,
 				CanonicalPath: "/fac/om/towell-auto-centre-muscat",
 				Labels:        map[string]string{"en": "Towell Auto Centre Muscat Showroom"},
 			},
@@ -88,7 +88,7 @@ func TestShouldAcceptFacilityGeoResult_RejectsGenericPlaceOverrideQueries(t *tes
 		{
 			name: "border crossing",
 			fragment: &models.HorizonFragment{
-				Class:          FragmentTypeFacility,
+				Class:          ah.FragmentClassSite,
 				CanonicalPath: "/fac/ae/hatta-border-crossing",
 				Labels:        map[string]string{"en": "Hatta Border Crossing"},
 			},
@@ -108,7 +108,7 @@ func TestShouldAcceptFacilityGeoResult_RejectsGenericPlaceOverrideQueries(t *tes
 
 func TestShouldAcceptFacilityGeoResult_AcceptsStrongNameCountryMatch(t *testing.T) {
 	fragment := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/ae/unilever-dubai-personal-care-factory",
 		Labels:        map[string]string{"en": "Unilever Dubai Personal Care Factory"},
 	}
@@ -120,7 +120,7 @@ func TestShouldAcceptFacilityGeoResult_AcceptsStrongNameCountryMatch(t *testing.
 
 func TestShouldAcceptFacilityGeoResult_RejectsCountryOnlyResultForSpecificFacility(t *testing.T) {
 	fragment := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/kz/khorgos-nur-zholy-customs-post",
 		Labels:        map[string]string{"en": "Khorgos Nur Zholy Customs Post"},
 	}
@@ -132,7 +132,7 @@ func TestShouldAcceptFacilityGeoResult_RejectsCountryOnlyResultForSpecificFacili
 
 func TestFacilityGeoValidationQueries_StrongNameSkipsGenericFallbacks(t *testing.T) {
 	fragment := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/ae/unilever-dubai-personal-care-factory",
 		Labels:        map[string]string{"en": "Unilever Dubai Personal Care Factory"},
 	}
@@ -154,7 +154,7 @@ func TestFacilityGeoValidationQueries_StrongNameSkipsGenericFallbacks(t *testing
 
 func TestRevalidateFacilityGeo_AcceptsStrongGoogleHitWithoutParseableCountry(t *testing.T) {
 	fragment := &models.HorizonFragment{
-		Class:          FragmentTypeFacility,
+		Class:          ah.FragmentClassSite,
 		CanonicalPath: "/fac/ae/nestle-dubai-factory",
 		Labels:        map[string]string{"en": "Nestlé Dubai Manufacturing"},
 	}

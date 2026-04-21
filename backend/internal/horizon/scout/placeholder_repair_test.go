@@ -1,14 +1,14 @@
 package scout
 
 import (
-	"testing"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"testing"
 )
 
 func TestRepairSyntheticOrgCanonicalPath_RepairsGovKnownGeoPlaceholderSlug(t *testing.T) {
 	frag := &models.HorizonFragment{
-		Class:          FragmentTypeOrganization,
+		Class:          ah.FragmentClassOrg,
 		CanonicalPath: "/gov/qa/na",
 		Labels: map[string]string{
 			"en": "Government of Qatar",

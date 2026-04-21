@@ -2,6 +2,7 @@ package agents
 
 import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/entity_semantics"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // ResearchProfile defines specialized orchestration behavior for fragment types.
@@ -22,7 +23,7 @@ const (
 	ResearchProfileMechanism             ResearchProfile = "MECHANISM"
 )
 
-func ResolveResearchProfile(fragmentType FragmentType, canonicalPath string, communityType string) ResearchProfile {
+func ResolveResearchProfile(fragmentType ah.FragmentClass, canonicalPath string, communityType string) ResearchProfile {
 	key := entity_semantics.ResolveByPath(canonicalPath, fragmentType, "", communityType)
 	return entityTypeKeyToResearchProfile(key)
 }

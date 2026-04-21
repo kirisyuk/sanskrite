@@ -3,10 +3,10 @@ package scout
 import (
 	"context"
 	"fmt"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"strings"
 	"time"
-
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 // ExpandProductMaterialsOptions configures the expand materials operation.
@@ -112,7 +112,7 @@ func (e *ScoutEngine) ExpandProductMaterials(
 	if fragment == nil {
 		return nil, fmt.Errorf("product not found: %s", productIDOrPath)
 	}
-	if fragment.Class != FragmentTypeProduct {
+	if fragment.Class != ah.FragmentClassProduct {
 		return nil, fmt.Errorf("fragment is not a product (type=%s)", fragment.Class)
 	}
 
@@ -216,7 +216,7 @@ func (e *ScoutEngine) countProducers(ctx context.Context, fragmentID string) (in
 	}
 	count := 0
 	for _, edge := range edges {
-		if edge.Relation == DependencyTypeProduces {
+		if edge.Relation == ah.RelationNameProduces {
 			count++
 		}
 	}

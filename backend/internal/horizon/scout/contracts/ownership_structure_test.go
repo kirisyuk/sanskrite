@@ -37,13 +37,13 @@ type ownershipTestEdgesRepo struct {
 	edges []*models.DependencyEdge
 }
 
-func (r ownershipTestEdgesRepo) ListBySource(_ context.Context, _ string, sourceFragmentID string, edgeType *DependencyType, limit int) ([]*models.DependencyEdge, error) {
+func (r ownershipTestEdgesRepo) ListBySource(_ context.Context, _ string, sourceFragmentID string, edgeType *ah.RelationName, limit int) ([]*models.DependencyEdge, error) {
 	return r.filter(limit, func(edge *models.DependencyEdge) bool {
 		return edge.SourceFragmentID == sourceFragmentID && (edgeType == nil || edge.Relation == *edgeType)
 	}), nil
 }
 
-func (r ownershipTestEdgesRepo) ListByTarget(_ context.Context, _ string, targetFragmentID string, edgeType *DependencyType, limit int) ([]*models.DependencyEdge, error) {
+func (r ownershipTestEdgesRepo) ListByTarget(_ context.Context, _ string, targetFragmentID string, edgeType *ah.RelationName, limit int) ([]*models.DependencyEdge, error) {
 	return r.filter(limit, func(edge *models.DependencyEdge) bool {
 		return edge.TargetFragmentID == targetFragmentID && (edgeType == nil || edge.Relation == *edgeType)
 	}), nil
@@ -154,8 +154,8 @@ func TestOwnershipStructureHandler_ShowsDownstreamOwnedBranchFromDynastyFocus(t 
 func TestOwnershipStructureHandler_ThinOwnershipGraphReturnsResearchPlan(t *testing.T) {
 	ctx := context.Background()
 	handler := NewOwnershipStructureHandler()
-	child := &models.HorizonFragment{ID: "child", CanonicalPath: "/org/ae/thin-opco", Class: FragmentTypeOrganization}
-	parent := &models.HorizonFragment{ID: "parent", CanonicalPath: "/org/ae/thin-holdco", Class: FragmentTypeOrganization}
+	child := &models.HorizonFragment{ID: "child", CanonicalPath: "/org/ae/thin-opco", Class: ah.FragmentClassOrg}
+	parent := &models.HorizonFragment{ID: "parent", CanonicalPath: "/org/ae/thin-holdco", Class: ah.FragmentClassOrg}
 	repo := ownershipTestFragmentsRepo{
 		byID:   map[string]*models.HorizonFragment{"child": child, "parent": parent},
 		byPath: map[string]*models.HorizonFragment{child.CanonicalPath: child, parent.CanonicalPath: parent},
@@ -165,7 +165,7 @@ func TestOwnershipStructureHandler_ThinOwnershipGraphReturnsResearchPlan(t *test
 			ID:               "thin-e1",
 			SourceFragmentID: "parent",
 			TargetFragmentID: "child",
-			Relation:             DependencyTypeOwns,
+			Relation:             ah.RelationNameBeneficiallyOwns,
 		},
 	}
 
@@ -195,10 +195,10 @@ func TestOwnershipStructureHandler_ThinOwnershipGraphReturnsResearchPlan(t *test
 
 func ownershipFixture() (ownershipTestFragmentsRepo, []*models.DependencyEdge) {
 	fragments := []*models.HorizonFragment{
-		{ID: "dynasty", CanonicalPath: "/community/ae/dynasty/al-maktoum", Class: FragmentTypeCommunity},
-		{ID: "holdco", CanonicalPath: "/org/ae/difc-holdco", Class: FragmentTypeOrganization},
-		{ID: "opco", CanonicalPath: "/org/ae/difc-opco", Class: FragmentTypeOrganization},
-		{ID: "person", CanonicalPath: "/person/ae/sheikh-tariq", Class: FragmentTypePerson},
+		{ID: "dynasty", CanonicalPath: "/community/ae/dynasty/al-maktoum", Class: ah.FragmentClassCommunity},
+		{ID: "holdco", CanonicalPath: "/org/ae/difc-holdco", Class: ah.FragmentClassOrg},
+		{ID: "opco", CanonicalPath: "/org/ae/difc-opco", Class: ah.FragmentClassOrg},
+		{ID: "person", CanonicalPath: "/person/ae/sheikh-tariq", Class: ah.FragmentClassPerson},
 		{ID: "media", CanonicalPath: "/media/telegram/al-maktoum-majlis", Class: ah.FragmentClassOrg, Subtype: "media_channel"},
 	}
 	repo := ownershipTestFragmentsRepo{
@@ -215,7 +215,7 @@ func ownershipFixture() (ownershipTestFragmentsRepo, []*models.DependencyEdge) {
 			ID:               "e1",
 			SourceFragmentID: "dynasty",
 			TargetFragmentID: "holdco",
-			Relation:             DependencyTypeOwns,
+			Relation:             ah.RelationNameBeneficiallyOwns,
 			Qualifiers: map[string]interface{}{
 				"share_type":        "beneficial",
 				"ownership_percent": "87",
@@ -228,7 +228,7 @@ func ownershipFixture() (ownershipTestFragmentsRepo, []*models.DependencyEdge) {
 			ID:               "e2",
 			SourceFragmentID: "holdco",
 			TargetFragmentID: "opco",
-			Relation:             DependencyTypeOwns,
+			Relation:             ah.RelationNameBeneficiallyOwns,
 			Qualifiers: map[string]interface{}{
 				"share_type":            "direct",
 				"ownership_percent":     "100",
@@ -245,25 +245,25 @@ func ownershipFixture() (ownershipTestFragmentsRepo, []*models.DependencyEdge) {
 			ID:               "e3",
 			SourceFragmentID: "person",
 			TargetFragmentID: "dynasty",
-			Relation:             DependencyTypeMemberOf,
+			Relation:             ah.RelationNameMemberOf,
 		},
 		{
 			ID:               "e4",
 			SourceFragmentID: "person",
 			TargetFragmentID: "holdco",
-			Relation:             DependencyTypeBoardMemberOf,
+			Relation:             ah.RelationNameHoldsBoardSeat,
 		},
 		{
 			ID:               "e5",
 			SourceFragmentID: "person",
 			TargetFragmentID: "opco",
-			Relation:             DependencyTypeEmployedBy,
+			Relation:             ah.RelationNameMemberOf,
 		},
 		{
 			ID:               "e6",
 			SourceFragmentID: "dynasty",
 			TargetFragmentID: "media",
-			Relation:             DependencyTypeOperatesVia,
+			Relation:             ah.RelationNameWields,
 		},
 	}
 	return repo, edges

@@ -37,9 +37,9 @@ func applyBestEffortEdgeEnrichment(edge *models.DependencyEdge, endpointPaths ..
 	}
 	originalRelation := edge.Relation
 	switch originalRelation {
-	case DependencyTypeDependsOn:
+	case DependencyType("depends_on"):
 		edge.Relation = ah.RelationNameSupplies
-	case DependencyTypeEmployedBy, DependencyTypeWorksFor:
+	case DependencyType("employed_by"):
 		edge.Relation = ah.RelationNameMemberOf
 	}
 	graphenrich.ApplyEdgeHeuristics(edge, sourcePath, targetPath)

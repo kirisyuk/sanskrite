@@ -1,10 +1,10 @@
 package scout
 
 import (
-	"testing"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"testing"
 )
 
 func TestFilterEmptySupplyChains(t *testing.T) {
@@ -43,7 +43,7 @@ func TestFilterEmptySupplyChains_AllEmpty(t *testing.T) {
 func TestBuildSeedSupplyChain(t *testing.T) {
 	frag := &models.HorizonFragment{
 		CanonicalPath: "/org/de/robert-bosch",
-		Class:          FragmentTypeOrganization,
+		Class:          ah.FragmentClassOrg,
 		Identifiers:   map[string]string{"legalName": "Robert Bosch GmbH"},
 	}
 	seed := buildSeedSupplyChain(frag)
@@ -71,7 +71,7 @@ func TestBuildSeedSupplyChain(t *testing.T) {
 func TestBuildSeedSupplyChain_FallbackName(t *testing.T) {
 	frag := &models.HorizonFragment{
 		CanonicalPath: "/org/de/robert-bosch",
-		Class:          FragmentTypeOrganization,
+		Class:          ah.FragmentClassOrg,
 	}
 	seed := buildSeedSupplyChain(frag)
 	if seed == nil {
@@ -84,7 +84,7 @@ func TestBuildSeedSupplyChain_FallbackName(t *testing.T) {
 
 func TestBuildSeedSupplyChain_NilPath(t *testing.T) {
 	frag := &models.HorizonFragment{
-		Class: FragmentTypeOrganization,
+		Class: ah.FragmentClassOrg,
 	}
 	seed := buildSeedSupplyChain(frag)
 	if seed != nil {

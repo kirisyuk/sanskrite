@@ -3,11 +3,11 @@ package scout
 import (
 	"context"
 	"errors"
-	"strings"
-	"time"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
+	"time"
 )
 
 // =============================================================================
@@ -138,7 +138,7 @@ func (b *GovHierarchyBuilder) EnsureAdministersEdge(
 	}
 
 	// Check if edge already exists
-	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", superiorID, subordinateID, DependencyTypeAdministers)
+	_, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", superiorID, subordinateID, ah.RelationNameOperates)
 	if err == nil {
 		return nil // Already exists
 	}
@@ -151,7 +151,7 @@ func (b *GovHierarchyBuilder) EnsureAdministersEdge(
 		TenantID:         "global",
 		SourceFragmentID: superiorID,
 		TargetFragmentID: subordinateID,
-		Relation:             DependencyTypeAdministers,
+		Relation:             ah.RelationNameOperates,
 		Properties: models.EdgeProperties{
 			Criticality:   0.6,
 			Amplification: 1.0,

@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
-	"time"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
+	"time"
 )
 
 // GeoHierarchyBuilder best-effort helper that ensures intermediate /loc/* GEO_REGION fragments exist
@@ -109,7 +109,7 @@ func (b *GeoHierarchyBuilder) EnsureAndLinkGeoHierarchy(
 		label = strings.ReplaceAll(label, "-", " ")
 		f := &models.HorizonFragment{
 			CanonicalPath: parentPath,
-			Class:          FragmentTypeGeoRegion,
+			Class:          ah.FragmentClassGeo,
 			Labels: map[string]string{
 				"en": strings.TrimSpace(label),
 			},
@@ -157,14 +157,14 @@ func (b *GeoHierarchyBuilder) EnsureAndLinkGeoHierarchy(
 		}
 
 		// Skip if edge already exists.
-		if _, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", childID, parentID, DependencyTypeLocatedIn); err == nil {
+		if _, err := b.edgesRepo.GetBySourceTargetAndType(ctx, "global", childID, parentID, ah.RelationNameIncorporatedIn); err == nil {
 			// already linked
 		} else if errors.Is(err, repo.ErrEdgeNotFound) {
 			edge := &models.DependencyEdge{
 				TenantID:         "global",
 				SourceFragmentID: childID,
 				TargetFragmentID: parentID,
-				Relation:             DependencyTypeLocatedIn,
+				Relation:             ah.RelationNameIncorporatedIn,
 				Properties: models.EdgeProperties{
 					Criticality:   0.6,
 					Amplification: 1.0,

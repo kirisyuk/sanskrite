@@ -2,9 +2,9 @@ package scout
 
 import (
 	"context"
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 // SupplyChainOrgResolver performs Level 3 FAC→ORG resolution: for each facility in supply chains,
@@ -48,9 +48,9 @@ func (r *SupplyChainOrgResolver) Resolve(ctx context.Context, tenantID string, p
 	}
 
 	edgeTypes := []DependencyType{
-		DependencyTypeOwns,
-		DependencyTypeControls,
-		DependencyTypeOperatesIn,
+		ah.RelationNameBeneficiallyOwns,
+		ah.RelationNameControlsVia,
+		ah.RelationNameOperates,
 	}
 
 	for _, facPath := range facPaths {
@@ -120,7 +120,7 @@ func (r *SupplyChainOrgResolver) traverseToOrg(
 					srcPath = idToPath[sourceID]
 				}
 				// ORG found: /org/ or /gov/
-				if srcFrag.Class == FragmentTypeOrganization ||
+				if srcFrag.Class == ah.FragmentClassOrg ||
 					strings.HasPrefix(srcPath, "/org/") ||
 					strings.HasPrefix(srcPath, "/gov/") {
 					return srcPath

@@ -2,14 +2,15 @@ package scout
 
 import (
 	"context"
-	"reflect"
-	"strings"
-	"testing"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/wirekeys"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"reflect"
+	"strings"
+	"testing"
 )
 
 func TestSupplyChainParser_AbstainsOnUnknownPair(t *testing.T) {
@@ -85,8 +86,8 @@ func TestSupplyChainParser_UsesProductRelationDictionaryBeforeStageHeuristic(t *
 	if edge.TargetCanonicalPath != "/product/finished/mechanical/assembly/mri-scanner" {
 		t.Fatalf("target=%q, want mri-scanner", edge.TargetCanonicalPath)
 	}
-	if edge.RelationType != string(DependencyTypeUsedIn) {
-		t.Fatalf("relation=%q, want USED_IN", edge.RelationType)
+	if edge.RelationType != string(DependencyType("used_in")) {
+		t.Fatalf("relation=%q, want used_in", edge.RelationType)
 	}
 }
 
@@ -163,7 +164,7 @@ func TestParseSupplyChains_SuppliesToEdgeHasTransportVia(t *testing.T) {
 
 	var suppliesEdge *ChainEdge
 	for _, edge := range result.Edges {
-		if edge == nil || edge.RelationType != string(DependencyTypeSuppliesTo) {
+		if edge == nil || edge.RelationType != string(ah.RelationNameSupplies) {
 			continue
 		}
 		// Full chain: keep org as endpoint
@@ -175,7 +176,7 @@ func TestParseSupplyChains_SuppliesToEdgeHasTransportVia(t *testing.T) {
 	if suppliesEdge == nil {
 		t.Fatalf("expected inferred SUPPLIES_TO edge (org→org kept as-is)")
 	}
-	rawVia, ok := suppliesEdge.Qualifiers[QualifierTransportVia]
+	rawVia, ok := suppliesEdge.Qualifiers[wirekeys.QualifierTransportVia]
 	if !ok {
 		t.Fatalf("expected transport_via qualifier")
 	}
@@ -229,7 +230,7 @@ func TestParseSupplyChains_SuppliesToEdgeWithoutTransportStillHasDirectionalQual
 
 	var suppliesEdge *ChainEdge
 	for _, edge := range result.Edges {
-		if edge == nil || edge.RelationType != string(DependencyTypeSuppliesTo) {
+		if edge == nil || edge.RelationType != string(ah.RelationNameSupplies) {
 			continue
 		}
 		// Full chain: keep org as supplier
@@ -241,7 +242,7 @@ func TestParseSupplyChains_SuppliesToEdgeWithoutTransportStillHasDirectionalQual
 	if suppliesEdge == nil {
 		t.Fatalf("expected SUPPLIES_TO edge for actor->product->actor pattern")
 	}
-	if _, ok := suppliesEdge.Qualifiers[QualifierTransportVia]; ok {
+	if _, ok := suppliesEdge.Qualifiers[wirekeys.QualifierTransportVia]; ok {
 		t.Fatalf("transport_via should be omitted when route is unknown")
 	}
 	if got, _ := suppliesEdge.Qualifiers["source_role"].(string); got != "supplier" {
@@ -373,7 +374,7 @@ func TestParseSupplyChains_OrgToFacilityUsesOwns(t *testing.T) {
 		if edge == nil {
 			continue
 		}
-		if edge.RelationType == string(DependencyTypeOwns) &&
+		if edge.RelationType == string(ah.RelationNameBeneficiallyOwns) &&
 			edge.SourceCanonicalPath == "/org/us/intel-corporation" &&
 			edge.TargetCanonicalPath == "/fac/us/chandler-fab-42" {
 			foundOwns = true
@@ -409,7 +410,7 @@ func TestParseSupplyChains_FacilityToOrgAbstainsInsteadOfSuppliesTo(t *testing.T
 		t.Fatalf("ParseSupplyChains() error = %v", err)
 	}
 	for _, edge := range result.Edges {
-		if edge != nil && edge.RelationType == string(DependencyTypeSuppliesTo) {
+		if edge != nil && edge.RelationType == string(ah.RelationNameSupplies) {
 			t.Fatalf("unexpected SUPPLIES_TO edge: %s -> %s", edge.SourceCanonicalPath, edge.TargetCanonicalPath)
 		}
 	}
@@ -443,7 +444,7 @@ func TestParseSupplyChains_SkipsSelfLoopSupplySegment(t *testing.T) {
 		t.Fatalf("SegmentsSkippedSelfLoop=%d, want 1", result.Stats.SegmentsSkippedSelfLoop)
 	}
 	for _, edge := range result.Edges {
-		if edge != nil && edge.RelationType == string(DependencyTypeSuppliesTo) {
+		if edge != nil && edge.RelationType == string(ah.RelationNameSupplies) {
 			t.Fatalf("unexpected SUPPLIES_TO edge: %s -> %s", edge.SourceCanonicalPath, edge.TargetCanonicalPath)
 		}
 	}
@@ -474,7 +475,7 @@ func TestParseSupplyChains_SkipsInternalSupportSupplySegment(t *testing.T) {
 		t.Fatalf("SegmentsSkippedSupport=%d, want 1", result.Stats.SegmentsSkippedSupport)
 	}
 	for _, edge := range result.Edges {
-		if edge != nil && edge.RelationType == string(DependencyTypeSuppliesTo) {
+		if edge != nil && edge.RelationType == string(ah.RelationNameSupplies) {
 			t.Fatalf("unexpected SUPPLIES_TO edge: %s -> %s", edge.SourceCanonicalPath, edge.TargetCanonicalPath)
 		}
 	}
@@ -504,7 +505,7 @@ func TestParseSupplyChains_RewritesFacilityProductOwnerOrgToOverlay(t *testing.T
 	var foundOwns bool
 	for _, edge := range result.Edges {
 		if edge != nil &&
-			edge.RelationType == string(DependencyTypeOwns) &&
+			edge.RelationType == string(ah.RelationNameBeneficiallyOwns) &&
 			edge.SourceCanonicalPath == "/org/qa/qatarenergy" &&
 			edge.TargetCanonicalPath == "/fac/gb/south-hook-terminal" {
 			foundOwns = true
@@ -543,7 +544,7 @@ func TestParseSupplyChains_GovToFacilityUsesControls(t *testing.T) {
 		if edge == nil {
 			continue
 		}
-		if edge.RelationType == string(DependencyTypeControls) &&
+		if edge.RelationType == string(ah.RelationNameControlsVia) &&
 			edge.SourceCanonicalPath == "/gov/us/department-of-energy" &&
 			edge.TargetCanonicalPath == "/fac/us/strategic-reserve-terminal" {
 			foundControls = true
@@ -654,12 +655,12 @@ func TestParseSupplyChains_ExtractivePatternUsesExtractsFromAndAvoidsDepositSupp
 		if edge == nil {
 			continue
 		}
-		if edge.RelationType == string(DependencyTypeExtractsFrom) &&
+		if edge.RelationType == string(DependencyType("extracts_from")) &&
 			edge.SourceCanonicalPath == "/fac/br/carajas-mine" &&
 			edge.TargetCanonicalPath == "/deposit/iron-ore/carajas-complex" {
 			hasExtractsFrom = true
 		}
-		if edge.RelationType == string(DependencyTypeSuppliesTo) &&
+		if edge.RelationType == string(ah.RelationNameSupplies) &&
 			(strings.Contains(edge.SourceCanonicalPath, "/deposit/") || strings.Contains(edge.TargetCanonicalPath, "/deposit/")) {
 			t.Fatalf("unexpected deposit-involved SUPPLIES_TO edge: %s -> %s", edge.SourceCanonicalPath, edge.TargetCanonicalPath)
 		}
@@ -707,9 +708,9 @@ func TestParseSupplyChains_ProgramAndMarketNodesCreateFragments(t *testing.T) {
 	if !ok || programFrag == nil {
 		t.Fatalf("expected PROGRAM fragment to be materialized")
 	}
-	// MIGRATION NOTE (AH taxonomy): legacy FragmentTypeProgram folds onto
+	// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassOrg folds onto
 	// (org, program); assert on the (Class, Subtype) tuple.
-	if programFrag.Class != FragmentTypeOrganization || programFrag.Subtype != "program" {
+	if programFrag.Class != ah.FragmentClassOrg || programFrag.Subtype != "program" {
 		t.Fatalf("program fragment class=%s subtype=%s, want (org, program)", programFrag.Class, programFrag.Subtype)
 	}
 
@@ -717,8 +718,8 @@ func TestParseSupplyChains_ProgramAndMarketNodesCreateFragments(t *testing.T) {
 	if !ok || marketFrag == nil {
 		t.Fatalf("expected MARKET fragment to be materialized")
 	}
-	if marketFrag.Class != FragmentTypeMarket {
-		t.Fatalf("market fragment type=%s, want %s", marketFrag.Class, FragmentTypeMarket)
+	if marketFrag.Class != ah.FragmentClassMarket {
+		t.Fatalf("market fragment type=%s, want %s", marketFrag.Class, ah.FragmentClassMarket)
 	}
 
 	if result.Stats.NodesSkippedUnknownType != 0 {
@@ -761,19 +762,19 @@ func TestParseSupplyChains_TransformsIntoDirectionSwap_ProductToProduct(t *testi
 
 	var transformEdge *ChainEdge
 	for _, e := range result.Edges {
-		if e.RelationType == string(DependencyTypeTransformsInto) {
+		if e.RelationType == string(DependencyType("transforms_into")) {
 			transformEdge = e
 			break
 		}
 	}
 	if transformEdge == nil {
-		t.Fatalf("expected TRANSFORMS_INTO edge")
+		t.Fatalf("expected transforms_into edge")
 	}
 	if transformEdge.SourceCanonicalPath != "/product/raw/mineral/extraction/copper-ore" {
-		t.Fatalf("TRANSFORMS_INTO source=%q, want copper-ore (upstream)", transformEdge.SourceCanonicalPath)
+		t.Fatalf("transforms_into source=%q, want copper-ore (upstream)", transformEdge.SourceCanonicalPath)
 	}
 	if transformEdge.TargetCanonicalPath != "/product/component/mineral/smelting/copper-anode" {
-		t.Fatalf("TRANSFORMS_INTO target=%q, want copper-anode (downstream)", transformEdge.TargetCanonicalPath)
+		t.Fatalf("transforms_into target=%q, want copper-anode (downstream)", transformEdge.TargetCanonicalPath)
 	}
 }
 
@@ -805,19 +806,19 @@ func TestParseSupplyChains_TransformsIntoDirectionCorrect_NoSwap(t *testing.T) {
 
 	var transformEdge *ChainEdge
 	for _, e := range result.Edges {
-		if e.RelationType == string(DependencyTypeTransformsInto) {
+		if e.RelationType == string(DependencyType("transforms_into")) {
 			transformEdge = e
 			break
 		}
 	}
 	if transformEdge == nil {
-		t.Fatalf("expected TRANSFORMS_INTO edge")
+		t.Fatalf("expected transforms_into edge")
 	}
 	if transformEdge.SourceCanonicalPath != "/product/raw/mineral/extraction/iron-ore" {
-		t.Fatalf("TRANSFORMS_INTO source=%q, want iron-ore (upstream)", transformEdge.SourceCanonicalPath)
+		t.Fatalf("transforms_into source=%q, want iron-ore (upstream)", transformEdge.SourceCanonicalPath)
 	}
 	if transformEdge.TargetCanonicalPath != "/product/finished/mineral/processing/iron-pellet" {
-		t.Fatalf("TRANSFORMS_INTO target=%q, want iron-pellet (downstream)", transformEdge.TargetCanonicalPath)
+		t.Fatalf("transforms_into target=%q, want iron-pellet (downstream)", transformEdge.TargetCanonicalPath)
 	}
 }
 
@@ -849,19 +850,19 @@ func TestParseSupplyChains_ComponentToFinished_UsesAssemblesInto(t *testing.T) {
 
 	var assemblyEdge *ChainEdge
 	for _, e := range result.Edges {
-		if e.RelationType == string(DependencyTypeAssemblesInto) {
+		if e.RelationType == string(DependencyType("assembles_into")) {
 			assemblyEdge = e
 			break
 		}
 	}
 	if assemblyEdge == nil {
-		t.Fatalf("expected ASSEMBLES_INTO edge")
+		t.Fatalf("expected assembles_into edge")
 	}
 	if assemblyEdge.SourceCanonicalPath != "/product/component/mechanical/assembly/tire" {
-		t.Fatalf("ASSEMBLES_INTO source=%q, want tire (component)", assemblyEdge.SourceCanonicalPath)
+		t.Fatalf("assembles_into source=%q, want tire (component)", assemblyEdge.SourceCanonicalPath)
 	}
 	if assemblyEdge.TargetCanonicalPath != "/product/finished/mechanical/assembly/electric-vehicle" {
-		t.Fatalf("ASSEMBLES_INTO target=%q, want electric-vehicle (assembled product)", assemblyEdge.TargetCanonicalPath)
+		t.Fatalf("assembles_into target=%q, want electric-vehicle (assembled product)", assemblyEdge.TargetCanonicalPath)
 	}
 }
 
@@ -898,19 +899,19 @@ func TestParseSupplyChains_TransformsIntoViaFacility_DirectionSwap(t *testing.T)
 
 	var transformEdge *ChainEdge
 	for _, e := range result.Edges {
-		if e.RelationType == string(DependencyTypeTransformsInto) {
+		if e.RelationType == string(DependencyType("transforms_into")) {
 			transformEdge = e
 			break
 		}
 	}
 	if transformEdge == nil {
-		t.Fatalf("expected TRANSFORMS_INTO edge (via facility pattern)")
+		t.Fatalf("expected transforms_into edge (via facility pattern)")
 	}
 	if transformEdge.SourceCanonicalPath != "/product/raw/mineral/extraction/copper-ore" {
-		t.Fatalf("TRANSFORMS_INTO source=%q, want copper-ore (upstream)", transformEdge.SourceCanonicalPath)
+		t.Fatalf("transforms_into source=%q, want copper-ore (upstream)", transformEdge.SourceCanonicalPath)
 	}
 	if transformEdge.TargetCanonicalPath != "/product/component/mineral/smelting/copper-anode" {
-		t.Fatalf("TRANSFORMS_INTO target=%q, want copper-anode (downstream)", transformEdge.TargetCanonicalPath)
+		t.Fatalf("transforms_into target=%q, want copper-anode (downstream)", transformEdge.TargetCanonicalPath)
 	}
 }
 

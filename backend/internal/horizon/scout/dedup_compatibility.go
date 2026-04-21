@@ -1,9 +1,9 @@
 package scout
 
 import (
-	"strings"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
 )
 
 func dedupNamespaceFamilyFromPath(canonicalPath string) string {
@@ -35,27 +35,27 @@ func dedupNamespaceFamilyFromPath(canonicalPath string) string {
 // Class and Subtype.
 func dedupExpectedFamilyForType(fragType FragmentType) string {
 	switch fragType {
-	case FragmentTypeOrganization:
+	case ah.FragmentClassOrg:
 		return "org"
-	case FragmentTypeFacility:
+	case ah.FragmentClassSite:
 		return "fac"
-	case FragmentTypeGeoRegion:
+	case ah.FragmentClassGeo:
 		return "loc"
-	case FragmentTypeProduct:
+	case ah.FragmentClassProduct:
 		return "product"
-	case FragmentTypePerson:
+	case ah.FragmentClassPerson:
 		return "person"
-	case FragmentTypeMarket:
+	case ah.FragmentClassMarket:
 		return "market"
-	case FragmentTypeDecisionPoint:
+	case ah.FragmentClassDecision:
 		return "decision"
-	case FragmentTypeMechanism:
+	case ah.FragmentClassMechanism:
 		return "mechanism"
-	case FragmentTypeCommunity:
+	case ah.FragmentClassCommunity:
 		return "community"
-	case FragmentTypeEvent:
+	case ah.FragmentClassEvidence:
 		return "event"
-	case FragmentTypeTrack:
+	case ah.FragmentClassMobileAsset:
 		return "track"
 	default:
 		return ""
@@ -70,19 +70,19 @@ func dedupExpectedFamilyForType(fragType FragmentType) string {
 // classes.
 func dedupExpectedFamilyForClassSubtype(class FragmentType, subtype string) string {
 	switch {
-	case class == FragmentTypeOrganization && subtype == "program":
+	case class == ah.FragmentClassOrg && subtype == "program":
 		return "program"
-	case class == FragmentTypeOrganization && subtype == "media_channel":
+	case class == ah.FragmentClassOrg && subtype == "media_channel":
 		return "media"
-	case class == FragmentTypeFacility && subtype == "deposit":
+	case class == ah.FragmentClassSite && subtype == "deposit":
 		return "deposit"
-	case class == FragmentTypeFacility && subtype == "supply_link":
+	case class == ah.FragmentClassSite && subtype == "supply_link":
 		return "supply-link"
-	case class == FragmentTypeGeoRegion && subtype == "affected_zone":
+	case class == ah.FragmentClassGeo && subtype == "affected_zone":
 		return "zone"
-	case class == FragmentTypeEvent && subtype == "domain":
+	case class == ah.FragmentClassEvidence && subtype == "domain":
 		return "domain"
-	case class == FragmentTypeEvent && subtype == "sphere":
+	case class == ah.FragmentClassEvidence && subtype == "sphere":
 		return "sphere"
 	default:
 		return dedupExpectedFamilyForType(class)

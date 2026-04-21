@@ -14,7 +14,7 @@ import (
 
 func TestEdgeDirectionPolicies_EXTRACTS_FROM(t *testing.T) {
 	// Verify EXTRACTS_FROM policy exists and is correct
-	rule, exists := EdgeDirectionPolicies[DependencyTypeExtractsFrom]
+	rule, exists := EdgeDirectionPolicies[DependencyType("extracts_from")]
 	if !exists {
 		t.Fatal("EXTRACTS_FROM edge direction policy not found")
 	}
@@ -23,7 +23,7 @@ func TestEdgeDirectionPolicies_EXTRACTS_FROM(t *testing.T) {
 	if len(rule.ValidSourceClasses) != 1 {
 		t.Errorf("EXTRACTS_FROM should have exactly 1 valid source type, got %d", len(rule.ValidSourceClasses))
 	}
-	if rule.ValidSourceClasses[0] != FragmentTypeFacility {
+	if rule.ValidSourceClasses[0] != ah.FragmentClassSite {
 		t.Errorf("EXTRACTS_FROM source should be FACILITY, got %s", rule.ValidSourceClasses[0])
 	}
 
@@ -38,7 +38,7 @@ func TestEdgeDirectionPolicies_EXTRACTS_FROM(t *testing.T) {
 
 func TestEdgeDirectionPolicies_OWNS_IncludesDeposit(t *testing.T) {
 	// Verify OWNS policy includes DEPOSIT as valid target
-	rule, exists := EdgeDirectionPolicies[DependencyTypeOwns]
+	rule, exists := EdgeDirectionPolicies[ah.RelationNameBeneficiallyOwns]
 	if !exists {
 		t.Fatal("OWNS edge direction policy not found")
 	}
@@ -56,14 +56,14 @@ func TestEdgeDirectionPolicies_OWNS_IncludesDeposit(t *testing.T) {
 }
 
 func TestEdgeDirectionPolicies_OWNS_IncludesCommunitySource(t *testing.T) {
-	rule, exists := EdgeDirectionPolicies[DependencyTypeOwns]
+	rule, exists := EdgeDirectionPolicies[ah.RelationNameBeneficiallyOwns]
 	if !exists {
 		t.Fatal("OWNS edge direction policy not found")
 	}
 
 	hasCommunity := false
 	for _, sourceType := range rule.ValidSourceClasses {
-		if sourceType == FragmentTypeCommunity {
+		if sourceType == ah.FragmentClassCommunity {
 			hasCommunity = true
 			break
 		}
@@ -75,7 +75,7 @@ func TestEdgeDirectionPolicies_OWNS_IncludesCommunitySource(t *testing.T) {
 
 func TestEdgeDirectionPolicies_PRODUCES_IncludesDeposit(t *testing.T) {
 	// Verify PRODUCES policy includes DEPOSIT as valid source
-	rule, exists := EdgeDirectionPolicies[DependencyTypeProduces]
+	rule, exists := EdgeDirectionPolicies[ah.RelationNameProduces]
 	if !exists {
 		t.Fatal("PRODUCES edge direction policy not found")
 	}
@@ -94,7 +94,7 @@ func TestEdgeDirectionPolicies_PRODUCES_IncludesDeposit(t *testing.T) {
 
 func TestEdgeDirectionPolicies_LOCATED_IN_IncludesDeposit(t *testing.T) {
 	// Verify LOCATED_IN policy includes DEPOSIT as valid source
-	rule, exists := EdgeDirectionPolicies[DependencyTypeLocatedIn]
+	rule, exists := EdgeDirectionPolicies[DependencyType("located_in")]
 	if !exists {
 		t.Fatal("LOCATED_IN edge direction policy not found")
 	}
@@ -113,7 +113,7 @@ func TestEdgeDirectionPolicies_LOCATED_IN_IncludesDeposit(t *testing.T) {
 
 func TestEdgeDirectionPolicies_OPERATES_IN_IncludesDeposit(t *testing.T) {
 	// Verify OPERATES_IN policy includes DEPOSIT as valid target
-	rule, exists := EdgeDirectionPolicies[DependencyTypeOperatesIn]
+	rule, exists := EdgeDirectionPolicies[DependencyType("operates_in")]
 	if !exists {
 		t.Fatal("OPERATES_IN edge direction policy not found")
 	}
@@ -132,11 +132,11 @@ func TestEdgeDirectionPolicies_OPERATES_IN_IncludesDeposit(t *testing.T) {
 
 func TestEdgeDirectionPolicies_CanonicalAndLegacyAliasCoverage(t *testing.T) {
 	cases := []DependencyType{
-		DependencyTypeAssociatedWith,
-		DependencyTypeCorporateTransition,
-		DependencyTypeDomainRelation,
-		DependencyTypeSubsidiaryOf,
-		DependencyTypeHasSubmarket,
+		ah.RelationNameJointVentureWith,
+		ah.RelationNameMergedInto,
+		ah.RelationNameInfluences,
+		ah.RelationNameSubsidiaryOf,
+		DependencyType("corporate_transition"),
 	}
 	for _, edgeType := range cases {
 		if _, exists := EdgeDirectionPolicies[edgeType]; !exists {
@@ -159,7 +159,7 @@ func TestNormalizeSymmetricEdge(t *testing.T) {
 			name:        "symmetric COMPETES_WITH - no swap needed",
 			sourceID:    "aaa",
 			targetID:    "bbb",
-			edgeType:    DependencyTypeCompetesWith,
+			edgeType:    DependencyType("competes_with"),
 			wantSource:  "aaa",
 			wantTarget:  "bbb",
 			wantSwapped: false,
@@ -168,7 +168,7 @@ func TestNormalizeSymmetricEdge(t *testing.T) {
 			name:        "symmetric COMPETES_WITH - swap needed",
 			sourceID:    "bbb",
 			targetID:    "aaa",
-			edgeType:    DependencyTypeCompetesWith,
+			edgeType:    DependencyType("competes_with"),
 			wantSource:  "aaa",
 			wantTarget:  "bbb",
 			wantSwapped: true,
@@ -177,7 +177,7 @@ func TestNormalizeSymmetricEdge(t *testing.T) {
 			name:        "non-symmetric OWNS - never swaps",
 			sourceID:    "bbb",
 			targetID:    "aaa",
-			edgeType:    DependencyTypeOwns,
+			edgeType:    ah.RelationNameBeneficiallyOwns,
 			wantSource:  "bbb",
 			wantTarget:  "aaa",
 			wantSwapped: false,
@@ -186,7 +186,7 @@ func TestNormalizeSymmetricEdge(t *testing.T) {
 			name:        "non-symmetric EXTRACTS_FROM - never swaps",
 			sourceID:    "facility-z",
 			targetID:    "deposit-a",
-			edgeType:    DependencyTypeExtractsFrom,
+			edgeType:    DependencyType("extracts_from"),
 			wantSource:  "facility-z",
 			wantTarget:  "deposit-a",
 			wantSwapped: false,
@@ -221,118 +221,118 @@ func TestCanonicalizeEdge_ProductOwnsOrganization_ToProduces(t *testing.T) {
 	}{
 		{
 			name:       "PRODUCT OWNS ORGANIZATION -> PRODUCES with swap",
-			edgeType:   DependencyTypeOwns,
-			sourceType: FragmentTypeProduct,
-			targetType: FragmentTypeOrganization,
-			wantType:   DependencyTypeProduces,
+			edgeType:   ah.RelationNameBeneficiallyOwns,
+			sourceType: ah.FragmentClassProduct,
+			targetType: ah.FragmentClassOrg,
+			wantType:   ah.RelationNameProduces,
 			wantSwap:   true,
 			wantChange: true,
 		},
 		{
 			name:       "ORGANIZATION OWNS PRODUCT stays OWNS (no canonicalization)",
-			edgeType:   DependencyTypeOwns,
-			sourceType: FragmentTypeOrganization,
-			targetType: FragmentTypeProduct,
-			wantType:   DependencyTypeOwns,
+			edgeType:   ah.RelationNameBeneficiallyOwns,
+			sourceType: ah.FragmentClassOrg,
+			targetType: ah.FragmentClassProduct,
+			wantType:   ah.RelationNameBeneficiallyOwns,
 			wantSwap:   false,
 			wantChange: false,
 		},
 		{
 			name:       "PRODUCT PRODUCES ORGANIZATION (nonsense) is not rewritten here (direction rules handle it)",
-			edgeType:   DependencyTypeProduces,
-			sourceType: FragmentTypeProduct,
-			targetType: FragmentTypeOrganization,
-			wantType:   DependencyTypeProduces,
+			edgeType:   ah.RelationNameProduces,
+			sourceType: ah.FragmentClassProduct,
+			targetType: ah.FragmentClassOrg,
+			wantType:   ah.RelationNameProduces,
 			wantSwap:   false,
 			wantChange: false,
 		},
 		{
 			name:       "PRODUCT PRODUCES PRODUCT -> TRANSFORMS_INTO",
-			edgeType:   DependencyTypeProduces,
-			sourceType: FragmentTypeProduct,
-			targetType: FragmentTypeProduct,
-			wantType:   DependencyTypeTransformsInto,
+			edgeType:   ah.RelationNameProduces,
+			sourceType: ah.FragmentClassProduct,
+			targetType: ah.FragmentClassProduct,
+			wantType:   DependencyType("transforms_into"),
 			wantSwap:   false,
 			wantChange: true,
 		},
 		{
 			name:       "ORGANIZATION EXTRACTS_FROM DEPOSIT -> OPERATES_IN (best-effort)",
-			edgeType:   DependencyTypeExtractsFrom,
-			sourceType: FragmentTypeOrganization,
+			edgeType:   DependencyType("extracts_from"),
+			sourceType: ah.FragmentClassOrg,
 			targetType: ah.FragmentClassSite,
-			wantType:   DependencyTypeOperatesIn,
+			wantType:   DependencyType("operates_in"),
 			wantSwap:   false,
 			wantChange: true,
 		},
 		{
 			name:       "DEPOSIT EXTRACTS_FROM ORGANIZATION -> OPERATES_IN with swap (best-effort)",
-			edgeType:   DependencyTypeExtractsFrom,
+			edgeType:   DependencyType("extracts_from"),
 			sourceType: ah.FragmentClassSite,
-			targetType: FragmentTypeOrganization,
-			wantType:   DependencyTypeOperatesIn,
+			targetType: ah.FragmentClassOrg,
+			wantType:   DependencyType("operates_in"),
 			wantSwap:   true,
 			wantChange: true,
 		},
 		{
 			name:       "ENTITY APPLIES_TO MECHANISM -> swap to MECHANISM APPLIES_TO ENTITY",
-			edgeType:   DependencyTypeAppliesTo,
-			sourceType: FragmentTypeOrganization,
-			targetType: FragmentTypeMechanism,
-			wantType:   DependencyTypeAppliesTo,
+			edgeType:   DependencyType("applies_to"),
+			sourceType: ah.FragmentClassOrg,
+			targetType: ah.FragmentClassMechanism,
+			wantType:   DependencyType("applies_to"),
 			wantSwap:   true,
 			wantChange: true,
 		},
 		{
 			name:       "Non-mechanism APPLIES_TO -> INFLUENCES",
-			edgeType:   DependencyTypeAppliesTo,
-			sourceType: FragmentTypeOrganization,
-			targetType: FragmentTypeMarket,
-			wantType:   DependencyTypeInfluences,
+			edgeType:   DependencyType("applies_to"),
+			sourceType: ah.FragmentClassOrg,
+			targetType: ah.FragmentClassMarket,
+			wantType:   ah.RelationNameInfluences,
 			wantSwap:   false,
 			wantChange: true,
 		},
 		{
 			name:       "COMMUNITY FOUNDED PERSON -> swap to PERSON FOUNDED COMMUNITY",
-			edgeType:   DependencyTypeFounded,
-			sourceType: FragmentTypeCommunity,
-			targetType: FragmentTypePerson,
-			wantType:   DependencyTypeFounded,
+			edgeType:   DependencyType("founded"),
+			sourceType: ah.FragmentClassCommunity,
+			targetType: ah.FragmentClassPerson,
+			wantType:   DependencyType("founded"),
 			wantSwap:   true,
 			wantChange: true,
 		},
 		{
 			name:       "ORGANIZATION FOUNDED PERSON -> swap to PERSON FOUNDED ORGANIZATION",
-			edgeType:   DependencyTypeFounded,
-			sourceType: FragmentTypeOrganization,
-			targetType: FragmentTypePerson,
-			wantType:   DependencyTypeFounded,
+			edgeType:   DependencyType("founded"),
+			sourceType: ah.FragmentClassOrg,
+			targetType: ah.FragmentClassPerson,
+			wantType:   DependencyType("founded"),
 			wantSwap:   true,
 			wantChange: true,
 		},
 		{
 			name:       "MARKET INVESTS_IN ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET (swap)",
-			edgeType:   DependencyTypeInvestsIn,
-			sourceType: FragmentTypeMarket,
-			targetType: FragmentTypeOrganization,
-			wantType:   DependencyTypeParticipatesIn,
+			edgeType:   ah.RelationNameInvestedIn,
+			sourceType: ah.FragmentClassMarket,
+			targetType: ah.FragmentClassOrg,
+			wantType:   DependencyType("participates_in"),
 			wantSwap:   true,
 			wantChange: true,
 		},
 		{
 			name:       "ORGANIZATION RELATED_TO MARKET -> ORGANIZATION PARTICIPATES_IN MARKET",
-			edgeType:   DependencyTypeRelatedTo,
-			sourceType: FragmentTypeOrganization,
-			targetType: FragmentTypeMarket,
-			wantType:   DependencyTypeParticipatesIn,
+			edgeType:   DependencyType("related_to"),
+			sourceType: ah.FragmentClassOrg,
+			targetType: ah.FragmentClassMarket,
+			wantType:   DependencyType("participates_in"),
 			wantSwap:   false,
 			wantChange: true,
 		},
 		{
 			name:       "MARKET RELATED_TO ORGANIZATION -> ORGANIZATION PARTICIPATES_IN MARKET (swap)",
-			edgeType:   DependencyTypeRelatedTo,
-			sourceType: FragmentTypeMarket,
-			targetType: FragmentTypeOrganization,
-			wantType:   DependencyTypeParticipatesIn,
+			edgeType:   DependencyType("related_to"),
+			sourceType: ah.FragmentClassMarket,
+			targetType: ah.FragmentClassOrg,
+			wantType:   DependencyType("participates_in"),
 			wantSwap:   true,
 			wantChange: true,
 		},
@@ -355,14 +355,14 @@ func TestCanonicalizeEdge_ProductOwnsOrganization_ToProduces(t *testing.T) {
 }
 
 func TestNormalizeRelationEdge_OwnsCommunityToOrganization_IsPreserved(t *testing.T) {
-	sourceFrag := &models.HorizonFragment{Class: FragmentTypeCommunity}
+	sourceFrag := &models.HorizonFragment{Class: ah.FragmentClassCommunity}
 
 	gotSource, gotTarget, gotType, changed := normalizeRelationEdge(
 		sourceFrag,
 		"community-id",
 		"org-id",
-		DependencyTypeOwns,
-		FragmentTypeOrganization,
+		ah.RelationNameBeneficiallyOwns,
+		ah.FragmentClassOrg,
 		false,
 		nil,
 	)
@@ -372,7 +372,7 @@ func TestNormalizeRelationEdge_OwnsCommunityToOrganization_IsPreserved(t *testin
 	if gotSource != "community-id" || gotTarget != "org-id" {
 		t.Fatalf("expected source/target unchanged, got %q -> %q", gotSource, gotTarget)
 	}
-	if gotType != DependencyTypeOwns {
+	if gotType != ah.RelationNameBeneficiallyOwns {
 		t.Fatalf("expected OWNS, got %s", gotType)
 	}
 }

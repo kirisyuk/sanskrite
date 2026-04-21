@@ -3,12 +3,12 @@ package scout
 import (
 	"context"
 	"errors"
-	"strings"
-	"time"
-
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
+	"strings"
+	"time"
 )
 
 // ensureSegmentDerivedMarketLinks best-effort materializes segment-first market nodes and links a fragment into them.
@@ -28,7 +28,7 @@ func (e *ScoutEngine) ensureSegmentDerivedMarketLinks(ctx context.Context, fragm
 		return
 	}
 	// Only link concrete actors (ORG/FAC). GOV is stored as ORGANIZATION and is included.
-	if fragment.Class != FragmentTypeOrganization && fragment.Class != FragmentTypeFacility {
+	if fragment.Class != ah.FragmentClassOrg && fragment.Class != ah.FragmentClassSite {
 		return
 	}
 	if len(fragment.MarketSegments) == 0 {
@@ -99,7 +99,7 @@ func (e *ScoutEngine) ensureSegmentDerivedMarketLinks(ctx context.Context, fragm
 			marketFrag = &models.HorizonFragment{
 				TenantID:      "global",
 				CanonicalPath: marketPath,
-				Class:          FragmentTypeMarket,
+				Class:          ah.FragmentClassMarket,
 				Labels:        map[string]string{"en": label},
 				Status:        string(models.FragmentStatusActive),
 				State:         map[string]models.MetricValue{},
@@ -142,7 +142,7 @@ func (e *ScoutEngine) ensureSegmentDerivedMarketLinks(ctx context.Context, fragm
 		}
 
 		// Ensure PARTICIPATES_IN edge exists: fragment -> market
-		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", fragment.ID, marketFrag.ID, DependencyTypeParticipatesIn); err == nil {
+		if _, err := e.edgesRepo.GetBySourceTargetAndType(ctx, "global", fragment.ID, marketFrag.ID, ah.RelationNameMemberOf); err == nil {
 			continue
 		} else if !errors.Is(err, repo.ErrEdgeNotFound) {
 			continue
@@ -152,7 +152,7 @@ func (e *ScoutEngine) ensureSegmentDerivedMarketLinks(ctx context.Context, fragm
 			TenantID:         "global",
 			SourceFragmentID: fragment.ID,
 			TargetFragmentID: marketFrag.ID,
-			Relation:             DependencyTypeParticipatesIn,
+			Relation:             ah.RelationNameMemberOf,
 			Properties: models.EdgeProperties{
 				Criticality:   0.4,
 				Amplification: 1.0,
