@@ -1263,7 +1263,7 @@ func (r *DependencyEdgesRepository) GetBySourceTargetAndType(ctx context.Context
 	q := r.col.Where("tenantId", "==", tenantID).
 		Where("sourceFragmentId", "==", sourceFragmentID).
 		Where("targetFragmentId", "==", targetFragmentID).
-		Where("type", "==", edgeType).
+		Where("relation", "==", string(edgeType)).
 		Limit(1)
 
 	docs, err := q.Documents(ctx).GetAll()
@@ -1289,7 +1289,7 @@ func (r *DependencyEdgesRepository) ListBySourceTargetAndType(ctx context.Contex
 	q := r.col.Where("tenantId", "==", tenantID).
 		Where("sourceFragmentId", "==", sourceFragmentID).
 		Where("targetFragmentId", "==", targetFragmentID).
-		Where("type", "==", edgeType).
+		Where("relation", "==", string(edgeType)).
 		Limit(limit)
 
 	docs, err := q.Documents(ctx).GetAll()
@@ -1315,7 +1315,7 @@ func (r *DependencyEdgesRepository) ListBySource(ctx context.Context, tenantID, 
 	}
 	q := r.col.Where("tenantId", "==", tenantID).Where("sourceFragmentId", "==", sourceFragmentID)
 	if edgeType != nil {
-		q = q.Where("type", "==", *edgeType)
+		q = q.Where("relation", "==", string(*edgeType))
 	}
 	q = q.OrderBy("properties.criticality", firestore.Desc).Limit(limit)
 	docs, err := q.Documents(ctx).GetAll()
@@ -1369,7 +1369,7 @@ func (r *DependencyEdgesRepository) ListBySourceIDsAndType(ctx context.Context, 
 		chunk := unique[i:end]
 		docs, err := r.col.
 			Where("tenantId", "==", tenantID).
-			Where("type", "==", edgeType).
+			Where("relation", "==", string(edgeType)).
 			Where("sourceFragmentId", "in", chunk).
 			Documents(ctx).
 			GetAll()
@@ -1426,7 +1426,7 @@ func (r *DependencyEdgesRepository) ListByTargetIDsAndType(ctx context.Context, 
 		chunk := unique[i:end]
 		docs, err := r.col.
 			Where("tenantId", "==", tenantID).
-			Where("type", "==", edgeType).
+			Where("relation", "==", string(edgeType)).
 			Where("targetFragmentId", "in", chunk).
 			Documents(ctx).
 			GetAll()
@@ -1455,7 +1455,7 @@ func (r *DependencyEdgesRepository) ListByTarget(ctx context.Context, tenantID, 
 	}
 	q := r.col.Where("tenantId", "==", tenantID).Where("targetFragmentId", "==", targetFragmentID)
 	if edgeType != nil {
-		q = q.Where("type", "==", *edgeType)
+		q = q.Where("relation", "==", string(*edgeType))
 	}
 	q = q.OrderBy("properties.criticality", firestore.Desc).Limit(limit)
 	docs, err := q.Documents(ctx).GetAll()
