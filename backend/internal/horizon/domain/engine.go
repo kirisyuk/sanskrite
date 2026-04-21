@@ -1089,6 +1089,10 @@ func generateCrossFacetExpectations(contract Contract) []CrossFacetExpectation {
 	return out
 }
 
+// expectedRelationsForContractType returns relation tokens fed into LLM
+// steering / domain-answer prompts (Category B — prompt vocabulary), not
+// runtime ah.RelationName slices. Values stay UPPER_SNAKE until prompts are
+// re-authored to emit ah wire.
 func expectedRelationsForContractType(contractType string) []string {
 	switch steeringProfileForContractType(contractType) {
 	case SteeringProfileSupplyChain:
@@ -3220,6 +3224,8 @@ func adaptSnapshotToViewDirective(snapshot *models.DomainAnswerSnapshot) *models
 	return d
 }
 
+// defaultFilterRelTypes enumerates legacy edge labels for LLM filter hints
+// (Category B — same contract as expectedRelationsForContractType).
 func defaultFilterRelTypes(contractType string) []string {
 	switch steeringProfileForContractType(contractType) {
 	case SteeringProfileSupplyChain:

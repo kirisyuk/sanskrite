@@ -280,7 +280,8 @@ func buildFragmentTraceGraph(payload map[string]interface{}, centerFragmentID st
 		}
 		sourceID := stringField(entry, "sourceFragmentId", "sourceFragmentID")
 		targetID := stringField(entry, "targetFragmentId", "targetFragmentID")
-		edgeType := strings.ToUpper(strings.TrimSpace(stringField(entry, "type")))
+		edgeWire := stringField(entry, "relation", "type")
+		edgeType := traceDependencyWireToLegacyUpper(edgeWire)
 		if sourceID == "" || targetID == "" || edgeType == "" {
 			continue
 		}
@@ -551,6 +552,8 @@ func isFragmentTraceContextRelation(item fragmentTraceRelation) bool {
 	case "location", "market":
 		return true
 	}
+	// item.Type is normalized via traceDependencyWireToLegacyUpper from
+	// DependencyEdge.relation (AH snake_case) or legacy edge.type.
 	switch item.Type {
 	case "REGULATES", "ASSURES", "AUDITED_BY", "LOCATED_IN", "OPERATES_IN", "BASED_IN", "HEADQUARTERED_IN", "PARTICIPATES_IN", "TRADED_IN":
 		return true
@@ -561,6 +564,8 @@ func isFragmentTraceContextRelation(item fragmentTraceRelation) bool {
 
 func describeFragmentTraceRelation(centerLabel string, item fragmentTraceRelation) string {
 	other := fallbackFragmentTraceSubject(item.RelatedLabel)
+	// Legacy UPPER_SNAKE tokens: see traceDependencyWireToLegacyUpper — sourced
+	// from live dependency edges (AH relation) normalized for stable copy.
 	switch item.Type {
 	case "SUPPLIES_TO":
 		return fmt.Sprintf("This object supplies into %s, so downstream availability depends on that link.", other)
@@ -665,6 +670,83 @@ func stringField(m map[string]interface{}, keys ...string) string {
 		}
 	}
 	return ""
+}
+
+// traceDependencyWireToLegacyUpper maps DependencyEdge JSON from
+// GetFragmentDependencies (canonical `relation` = ah.RelationName snake_case)
+// into the legacy UPPER_SNAKE tokens used by trace scoring / copy below.
+//
+// Category A at the HTTP boundary: Firestore + handlers persist AH relations;
+// this normalizer keeps fragment-trace heuristics stable without rewriting
+// every switch body in this file.
+func traceDependencyWireToLegacyUpper(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	hasLower := false
+	for _, r := range raw {
+		if r >= 'a' && r <= 'z' {
+			hasLower = true
+			break
+		}
+	}
+	if !hasLower {
+		return raw
+	}
+	key := strings.ToLower(strings.ReplaceAll(raw, "-", "_"))
+	switch key {
+	case "supplies":
+		return "SUPPLIES_TO"
+	case "depends_on":
+		return "DEPENDS_ON"
+	case "produces":
+		return "PRODUCES"
+	case "consumes":
+		return "CONSUMES"
+	case "beneficially_owns":
+		return "OWNS"
+	case "controls_via":
+		return "CONTROLS"
+	case "managed_by":
+		return "MANAGES"
+	case "subsidiary_of":
+		return "SUBSIDIARY_OF"
+	case "invested_in":
+		return "INVESTS_IN"
+	case "regulates":
+		return "REGULATES"
+	case "assures":
+		return "ASSURES"
+	case "influences":
+		return "INFLUENCES"
+	case "disrupts":
+		return "AFFECTS"
+	case "imposes":
+		return "IMPACTS"
+	case "wields":
+		return "USES_MECHANISM"
+	case "operates":
+		return "ADMINISTERS"
+	case "gatekeeps":
+		return "GATEKEEPS_DECISION"
+	case "listed_on":
+		return "TRADED_IN"
+	case "member_of":
+		return "MEMBER_OF"
+	case "joint_venture_with":
+		return "PARTNERS_WITH"
+	case "merged_into":
+		return "MERGED_INTO"
+	case "extracts_from":
+		return "EXTRACTS_FROM"
+	case "requires_capability":
+		return "REQUIRES"
+	case "leg_connects", "passes_through", "transships_at":
+		return "SUPPLY_PATH_LEG"
+	default:
+		return strings.ToUpper(strings.ReplaceAll(key, "-", "_"))
+	}
 }
 
 func traceEdgePriority(edgeType string) int {

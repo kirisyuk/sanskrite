@@ -983,6 +983,12 @@ func graphIntentEdgeEndpointRef(tempID string, nodeID string, refs map[string]gr
 }
 
 func graphIntentNormalizeUnsupportedRelation(relationType string, sourceRef graphIntentNodeRef, targetRef graphIntentNodeRef) (string, string) {
+	// Category B — LLM graph-intent JSON: relationType arrives from scout /
+	// intent-decomposer prompts that still enumerate legacy tokens (USED_IN,
+	// UPPER_SNAKE aliases). NormalizeGraphIntentRelationType + this fallback
+	// rewrite those wires before persistence. Do not delete USED_IN branches
+	// without re-tuning graph-intent LLM prompts (see
+	// scout/agents/intent_decomposer_agent.go).
 	relationType = strings.ToUpper(strings.TrimSpace(relationType))
 	if relationType == "" {
 		return relationType, ""
@@ -2380,6 +2386,9 @@ func (e *graphIntentApplyExecutor) normalizeCanonicalPathHint(spec horizonmodels
 		return taxonomy.GeoCanonicalPath("global", slug, "")
 	case string(ah.FragmentClassProduct):
 		return taxonomy.ProductCanonicalPath("", label)
+	// Category B — LLM graph-intent / scaffold JSON: the following literals are
+	// still emitted by agent prompts and must match verbatim for deterministic
+	// synthetic canonical_path construction (not Firestore runtime taxonomy).
 	// Legacy UPPER_SNAKE wire tokens with no first-class AH FragmentClass
 	// equivalent (their AH home is a (Class, Subtype) tuple). Match the raw
 	// literal so wire payloads keep deterministic canonical_path scaffolding
