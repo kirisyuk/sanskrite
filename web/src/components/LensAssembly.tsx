@@ -22,6 +22,7 @@ import {
   type HorizonProductStreamNode,
   type HorizonProductStreamResponse,
 } from '../lib/api';
+import { productStreamEdgeVisualKind } from '../lib/taxonomy';
 
 type AssemblyMode = 'freeform' | 'product' | 'entity';
 
@@ -379,7 +380,10 @@ export const LensAssembly: React.FC<LensAssemblyProps> = ({
     }
 
     const pushEdge = (edge: HorizonProductStreamEdge, source: string, target: string) => {
-      const assembly = (edge.relationKind || '').toLowerCase() === 'assembly';
+      const visual = productStreamEdgeVisualKind(edge.relationKind);
+      const stroke =
+        visual === 'assembly' ? '#f59e0b' : visual === 'usage' ? '#3b82f6' : '#10b981';
+      const strokeWidth = visual === 'assembly' ? 1.8 : visual === 'usage' ? 1.65 : 1.6;
       const sourcePosition = positionsById.get(source);
       const targetPosition = positionsById.get(target);
       if (!sourcePosition || !targetPosition) return;
@@ -395,11 +399,11 @@ export const LensAssembly: React.FC<LensAssemblyProps> = ({
         interactionWidth: 18,
         markerEnd: {
           type: MarkerType.ArrowClosed,
-          color: assembly ? '#f59e0b' : '#10b981',
+          color: stroke,
         },
         style: {
-          stroke: assembly ? '#f59e0b' : '#10b981',
-          strokeWidth: assembly ? 1.8 : 1.6,
+          stroke,
+          strokeWidth,
           opacity: 0.9,
         },
       });

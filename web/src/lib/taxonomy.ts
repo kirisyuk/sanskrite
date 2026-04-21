@@ -169,6 +169,28 @@ export function normalizeEdgeType(raw: unknown): string {
   return 'other';
 }
 
+/**
+ * `/api/horizon/products/stream` edge `relationKind`: backend normalizes to assembly | usage | transformation;
+ * accept legacy spellings and UPPER_SNAKE transform labels for older caches.
+ */
+export type ProductStreamEdgeVisualKind = 'assembly' | 'usage' | 'transformation';
+
+export function productStreamEdgeVisualKind(raw: string | undefined | null): ProductStreamEdgeVisualKind {
+  const s = String(raw ?? '').trim();
+  if (!s) return 'transformation';
+  const norm = s.toLowerCase().replace(/-/g, '_');
+  if (norm === 'assembly' || norm === 'assembles_into' || norm === 'assemblesinto') return 'assembly';
+  if (norm === 'usage' || norm === 'used_in' || norm === 'usedin') return 'usage';
+  if (norm === 'transformation' || norm === 'transform' || norm === 'transforms_into' || norm === 'transformsinto') {
+    return 'transformation';
+  }
+  const upper = s.toUpperCase().replace(/-/g, '_');
+  if (upper === 'ASSEMBLES_INTO') return 'assembly';
+  if (upper === 'USED_IN') return 'usage';
+  if (upper === 'TRANSFORMS_INTO') return 'transformation';
+  return 'transformation';
+}
+
 export function coerceWireRelation(raw: unknown): RelationName {
   const coerced = tryCoerceWireRelation(String(raw ?? '').trim());
   if (coerced) return coerced;
