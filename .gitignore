@@ -37,6 +37,14 @@ backend/agentmesh
 backend/loc_canon_smoke
 backend/loom_*
 backend/tmp_*
+# P13: ad-hoc data dumps / probes at backend/ root (pollute rg / disk)
+backend/*.jsonl
+backend/reclassify_*.jsonl
+backend/wikidata_*.jsonl
+backend/industry_*.jsonl
+backend/fragment_pair_debug.json
+backend/*_debug.json
+backend/llm_apply_*.jsonl
 # Ad hoc probes under backend/ root (go build -o ... ./cmd/<pkg>)
 backend/[a-z_]*_probe_submit
 backend/[a-z_]*_smoke
