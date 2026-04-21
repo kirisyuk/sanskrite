@@ -1565,20 +1565,6 @@
           "order": "ASCENDING"
         },
         {
-          "fieldPath": "type",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "horizon_fragments",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "tenantId",
-          "order": "ASCENDING"
-        },
-        {
           "fieldPath": "indexPaths",
           "arrayConfig": "CONTAINS"
         }
@@ -1839,108 +1825,6 @@
         {
           "fieldPath": "scope",
           "arrayConfig": "CONTAINS"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "horizon_dependency_edges",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "tenantId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "sourceFragmentId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "type",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "horizon_dependency_edges",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "tenantId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "sourceFragmentId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "type",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "properties.criticality",
-          "order": "DESCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "horizon_dependency_edges",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "tenantId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "targetFragmentId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "type",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "horizon_dependency_edges",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "tenantId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "targetFragmentId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "type",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "properties.criticality",
-          "order": "DESCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "horizon_dependency_edges",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "tenantId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "sourceFragmentId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "targetFragmentId",
-          "order": "ASCENDING"
-        },
-        {
-          "fieldPath": "type",
-          "order": "ASCENDING"
         }
       ]
     },
@@ -3611,26 +3495,6 @@
       ]
     },
     {
-      "collectionGroup": "criticalchain_nodes",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "kind",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "criticalchain_edges",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "kind",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
       "collectionGroup": "horizon_manual_resolve_queue",
       "queryScope": "COLLECTION",
       "fields": [
@@ -3681,6 +3545,168 @@
         {
           "fieldPath": "scopeRef",
           "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "tenantId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "class",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "class",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subtype",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_fragments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "tenantId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "class",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "subtype",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_dependency_edges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "tenantId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "sourceFragmentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_dependency_edges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "tenantId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "targetFragmentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_dependency_edges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "tenantId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "sourceFragmentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "targetFragmentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_dependency_edges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "tenantId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "sourceFragmentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "properties.criticality",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_dependency_edges",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "tenantId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "targetFragmentId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "relation",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "properties.criticality",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "horizon_path_cache",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "tenant",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "nodeRefs",
+          "arrayConfig": "CONTAINS"
         }
       ]
     }
