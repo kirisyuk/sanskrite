@@ -124,7 +124,7 @@ func sanitizeDomainResearchRelations(domainCanonicalPath, contractType string, r
 		}
 		// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
 		// taxonomy.NormalizeRelationType returns the legacy UPPER_SNAKE
-		// wire form (e.g. "SUPPLIES_TO"). For non-domain-anchored
+		// wire form (e.g. legacy supplies edge token). For non-domain-anchored
 		// edges the allowlist + downstream materializers expect the
 		// scout DependencyType form (snake_case AH RelationName when
 		// available, snake_case legacy literal otherwise), so we

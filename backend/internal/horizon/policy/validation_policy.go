@@ -27,7 +27,7 @@ type ValidationRule struct {
 	ID                string  `json:"id" firestore:"id"`
 	SourceType        string  `json:"sourceType" firestore:"sourceType"`                                   // "ORGANIZATION", "FACILITY", "*"
 	TargetType        string  `json:"targetType" firestore:"targetType"`                                   // "ORGANIZATION", "FACILITY", "*"
-	RelationType      string  `json:"relationType" firestore:"relationType"`                               // "SUPPLIES_TO", "*"
+	RelationType      string  `json:"relationType" firestore:"relationType"`                               // ah.RelationName slug or "*"
 	Action            string  `json:"action" firestore:"action"`                                           // "allow", "reject", "penalty"
 	ConfidencePenalty float64 `json:"confidencePenalty,omitempty" firestore:"confidencePenalty,omitempty"` // For "penalty" action
 	Reason            string  `json:"reason" firestore:"reason"`                                           // Human-readable reason

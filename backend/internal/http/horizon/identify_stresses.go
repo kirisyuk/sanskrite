@@ -3416,7 +3416,7 @@ func prioritizeVisibleRelations(in []IdentifyStressVisibleRelation, selected str
 		// stress payloads that still interleave legacy UPPER tokens, ah snake
 		// uppercased ("SUPPLIES"), and artifact leg tags (SUPPLY_PATH_LEG).
 		switch relType {
-		case "SUPPLY_PATH_LEG", "SUPPLIES_TO", "SUPPLIES", "supply_link", "SUPPLY_LINK", "DELIVERS_TO":
+		case "SUPPLY_PATH_LEG", "SUPPLIES_TO", "SUPPLIES", "supply_link", "DELIVERS_TO":
 			score += 100
 		case "DEPENDS_ON", "RELIES_ON", "USES":
 			score += 60

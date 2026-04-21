@@ -920,7 +920,7 @@ export const useHorizonRealtimeStore = create<HorizonRealtimeStore>(
                 : '';
           const edgeType =
             typeof data?.type === 'string' ? data.type : 'Connection';
-          // Format edge type: "SUPPLIES_TO" -> "Supplies To"
+          // Format edge type: uppercase legacy token -> Title Case words
           const formattedType = edgeType
             .replace(/_/g, ' ')
             .toLowerCase()

@@ -20,7 +20,7 @@ type PropagationPolicyRulesRepo interface {
 type PropagationPolicyRule struct {
 	ID               string   `json:"id" firestore:"id"`
 	MetricPattern    string   `json:"metricPattern" firestore:"metricPattern"`     // "risk_*" or "risk_supply_disruption_score"
-	RelationType     string   `json:"relationType" firestore:"relationType"`       // "SUPPLIES_TO" or "*"
+	RelationType     string   `json:"relationType" firestore:"relationType"`       // ah.RelationName slug (e.g. supplies) or "*"
 	Passes           bool     `json:"passes" firestore:"passes"`                  // Whether propagation passes through
 	Weight           float64  `json:"weight" firestore:"weight"`                  // Multiplier (0..2, default 1.0)
 	MaxDepth         int      `json:"maxDepth" firestore:"maxDepth"`              // Max depth for this combination
