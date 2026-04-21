@@ -10,7 +10,7 @@
     ↓ (автоматически)
 Система:
   ✓ Сохранение в Firestore
-  ✓ Загрузка контента в GCS (gs://nv-horizon-rag-documents/)
+  ✓ Загрузка контента в GCS (gs://prevalent-horizon-test-rag-documents/)
   ✓ Создание embeddings через OpenAI/Vertex AI
   ✓ Chunking текста (1200 символов)
   ✓ Векторизация chunks

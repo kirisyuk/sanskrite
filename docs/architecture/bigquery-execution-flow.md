@@ -47,7 +47,7 @@
 SELECT 
   id,
   ML.GENERATE_TEXT(
-    MODEL `nv-horizon.nv_horizon_documents.gemini_model`,
+    MODEL `prevalent-horizon-test.horizon_documents.gemini_model`,
     extractedText,
     STRUCT('Summarize this document' AS prompt)
   ) AS summary

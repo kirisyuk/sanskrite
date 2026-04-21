@@ -11,7 +11,7 @@ This document describes how multi-tenant data isolation is implemented in Vertex
 Documents are stored in GCS with tenant-aware path structure:
 
 ```
-gs://nv-horizon-rag-documents/
+gs://prevalent-horizon-test-rag-documents/
   ├── {tenantId}/
   │   ├── {sourceId}/
   │   │   ├── {docId1}.txt
@@ -211,7 +211,7 @@ Set these environment variables in your deployment:
 VERTEX_SEARCH_DATA_STORE_ID=rag-documents-store
 VERTEX_SEARCH_LOCATION=global
 GEMINI_API_KEY=<your-api-key>
-RAG_DOCUMENTS_BUCKET=nv-horizon-rag-documents
+RAG_DOCUMENTS_BUCKET=prevalent-horizon-test-rag-documents
 ```
 
 Backend will automatically:
@@ -253,7 +253,7 @@ curl -X POST https://api-sqt63d2k2q-uc.a.run.app/api/v1/projects/{projectId}/ver
 # Check import operations
 gcloud discovery-engine operations list \
   --location=global \
-  --project=nv-horizon \
+  --project=prevalent-horizon-test \
   --filter="metadata.operationType=IMPORT"
 ```
 
@@ -284,8 +284,8 @@ gcloud discovery-engine operations list \
    curl -X POST \
      -H "Authorization: Bearer $ACCESS_TOKEN" \
      -H "Content-Type: application/json" \
-     "https://discoveryengine.googleapis.com/v1beta/projects/nv-horizon/locations/global/collections/default_collection/dataStores/rag-documents-store/branches/default_branch/documents:import" \
-     -d '{"gcsSource": {"inputUris": ["gs://nv-horizon-rag-documents/{tenantId}/**"], "dataSchema": "content"}, "reconciliationMode": "INCREMENTAL"}'
+     "https://discoveryengine.googleapis.com/v1beta/projects/prevalent-horizon-test/locations/global/collections/default_collection/dataStores/rag-documents-store/branches/default_branch/documents:import" \
+     -d '{"gcsSource": {"inputUris": ["gs://prevalent-horizon-test-rag-documents/{tenantId}/**"], "dataSchema": "content"}, "reconciliationMode": "INCREMENTAL"}'
    ```
 
 ### Tenant Isolation Not Working
@@ -293,7 +293,7 @@ gcloud discovery-engine operations list \
 1. Check filter in backend logs
 2. Verify metadata in GCS:
    ```bash
-   gsutil stat gs://nv-horizon-rag-documents/{tenantId}/{sourceId}/{docId}.txt
+   gsutil stat gs://prevalent-horizon-test-rag-documents/{tenantId}/{sourceId}/{docId}.txt
    ```
 3. Verify indexed metadata in Vertex AI Search console
 

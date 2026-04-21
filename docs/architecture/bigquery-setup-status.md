@@ -21,7 +21,7 @@
 
 ```sql
 -- Создаем функцию для анализа документов
-CREATE OR REPLACE FUNCTION `nv-horizon.nv_horizon_documents.analyze_document`(
+CREATE OR REPLACE FUNCTION `prevalent-horizon-test.horizon_documents.analyze_document`(
   gcs_uri STRING,
   prompt STRING
 )
@@ -45,7 +45,7 @@ WITH document_content AS (
     -- Здесь будет вызов Vertex AI для чтения и анализа
     -- Пока используем storagePath как ссылку
     m.storagePath as content_uri
-  FROM `nv-horizon.nv_horizon_documents.documents_metadata` m
+  FROM `prevalent-horizon-test.horizon_documents.documents_metadata` m
   WHERE m.status = 'processed'
 )
 SELECT 
@@ -83,11 +83,11 @@ LIMIT 10
 
 ```bash
 # Интерактивная установка
-firebase ext:install firebase/firestore-bigquery-export --project=nv-horizon
+firebase ext:install firebase/firestore-bigquery-export --project=prevalent-horizon-test
 
 # Параметры:
 # - Collection: rag_documents
-# - Dataset: nv_horizon_documents  
+# - Dataset: horizon_documents  
 # - Table: documents_metadata
 # - Location: US
 ```

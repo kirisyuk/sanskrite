@@ -66,7 +66,7 @@
 | Источники | `/api/v1/sources`, `/api/v1/sources/...`, preview telegram/rss |
 | Verified | `POST /api/v1/verified` |
 | Generation sessions | `/api/v1/generation-sessions/...` |
-| Админ jobs | `POST /api/v1/admin/sources/coordinate` (**jobAuth**), `POST /api/v1/admin/nv_horizon/watchdog/run`, `.../horizon/watchdog/run` (**jobAuth**) |
+| Админ jobs | `POST /api/v1/admin/sources/coordinate` (**jobAuth**), `POST /api/v1/admin/horizon/watchdog/run` (**jobAuth**), `POST /api/v1/admin/horizon/lens_runtime/sync` (**jobAuth**) |
 | Critical Chain admin | `POST /api/v1/criticalchain/admin/pipeline/run` (**jobAuth**) |
 
 ### Вложенные маршруты проекта `/api/v1/projects/{projectId}/…`

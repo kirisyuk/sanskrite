@@ -72,7 +72,7 @@ func main() {
 	}
 	vertexStore := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID"))
 	if vertexStore == "" {
-		vertexStore = strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID"))
+		vertexStore = strings.TrimSpace(os.Getenv("VERTEX_SEARCH_DATA_STORE_ID"))
 	}
 	if vertexStore == "" {
 		vertexStore = strings.TrimSpace(gcp.GetEnvOrSecret(ctx, project, "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "vertex_search_horizon_data_store_id"))
