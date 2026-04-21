@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# DEPRECATED: Interaction events now go through nv_horizon.interaction.events (ws).
-# This script created subscriptions for legacy ws-broker; use deploy or setup-nv-horizon-pubsub.sh instead.
+# DEPRECATED: Interaction events now go through horizon.interaction.events (ws).
+# This script created subscriptions for legacy ws-broker; use deploy or setup-horizon-pubsub.sh instead.
 #
 # Script to create Pub/Sub topics and subscriptions for interaction events
 # Usage: ./scripts/setup-interaction-topics.sh [PROJECT_ID]
@@ -106,5 +106,5 @@ for topic in "${TOPICS[@]}"; do
   echo "  - ${topic}-ws-broker"
 done
 echo ""
-echo -e "${YELLOW}Note:${NC} (Deprecated) Interaction events use nv_horizon.interaction.events; restart ws if needed"
+echo -e "${YELLOW}Note:${NC} (Deprecated) Interaction events use horizon.interaction.events; restart ws if needed"
 echo ""

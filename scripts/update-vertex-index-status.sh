@@ -7,7 +7,7 @@ set -euo pipefail
 TENANT_ID="${1:-}"
 FORCE_SYNC="${2:-}"
 
-GCP_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "nv-horizon")
+GCP_PROJECT=$(gcloud config get-value project 2>/dev/null || echo "prevalent-horizon-test")
 if [[ -z "$GCP_PROJECT" || "$GCP_PROJECT" == "(unset)" ]]; then
   echo "Error: GCP project is not set. Run: gcloud config set project <ID>"
   exit 1
@@ -28,7 +28,7 @@ cd "$(dirname "$0")/../backend"
 # Export environment variables
 export VERTEX_SEARCH_LOCATION="${VERTEX_SEARCH_LOCATION:-global}"
 export VERTEX_SEARCH_DATA_STORE_ID="${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store}"
-export RAG_DOCUMENTS_BUCKET="${RAG_DOCUMENTS_BUCKET:-nv-horizon-rag-documents}"
+export RAG_DOCUMENTS_BUCKET="${RAG_DOCUMENTS_BUCKET:-prevalent-horizon-test-rag-documents}"
 
 # Build and run the update tool
 ARGS=("--project" "$GCP_PROJECT")

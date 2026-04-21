@@ -96,11 +96,11 @@ Artifact bucket:
 
 Queue:
 
-- `nv-horizon-agentmesh`
+- `agentmesh`
 
 Cloud Run service:
 
-- `nv-horizon-agentmesh`
+- `agentmesh`
 
 ## Built-In Mesh Agents
 

@@ -156,7 +156,7 @@ func main() {
 			ctx,
 			*projectID,
 			envOr("AGENTMESH_TASKS_LOCATION", "us-central1"),
-			envOr("AGENTMESH_TASKS_QUEUE", "nv-horizon-agentmesh"),
+			envOr("AGENTMESH_TASKS_QUEUE", "agentmesh"),
 			taskTargetURL,
 			taskOIDCSA,
 			envOr("AGENTMESH_TASKS_OIDC_AUDIENCE", ""),

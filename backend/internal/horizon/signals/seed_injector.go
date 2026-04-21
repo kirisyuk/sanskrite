@@ -1607,7 +1607,7 @@ func (s *SeedInjector) resolveByVertexEdgeSearch(ctx context.Context, path strin
 	if s == nil || s.vertexSearch == nil || req == nil {
 		return ""
 	}
-	edgeDS := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID"))
+	edgeDS := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_EDGE_DATA_STORE_ID"))
 	if edgeDS == "" {
 		edgeDS = strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_EDGES_DATA_STORE_ID"))
 	}

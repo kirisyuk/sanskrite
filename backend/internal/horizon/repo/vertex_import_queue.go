@@ -16,9 +16,9 @@ import (
 )
 
 const (
-	DefaultVertexImportIntentTopic        = "nv_horizon.vertex.imports"
-	DefaultVertexImportIntentSubscription = "nv_horizon.vertex.imports.worker"
-	DefaultVertexImportIntentDLQTopic     = "nv_horizon.vertex.imports.dlq"
+	DefaultVertexImportIntentTopic        = "horizon.vertex.imports"
+	DefaultVertexImportIntentSubscription = "horizon.vertex.imports.worker"
+	DefaultVertexImportIntentDLQTopic     = "horizon.vertex.imports.dlq"
 )
 
 type VertexImportIntent struct {

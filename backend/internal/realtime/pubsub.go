@@ -47,19 +47,18 @@ const (
 	// Verified URL analysis streaming: all events go to a single topic for ordering
 	EventVerifiedStream EventType = "verified.stream"
 	// Horizon events namespace (graph/lens/scout/propagation assembly)
-	// Both "horizon.*" and any legacy "nv-horizon.*" event types route to the Horizon topic.
 )
 
-// Aggregated Pub/Sub topic names for the nv-horizon broker
+// Aggregated Pub/Sub topic names for the Horizon WS broker
 const (
-	TopicGenAIStreams      = "nv_horizon.genai.streams"
-	TopicDiscoveryEvents   = "nv_horizon.discovery.events"
-	TopicArtifactEvents    = "nv_horizon.artifact.events"
-	TopicInteractionEvents = "nv_horizon.interaction.events"
-	TopicAnalysisEvents    = "nv_horizon.analysis.events"
-	TopicVerifiedStreams   = "nv_horizon.verified.streams"
-	TopicHorizonEvents     = "nv_horizon.horizon.events"
-	TopicOperationsEvents  = "nv_horizon.operations.events"
+	TopicGenAIStreams      = "horizon.genai.streams"
+	TopicDiscoveryEvents   = "horizon.discovery.events"
+	TopicArtifactEvents    = "horizon.artifact.events"
+	TopicInteractionEvents = "horizon.interaction.events"
+	TopicAnalysisEvents    = "horizon.analysis.events"
+	TopicVerifiedStreams   = "horizon.verified.streams"
+	TopicHorizonEvents       = "horizon.core.events"
+	TopicOperationsEvents  = "horizon.operations.events"
 	TopicSourcePoll        = "source.poll"
 )
 
@@ -245,7 +244,7 @@ func (p *Publisher) Client() *pubsub.Client { return p.client }
 
 func routeTopicName(et EventType) string {
 	switch {
-	case strings.HasPrefix(string(et), "nv-horizon.") || strings.HasPrefix(string(et), "horizon."):
+	case strings.HasPrefix(string(et), "horizon."):
 		return TopicHorizonEvents
 	case genaiStreamEventTypes[et] || strings.HasPrefix(string(et), "genai.stream."):
 		return TopicGenAIStreams

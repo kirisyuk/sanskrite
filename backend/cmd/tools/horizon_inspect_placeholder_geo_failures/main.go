@@ -25,7 +25,7 @@ type row struct{ Type, Path, Label, Place, Query, Resolved, Formatted, Why strin
 
 func main() {
 	ctx := context.Background()
-	project := flag.String("project", first(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "project")
+	project := flag.String("project", first(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "prevalent-horizon-test"), "project")
 	limit := flag.Int("limit", 30, "max rows")
 	flag.Parse()
 	if key := gcp.GetEnvOrSecret(ctx, strings.TrimSpace(*project), "GOOGLE_MAPS_API_KEY", "google_maps_api_key"); key != "" && strings.TrimSpace(os.Getenv("GOOGLE_MAPS_API_KEY")) == "" {

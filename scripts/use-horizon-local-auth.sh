@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Local auth helper for nv-horizon without service-account keys.
+# Local auth helper for prevalent-horizon-test without service-account keys.
 # Uses gcloud ADC JSON at the standard location.
 
-PROJECT_ID="${GCP_PROJECT_ID:-nv-horizon}"
+PROJECT_ID="${GCP_PROJECT_ID:-prevalent-horizon-test}"
 ADC_PATH="${GOOGLE_APPLICATION_CREDENTIALS:-$HOME/.config/gcloud/application_default_credentials.json}"
 
 if [[ ! -f "$ADC_PATH" ]]; then
@@ -29,5 +29,5 @@ echo "  FIREBASE_AUTH_PROJECT_ID=$FIREBASE_AUTH_PROJECT_ID"
 echo "  GOOGLE_APPLICATION_CREDENTIALS=$GOOGLE_APPLICATION_CREDENTIALS"
 echo
 echo "Usage:"
-echo "  source scripts/use-nv-horizon-local-auth.sh"
-echo "  scripts/use-nv-horizon-local-auth.sh go run ./backend/cmd/server"
+echo "  source scripts/use-horizon-local-auth.sh"
+echo "  scripts/use-horizon-local-auth.sh go run ./backend/cmd/server"

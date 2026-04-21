@@ -378,7 +378,7 @@ func (s *HorizonService) SearchFragments(ctx context.Context, query string, limi
 			log.Printf("[SearchFragments] Loaded %d fragment hits from node datastore", len(vertexFragments))
 		}
 
-		edgeDS := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID"))
+		edgeDS := strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_EDGE_DATA_STORE_ID"))
 		if edgeDS == "" {
 			edgeDS = strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_EDGES_DATA_STORE_ID"))
 		}

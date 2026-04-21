@@ -4,9 +4,9 @@
 
 set -euo pipefail
 
-PROJECT="${PROJECT:-nv-horizon}"
-BUCKET="${BUCKET:-nv-horizon-fragments}"
-DATA_STORE_ID="${DATA_STORE_ID:-nv-horizon-fragments-store}"
+PROJECT="${PROJECT:-prevalent-horizon-test}"
+BUCKET="${BUCKET:-prevalent-horizon-test-fragments}"
+DATA_STORE_ID="${DATA_STORE_ID:-prevalent-horizon-test-fragments-store}"
 TENANT="${TENANT:-global}"
 BATCH_SIZE="${BATCH_SIZE:-100}"
 START_BATCH="${START_BATCH:-}"

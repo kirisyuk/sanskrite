@@ -12,7 +12,7 @@ BLUE='\033[0;34m'
 NC='\033[0m'
 
 # Configuration
-API_URL="${API_URL:-$(gcloud run services describe api --region=us-central1 --project=nv-horizon --format='value(status.url)' 2>/dev/null || echo "")}"
+API_URL="${API_URL:-$(gcloud run services describe api --region=us-central1 --project=prevalent-horizon-test --format='value(status.url)' 2>/dev/null || echo "")}"
 TEST_QUERY="${TEST_QUERY:-latest news about AI}"
 
 if [[ -z "$API_URL" ]]; then

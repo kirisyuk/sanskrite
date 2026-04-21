@@ -11,7 +11,7 @@ SELECT
   content_type,
   size,
   last_modified
-FROM `nv-horizon.nv_horizon_documents.documents_object_table`
+FROM `prevalent-horizon-test.horizon_documents.documents_object_table`
 WHERE uri LIKE '%tenant123%'
 LIMIT 10;
 
@@ -21,7 +21,7 @@ SELECT
   content_type,
   size,
   last_modified
-FROM `nv-horizon.nv_horizon_documents.core_docs_text_table`
+FROM `prevalent-horizon-test.horizon_documents.core_docs_text_table`
 WHERE uri LIKE '%.md' OR uri LIKE '%.txt'
 LIMIT 10;
 
@@ -29,7 +29,7 @@ LIMIT 10;
 SELECT 
   uri,
   JSON_EXTRACT_SCALAR(data, '$.decisions') as decisions_data
-FROM `nv-horizon.nv_horizon_documents.core_docs_json_table`
+FROM `prevalent-horizon-test.horizon_documents.core_docs_json_table`
 WHERE uri LIKE '%decisions.json'
 LIMIT 10;
 
@@ -40,7 +40,7 @@ SELECT
   SUM(sizeBytes) as total_size_bytes,
   COUNT(DISTINCT tenantId) as unique_tenants,
   COUNT(DISTINCT projectId) as unique_projects
-FROM `nv-horizon.nv_horizon_documents.core_docs_metadata`
+FROM `prevalent-horizon-test.horizon_documents.core_docs_metadata`
 GROUP BY contentType
 ORDER BY count DESC;
 
@@ -50,7 +50,7 @@ SELECT
   COUNT(*) as count,
   COUNT(DISTINCT tenantId) as unique_tenants,
   COUNT(DISTINCT sourceId) as unique_sources
-FROM `nv-horizon.nv_horizon_documents.documents_metadata`
+FROM `prevalent-horizon-test.horizon_documents.documents_metadata`
 GROUP BY documentType
 ORDER BY count DESC;
 
@@ -60,7 +60,7 @@ SELECT
   COUNT(*) as count,
   COUNT(DISTINCT tenantId) as unique_tenants,
   COUNT(DISTINCT projectId) as unique_projects
-FROM `nv-horizon.nv_horizon_documents.core_docs_metadata`
+FROM `prevalent-horizon-test.horizon_documents.core_docs_metadata`
 GROUP BY contentType
 ORDER BY count DESC;
 
@@ -69,7 +69,7 @@ SELECT
   DATE(createdAt) as date,
   COUNT(*) as documents_created,
   COUNT(DISTINCT tenantId) as active_tenants
-FROM `nv-horizon.nv_horizon_documents.documents_metadata`
+FROM `prevalent-horizon-test.horizon_documents.documents_metadata`
 WHERE createdAt >= DATE_SUB(CURRENT_DATE(), INTERVAL 30 DAY)
 GROUP BY date
 ORDER BY date DESC;
@@ -85,8 +85,8 @@ SELECT
   COUNT(d.id) as documents_count,
   COUNT(DISTINCT d.sourceId) as sources_count,
   ARRAY_AGG(DISTINCT d.documentType) as document_types
-FROM `nv-horizon.projects.projects` p
-JOIN `nv-horizon.nv_horizon_documents.documents_metadata` d 
+FROM `prevalent-horizon-test.projects.projects` p
+JOIN `prevalent-horizon-test.horizon_documents.documents_metadata` d 
   ON d.projectId = p.id
 GROUP BY p.name
 ORDER BY documents_count DESC;
@@ -106,15 +106,15 @@ WITH document_analysis AS (
     m.storagePath,
     -- Вызов Vertex AI для анализа контента
     ML.GENERATE_TEXT(
-      MODEL `nv-horizon.nv_horizon_documents.gemini_model`,
+      MODEL `prevalent-horizon-test.horizon_documents.gemini_model`,
       (
         SELECT content 
-        FROM `nv-horizon.nv_horizon_documents.documents_object_table` 
+        FROM `prevalent-horizon-test.horizon_documents.documents_object_table` 
         WHERE uri = m.storagePath
       ),
       STRUCT('Extract: key entities, sentiment score (0-1), main topics' AS prompt)
     ) AS analysis_result
-  FROM `nv-horizon.nv_horizon_documents.documents_metadata` m
+  FROM `prevalent-horizon-test.horizon_documents.documents_metadata` m
   WHERE m.status = 'processed'
   LIMIT 10
 )
@@ -146,7 +146,7 @@ SELECT
   m.language,
   m.createdAt,
   m.storagePath
-FROM `nv-horizon.nv_horizon_documents.documents_metadata` m
+FROM `prevalent-horizon-test.horizon_documents.documents_metadata` m
 JOIN relevant_documents r ON r.document_id = m.id
 ORDER BY m.createdAt DESC;
 */
@@ -163,7 +163,7 @@ SELECT
   MIN(createdAt) as first_document,
   MAX(createdAt) as last_document,
   AVG(LENGTH(storagePath)) as avg_path_length
-FROM `nv-horizon.nv_horizon_documents.documents_metadata`
+FROM `prevalent-horizon-test.horizon_documents.documents_metadata`
 GROUP BY sourceId
 ORDER BY total_documents DESC;
 
@@ -173,7 +173,7 @@ SELECT
   COUNT(*) as count,
   COUNT(DISTINCT tenantId) as tenants,
   DATE_TRUNC(createdAt, MONTH) as month
-FROM `nv-horizon.nv_horizon_documents.documents_metadata`
+FROM `prevalent-horizon-test.horizon_documents.documents_metadata`
 WHERE language != ''
 GROUP BY language, month
 ORDER BY month DESC, count DESC;
@@ -184,7 +184,7 @@ SELECT
   COUNT(*) as count,
   COUNT(DISTINCT tenantId) as tenants,
   AVG(TIMESTAMP_DIFF(updatedAt, createdAt, MINUTE)) as avg_processing_minutes
-FROM `nv-horizon.nv_horizon_documents.documents_metadata`
+FROM `prevalent-horizon-test.horizon_documents.documents_metadata`
 GROUP BY status
 ORDER BY count DESC;
 
@@ -194,7 +194,7 @@ SELECT
   COUNT(*) as count,
   COUNT(DISTINCT tenantId) as tenants,
   COUNT(DISTINCT projectId) as projects
-FROM `nv-horizon.nv_horizon_documents.core_docs_metadata`
+FROM `prevalent-horizon-test.horizon_documents.core_docs_metadata`
 GROUP BY parseStatus
 ORDER BY count DESC;
 
@@ -210,8 +210,8 @@ SELECT
   m.createdAt,
   -- Извлекаем данные из JSON через Object Table
   j.data as json_content
-FROM `nv-horizon.nv_horizon_documents.core_docs_metadata` m
-JOIN `nv-horizon.nv_horizon_documents.core_docs_json_table` j
+FROM `prevalent-horizon-test.horizon_documents.core_docs_metadata` m
+JOIN `prevalent-horizon-test.horizon_documents.core_docs_json_table` j
   ON j.uri = REPLACE(m.storagePath, 'gs://', '')
 WHERE m.contentType = 'application/json'
   AND m.filename LIKE '%.json'
@@ -225,8 +225,8 @@ SELECT
   m.createdAt,
   -- Читаем контент из Object Table
   t.data as text_content
-FROM `nv-horizon.nv_horizon_documents.core_docs_metadata` m
-JOIN `nv-horizon.nv_horizon_documents.core_docs_text_table` t
+FROM `prevalent-horizon-test.horizon_documents.core_docs_metadata` m
+JOIN `prevalent-horizon-test.horizon_documents.core_docs_text_table` t
   ON t.uri = REPLACE(m.storagePath, 'gs://', '')
 WHERE m.contentType LIKE 'text/%'
 LIMIT 10;
@@ -237,7 +237,7 @@ WITH rag_stats AS (
     tenantId,
     COUNT(*) as rag_count,
     COUNT(DISTINCT sourceId) as rag_sources
-  FROM `nv-horizon.nv_horizon_documents.documents_metadata`
+  FROM `prevalent-horizon-test.horizon_documents.documents_metadata`
   GROUP BY tenantId
 ),
 core_stats AS (
@@ -245,7 +245,7 @@ core_stats AS (
     tenantId,
     COUNT(*) as core_count,
     COUNT(DISTINCT projectId) as core_projects
-  FROM `nv-horizon.nv_horizon_documents.core_docs_metadata`
+  FROM `prevalent-horizon-test.horizon_documents.core_docs_metadata`
   GROUP BY tenantId
 )
 SELECT 

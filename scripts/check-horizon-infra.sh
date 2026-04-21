@@ -62,8 +62,8 @@ fi
 
 # Проверка Data Store (через REST API, т.к. gcloud discovery-engine может быть недоступен)
 DATA_STORE_ID="${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store}"
-FRAGMENTS_DS_ID="${VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID:-nv-horizon-fragments-store}"
-EDGES_DS_ID="${VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID:-nv-horizon-edges-store}"
+FRAGMENTS_DS_ID="${VERTEX_SEARCH_HORIZON_DATA_STORE_ID:-prevalent-horizon-test-fragments-store}"
+EDGES_DS_ID="${VERTEX_SEARCH_HORIZON_EDGE_DATA_STORE_ID:-prevalent-horizon-test-edges-store}"
 LOCATION="${VERTEX_SEARCH_LOCATION:-global}"
 ACCESS_TOKEN="$(gcloud auth print-access-token 2>/dev/null || true)"
 if [ -z "$ACCESS_TOKEN" ]; then
@@ -102,7 +102,7 @@ fi
 echo ""
 echo "4. Проверка Pub/Sub топиков..."
 # Проверка основных топиков (агрегированные создаются автоматически)
-REQUIRED_TOPICS=("source.poll" "nv_horizon.operations.events" "nv_horizon.interaction.events" "nv_horizon.horizon.events")
+REQUIRED_TOPICS=("source.poll" "horizon.operations.events" "horizon.interaction.events" "horizon.core.events")
 for topic in "${REQUIRED_TOPICS[@]}"; do
   if gcloud pubsub topics describe "$topic" --format="value(name)" 2>/dev/null | grep -q "$topic"; then
     check "Топик существует: $topic"
@@ -114,12 +114,12 @@ done
 echo ""
 echo "4.1 Проверка Pub/Sub подписок для ws..."
 # Подписка имеет фиксированный нейминг: <topic>-ws-broker
-REQUIRED_SUBS=("nv_horizon.horizon.events-ws-broker")
+REQUIRED_SUBS=("horizon.core.events-ws-broker")
 for sub in "${REQUIRED_SUBS[@]}"; do
   if gcloud pubsub subscriptions describe "$sub" --format="value(name)" 2>/dev/null | grep -q "$sub"; then
     check "Подписка существует: $sub"
   else
-    warn "Подписка не найдена: $sub (создайте: scripts/setup-nv-horizon-pubsub.sh)"
+    warn "Подписка не найдена: $sub (создайте: scripts/setup-horizon-pubsub.sh)"
   fi
 done
 
@@ -179,7 +179,7 @@ fi
 echo ""
 echo "8. Проверка Firestore Security Rules..."
 if [ -f "backend/firestore.rules" ]; then
-  if grep -q "nv-horizon\|horizon" backend/firestore.rules; then
+  if grep -q "prevalent-horizon-test\|horizon" backend/firestore.rules; then
     check "Правила для Horizon (Nordic Vision) найдены в firestore.rules"
   else
     warn "Правила для Horizon (Nordic Vision) не найдены в firestore.rules (добавьте правила для коллекций horizon_*)"

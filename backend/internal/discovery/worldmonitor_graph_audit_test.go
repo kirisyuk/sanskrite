@@ -62,7 +62,7 @@ func TestLiveRSSGraphTailAudit(t *testing.T) {
 	projectID := firstNonEmptyString(
 		strings.TrimSpace(os.Getenv("GCP_PROJECT_ID")),
 		strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT")),
-		"nv-horizon",
+		"prevalent-horizon-test",
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -317,7 +317,7 @@ func TestLiveHistoricalConcreteIncidentPropagationAudit(t *testing.T) {
 	projectID := firstNonEmptyString(
 		strings.TrimSpace(os.Getenv("GCP_PROJECT_ID")),
 		strings.TrimSpace(os.Getenv("GOOGLE_CLOUD_PROJECT")),
-		"nv-horizon",
+		"prevalent-horizon-test",
 	)
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Minute)
 	defer cancel()
@@ -679,7 +679,7 @@ func splitCSVLower(raw string) []string {
 func newAuditVertexClient(projectID string) *ai.VertexAISearchClient {
 	dataStoreID := firstNonEmptyString(
 		strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID")),
-		strings.TrimSpace(os.Getenv("VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID")),
+		strings.TrimSpace(os.Getenv("VERTEX_SEARCH_HORIZON_DATA_STORE_ID")),
 		strings.TrimSpace(os.Getenv("VERTEX_SEARCH_DATA_STORE_ID")),
 	)
 	if dataStoreID == "" && strings.TrimSpace(projectID) != "" {

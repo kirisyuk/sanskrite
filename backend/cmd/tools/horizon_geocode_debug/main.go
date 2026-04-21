@@ -15,7 +15,7 @@ import (
 
 func main() {
 	ctx := context.Background()
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "prevalent-horizon-test"), "GCP project id")
 	queriesRaw := flag.String("queries", "", "semicolon-separated geocoding queries")
 	flag.Parse()
 

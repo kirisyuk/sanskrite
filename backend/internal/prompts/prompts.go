@@ -3,7 +3,7 @@ package prompts
 import "strings"
 
 // SourceProfilingPrompt defines a STRICT JSON contract aligned with the legacy
-// SourceProfileDataDto (see temp-repos/nv-horizon-backend/web/src/types/dto.ts lines ~784+).
+// SourceProfileDataDto (see the AgentHorde submodule web DTO types for historical alignment).
 // The model MUST return exactly one JSON object that conforms to this schema.
 const SourceProfilingPrompt = `You are an expert media analyst. Analyze this source content and produce a STRICT JSON object following the schema below. Do NOT include any explanations or markdown. Output ONE JSON object only.
 

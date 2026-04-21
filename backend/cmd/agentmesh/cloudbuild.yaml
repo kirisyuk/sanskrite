@@ -5,20 +5,20 @@ steps:
       - '-f'
       - 'cmd/agentmesh/Dockerfile'
       - '-t'
-      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/nv-horizon-agentmesh:${_IMAGE_TAG}'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/agentmesh:${_IMAGE_TAG}'
       - '-t'
-      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/nv-horizon-agentmesh:latest'
+      - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/agentmesh:latest'
       - '.'
 
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/nv-horizon-agentmesh:${_IMAGE_TAG}']
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/agentmesh:${_IMAGE_TAG}']
 
   - name: 'gcr.io/cloud-builders/docker'
-    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/nv-horizon-agentmesh:latest']
+    args: ['push', 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/agentmesh:latest']
 
 images:
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/nv-horizon-agentmesh:${_IMAGE_TAG}'
-  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/nv-horizon-agentmesh:latest'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/agentmesh:${_IMAGE_TAG}'
+  - 'us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/agentmesh:latest'
 
 options:
   machineType: 'E2_HIGHCPU_8'

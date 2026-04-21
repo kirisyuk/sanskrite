@@ -2,12 +2,12 @@
 set -euo pipefail
 
 # Скрипт для проверки и тестирования Vertex AI Search
-# Использование: ./scripts/test-vertex-search.sh [-p|--project nv-horizon]
+# Использование: ./scripts/test-vertex-search.sh [-p|--project prevalent-horizon-test]
 
-PROJECT="nv-horizon"
+PROJECT="prevalent-horizon-test"
 DATA_STORE_ID="rag-documents-store"
 LOCATION="global"
-BUCKET="nv-horizon-rag-documents"
+BUCKET="prevalent-horizon-test-rag-documents"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

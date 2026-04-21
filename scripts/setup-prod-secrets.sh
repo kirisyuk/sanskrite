@@ -5,9 +5,9 @@ set -euo pipefail
 #   export ANTHROPIC_API_KEY=...
 #   export DEEPSEEK_API_KEY=...
 #   export TAVILY_API_KEY=...
-#   ./scripts/setup-prod-secrets.sh [-p|--project nv-horizon]
+#   ./scripts/setup-prod-secrets.sh [-p|--project prevalent-horizon-test]
 
-PROJECT="nv-horizon"
+PROJECT="prevalent-horizon-test"
 while [[ $# -gt 0 ]]; do
   case "$1" in
     -p|--project)
@@ -31,7 +31,7 @@ create_if_missing() {
     return 0
   fi
   gcloud secrets create "$name" --replication-policy=automatic \
-    --labels=environment=prod,owner=nv-horizon >/dev/null
+    --labels=environment=prod,owner=prevalent-horizon-test >/dev/null
 }
 
 add_version() {

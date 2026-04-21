@@ -24,9 +24,9 @@ DEPLOY_TOPICS=(
   artifact.generation.completed artifact.generation.error
   analysis.status agent.update
   interaction.created interaction.updated verified.stream
-  nv_horizon.genai.streams nv_horizon.discovery.events nv_horizon.artifact.events
-  nv_horizon.interaction.events nv_horizon.analysis.events nv_horizon.verified.streams
-  nv_horizon.horizon.events nv_horizon.operations.events source.poll
+  horizon.genai.streams horizon.discovery.events horizon.artifact.events
+  horizon.interaction.events horizon.analysis.events horizon.verified.streams
+  horizon.core.events horizon.operations.events source.poll
 )
 
 echo "--- Pub/Sub Topics (есть в GCP, нет в deploy) ---"
@@ -43,11 +43,11 @@ done
 # --- Pub/Sub Subscriptions ---
 # Deploy создаёт: ws (agg_topics), worker subs.
 DEPLOY_SUBS=(
-  "nv_horizon.genai.streams-ws-broker" "nv_horizon.discovery.events-ws-broker" "nv_horizon.artifact.events-ws-broker"
-  "nv_horizon.interaction.events-ws-broker" "nv_horizon.analysis.events-ws-broker" "nv_horizon.verified.streams-ws-broker"
-  "nv_horizon.horizon.events-ws-broker" "nv_horizon.operations.events-ws-broker" "source.poll-ws-broker"
+  "horizon.genai.streams-ws-broker" "horizon.discovery.events-ws-broker" "horizon.artifact.events-ws-broker"
+  "horizon.interaction.events-ws-broker" "horizon.analysis.events-ws-broker" "horizon.verified.streams-ws-broker"
+  "horizon.core.events-ws-broker" "horizon.operations.events-ws-broker" "source.poll-ws-broker"
   "source.poll.worker" "source.poll.due.worker" "ground.refresh.worker"
-  "nv_horizon.operations.events.worker" "nv_horizon.artifact.events.document-processor.worker"
+  "horizon.operations.events.worker" "horizon.artifact.events.document-processor.worker"
   "chat.ontology.process.worker"
 )
 
@@ -88,7 +88,7 @@ done
 
 # --- Cloud Tasks Queues: deploy creates ---
 DEPLOY_QUEUES=(
-  nv-horizon-scout nv-horizon-profile-refresh nv-horizon-risk
+  prevalent-horizon-test-scout prevalent-horizon-test-profile-refresh prevalent-horizon-test-risk
 )
 
 echo ""
@@ -106,7 +106,7 @@ done
 DEPLOY_BUCKETS=(
   "${PROJECT_ID}-core-docs"
   "${PROJECT_ID}-rag-documents"
-  "${PROJECT_ID}-nv-horizon-fragments"
+  "${PROJECT_ID}-prevalent-horizon-test-fragments"
   "${PROJECT_ID}-web-static"  # only if CREATE_WEB_STATIC_BUCKET=1
 )
 
@@ -128,8 +128,8 @@ done
 
 # --- Cloud Scheduler Jobs: deploy creates ---
 DEPLOY_JOBS=(
-  nv-horizon-source-poller nv-horizon-artifact-scheduler subscription-billing-daily
-  nv-horizon-watchdog  # only with --nv-horizon-watchdog
+  prevalent-horizon-test-source-poller prevalent-horizon-test-artifact-scheduler subscription-billing-daily
+  prevalent-horizon-test-watchdog  # only with --prevalent-horizon-test-watchdog
 )
 
 echo ""

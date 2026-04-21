@@ -25,7 +25,7 @@ import (
 )
 
 var (
-	projectID = flag.String("project", "nv-horizon", "GCP project ID")
+	projectID = flag.String("project", "prevalent-horizon-test", "GCP project ID")
 	limit     = flag.Int("limit", 0, "Max zones to audit (0 = all)")
 	apply     = flag.Bool("apply", false, "Apply coordinate fixes to Firestore")
 	dryRun    = flag.Bool("dry-run", true, "Dry-run only (default: true)")

@@ -22,7 +22,7 @@ import (
 
 func main() {
 	var (
-		projectID = flag.String("project", "nv-horizon", "GCP project id")
+		projectID = flag.String("project", "prevalent-horizon-test", "GCP project id")
 		tenantID  = flag.String("tenant", "global", "tenant id")
 		limit     = flag.Int("limit", 2000, "max affected zones to scan")
 		apply     = flag.Bool("apply", false, "write updates to Firestore")

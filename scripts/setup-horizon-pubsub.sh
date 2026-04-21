@@ -18,14 +18,14 @@ SA="${PUBSUB_SERVICE_ACCOUNT:-backend@${PROJECT_ID}.iam.gserviceaccount.com}"
 
 # Агрегированные топики (используются системой realtime / ws broker)
 TOPICS=(
-  "nv_horizon.genai.streams"
-  "nv_horizon.discovery.events"
-  "nv_horizon.artifact.events"
-  "nv_horizon.interaction.events"
-  "nv_horizon.analysis.events"
-  "nv_horizon.verified.streams"
-  "nv_horizon.horizon.events"
-  "nv_horizon.operations.events"
+  "horizon.genai.streams"
+  "horizon.discovery.events"
+  "horizon.artifact.events"
+  "horizon.interaction.events"
+  "horizon.analysis.events"
+  "horizon.verified.streams"
+  "horizon.core.events"
+  "horizon.operations.events"
   "source.poll"
 )
 

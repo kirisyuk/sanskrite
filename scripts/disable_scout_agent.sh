@@ -13,7 +13,7 @@ BLUE='\033[0;34m'
 NC='\033[0m' # No Color
 
 # Параметры по умолчанию
-PROJECT_ID="${GCP_PROJECT_ID:-nv-horizon}"
+PROJECT_ID="${GCP_PROJECT_ID:-prevalent-horizon-test}"
 REGION="${GCP_REGION:-us-central1}"
 SERVICE="${CLOUD_RUN_SERVICE:-api}"
 

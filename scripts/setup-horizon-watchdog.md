@@ -97,7 +97,7 @@ Endpoint:
 #### 2. Создание/обновление Cloud Scheduler Job (через deploy)
 
 ```bash
-./scripts/deploy --api --nv-horizon-watchdog
+./scripts/deploy --api --prevalent-horizon-test-watchdog
 ```
 
 #### 3. Параметры (env vars)
@@ -121,7 +121,7 @@ gcloud functions deploy horizon-watchdog-trigger \
   --entry-point=OnWatchdogConfigChange \
   --trigger-event-filters="type=document.update" \
   --trigger-event-filters="database=(default)" \
-  --trigger-resource="projects/nv-horizon/databases/(default)/documents/horizon_watchdog_configs/{configId}" \
+  --trigger-resource="projects/prevalent-horizon-test/databases/(default)/documents/horizon_watchdog_configs/{configId}" \
   --service-account=backend@inquire-data-84889.iam.gserviceaccount.com
 ```
 

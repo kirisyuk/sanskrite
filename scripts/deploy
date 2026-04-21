@@ -18,8 +18,8 @@ TARGET_WS=0
 TARGET_VERIFIED_PROXY=0
 TARGET_CHECK_INFRA=0
 TARGET_SETUP_WS_INFRA=0
-TARGET_NV_HORIZON_WATCHDOG=0
-TARGET_NV_HORIZON_WATCHDOG_ONLY=0
+TARGET_HORIZON_WATCHDOG=0
+TARGET_HORIZON_WATCHDOG_ONLY=0
 TARGET_CLEANUP_REVISIONS=0
 TARGET_EVENT_GATE=0
 TARGET_ENTITY_EXTRACT=0
@@ -45,7 +45,7 @@ AGENTMESH_KMS_KEY="${AGENTMESH_KMS_KEY:-agentmesh-agent-card}"
 SECRET_ADMIN_JOB_TOKEN="admin_job_token"
 
 usage() {
-  echo "Usage: scripts/deploy [--web] [--api] [--py] [--event-gate] [--entity-extract] [--ws] [--verified-proxy] [--agentmesh] [--check-infra|--infra] [--nv-horizon-watchdog] [--nv-horizon-watchdog-only] [--cleanup-revisions]"
+  echo "Usage: scripts/deploy [--web] [--api] [--py] [--event-gate] [--entity-extract] [--ws] [--verified-proxy] [--agentmesh] [--check-infra|--infra] [--horizon-watchdog] [--horizon-watchdog-only] [--cleanup-revisions]"
   echo "If none specified, deploy web+api. REGION env var supported (default: us-central1)."
   echo ""
   echo "Flags:"
@@ -58,8 +58,8 @@ usage() {
   echo "  --verified-proxy Deploy verified-proxy only (skips infra checks)"
   echo "  --agentmesh     Deploy AgentMesh service and its dedicated infrastructure"
   echo "  --check-infra / --infra  Provision APIs, SA, buckets, Pub/Sub, tasks, indexes (no Cloud Run build)"
-  echo "  --nv-horizon-watchdog Ensure Cloud Scheduler job for Horizon Watchdog (calls API cron endpoint)"
-  echo "  --nv-horizon-watchdog-only Only ensure Horizon Watchdog infra/job/env (no API build/deploy)"
+  echo "  --horizon-watchdog Ensure Cloud Scheduler job for Horizon Watchdog (calls API cron endpoint)"
+  echo "  --horizon-watchdog-only Only ensure Horizon Watchdog infra/job/env (no API build/deploy)"
   echo "  --api-criticalchain Ensure CriticalChain infra (Pub/Sub topic, Scheduler job for 6h pipeline)"
   echo "  --cleanup-revisions Clean up old Cloud Run revisions (keeps last 10 per service, manual operation)"
 }
@@ -76,8 +76,8 @@ while [[ $# -gt 0 ]]; do
     --verified-proxy) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_VERIFIED_PROXY=1; TARGET_CHECK_INFRA=0 ;;
     --agentmesh) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_EVENT_GATE=0; TARGET_ENTITY_EXTRACT=0; TARGET_AGENTMESH=1; TARGET_CHECK_INFRA=0 ;;
     --check-infra|--infra) TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=1 ;;
-    --nv-horizon-watchdog) TARGET_NV_HORIZON_WATCHDOG=1 ;;
-    --nv-horizon-watchdog-only) TARGET_NV_HORIZON_WATCHDOG=1; TARGET_NV_HORIZON_WATCHDOG_ONLY=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
+    --horizon-watchdog) TARGET_HORIZON_WATCHDOG=1 ;;
+    --horizon-watchdog-only) TARGET_HORIZON_WATCHDOG=1; TARGET_HORIZON_WATCHDOG_ONLY=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
     --api-criticalchain) TARGET_CRITICALCHAIN_INFRA=1; TARGET_CHECK_INFRA=1 ;;
     --cleanup-revisions) TARGET_CLEANUP_REVISIONS=1; TARGET_WEB=0; TARGET_API=0; TARGET_PY=0; TARGET_WS=0; TARGET_VERIFIED_PROXY=0; TARGET_CHECK_INFRA=0 ;;
     -h|--help) usage; exit 0 ;;
@@ -167,7 +167,7 @@ deploy_web() {
   # Build with environment variables
   echo -e "${BLUE}[web] Building Vite app...${NC}"
   local build_env_vars=()
-  # Firebase config for nv-horizon (created via firebase apps:create WEB)
+  # Firebase config for Horizon (created via firebase apps:create WEB)
   if [[ -n "$API_BASE_URL" ]]; then
     build_env_vars+=("VITE_API_BASE_URL=$API_BASE_URL")
     echo -e "${BLUE}[web] Using API base URL for build:${NC} $API_BASE_URL"
@@ -425,9 +425,9 @@ setup_infrastructure() {
   fi
 
   # 3.2 Ensure Cloud Tasks queue for Scout exists and is configured (managed retries).
-  # NOTE: Queue name "nv-horizon-scout" may be temporarily unavailable after deletion.
-  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-nv-horizon-scout}"
-  local scout_background_queue="${CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE:-nv-horizon-scout-bg}"
+  # NOTE: Queue name "scout" may be temporarily unavailable after deletion.
+  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-scout}"
+  local scout_background_queue="${CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE:-scout-bg}"
   if gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $scout_queue"
   else
@@ -465,7 +465,7 @@ setup_infrastructure() {
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks background queue $scout_background_queue"
 
   # 3.3 Ensure Cloud Tasks queue for per-source polling exists and is configured.
-  local source_queue="${CLOUD_TASKS_SOURCE_QUEUE:-nv-horizon-source-poll}"
+  local source_queue="${CLOUD_TASKS_SOURCE_QUEUE:-source-poll}"
   if gcloud tasks queues describe "$source_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $source_queue"
   else
@@ -485,7 +485,7 @@ setup_infrastructure() {
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $source_queue (maxConcurrentDispatches=25)"
 
   # 3.4.1 Ensure Cloud Tasks queue for Profile refresh exists
-  local profile_queue="${CLOUD_TASKS_PROFILE_QUEUE:-nv-horizon-profile-refresh}"
+  local profile_queue="${CLOUD_TASKS_PROFILE_QUEUE:-profile-refresh}"
   if gcloud tasks queues describe "$profile_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $profile_queue"
   else
@@ -506,7 +506,7 @@ setup_infrastructure() {
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $profile_queue (maxConcurrentDispatches=1000)"
 
   # 3.4.2 Ensure Cloud Tasks queue for Risk pipeline exists
-  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-nv-horizon-risk}"
+  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-risk}"
   if gcloud tasks queues describe "$risk_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $risk_queue"
   else
@@ -527,7 +527,7 @@ setup_infrastructure() {
   echo -e "${GREEN}[infra] ✓${NC} Configured Cloud Tasks queue $risk_queue (maxConcurrentDispatches=100)"
 
   # 3.4.3 Ensure Cloud Tasks queue for Scope Agents exists
-  local scope_agent_queue="${CLOUD_TASKS_SCOPE_AGENT_QUEUE:-nv-horizon-scope-agents}"
+  local scope_agent_queue="${CLOUD_TASKS_SCOPE_AGENT_QUEUE:-scope-agents}"
   if gcloud tasks queues describe "$scope_agent_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${GREEN}[infra] Cloud Tasks queue exists:${NC} $scope_agent_queue"
   else
@@ -565,12 +565,12 @@ setup_infrastructure() {
   fi
   
   # 3.6.1 Ensure GCS bucket for Horizon fragments exists
-  local nv_horizon_fragments_bucket="${PROJECT_ID}-nv-horizon-fragments"
-  if gcloud storage buckets describe "gs://${nv_horizon_fragments_bucket}" >/dev/null 2>&1; then
-    echo -e "${GREEN}[infra] Horizon fragments bucket exists:${NC} gs://${nv_horizon_fragments_bucket}"
+  local horizon_fragments_bucket="${PROJECT_ID}-fragments"
+  if gcloud storage buckets describe "gs://${horizon_fragments_bucket}" >/dev/null 2>&1; then
+    echo -e "${GREEN}[infra] Horizon fragments bucket exists:${NC} gs://${horizon_fragments_bucket}"
   else
-    gcloud storage buckets create "gs://${nv_horizon_fragments_bucket}" --location=US --uniform-bucket-level-access
-    echo -e "${GREEN}[infra] Created Horizon fragments bucket:${NC} gs://${nv_horizon_fragments_bucket}"
+    gcloud storage buckets create "gs://${horizon_fragments_bucket}" --location=US --uniform-bucket-level-access
+    echo -e "${GREEN}[infra] Created Horizon fragments bucket:${NC} gs://${horizon_fragments_bucket}"
   fi
   
   # 3.6.2 Ensure GCS bucket for web static files exists (optional, may be created by Firebase Hosting)
@@ -684,10 +684,10 @@ setup_infrastructure() {
     # service-accounts describe` even after service identity creation. Attempt
     # the grants directly and warn only on actual binding failures.
     grant_bucket_viewer_access "$rag_docs_bucket" "$VERTEX_AI_SA" "Vertex AI SA"
-    grant_bucket_viewer_access "$nv_horizon_fragments_bucket" "$VERTEX_AI_SA" "Vertex AI SA"
+    grant_bucket_viewer_access "$horizon_fragments_bucket" "$VERTEX_AI_SA" "Vertex AI SA"
 
     grant_bucket_viewer_access "$rag_docs_bucket" "$DISCOVERY_ENGINE_SA" "Discovery Engine SA"
-    grant_bucket_viewer_access "$nv_horizon_fragments_bucket" "$DISCOVERY_ENGINE_SA" "Discovery Engine SA"
+    grant_bucket_viewer_access "$horizon_fragments_bucket" "$DISCOVERY_ENGINE_SA" "Discovery Engine SA"
     # Discovery Engine import jobs can request temporary bucket creation in the project.
     # Without storage.buckets.create, imports fail with PERMISSION_DENIED.
     gcloud projects add-iam-policy-binding "$PROJECT_ID" \
@@ -719,10 +719,10 @@ setup_infrastructure() {
   local datastore_id=""
   local rag_datastore_id="rag-documents-store"
   local rag_datastore_display_name="${VERTEX_SEARCH_DATA_STORE_DISPLAY_NAME:-RAG Documents Store}"
-  local nv_horizon_fragments_datastore_id="${VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID:-nv-horizon-fragments-store}"
-  local nv_horizon_fragments_display_name="${VERTEX_SEARCH_NV_HORIZON_DATA_STORE_DISPLAY_NAME:-Horizon Fragments Store}"
-  local nv_horizon_edges_datastore_id="${VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID:-nv-horizon-edges-store}"
-  local nv_horizon_edges_display_name="${VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_DISPLAY_NAME:-Horizon Edges Store}"
+  local horizon_fragments_datastore_id="${VERTEX_SEARCH_HORIZON_DATA_STORE_ID:-horizon-fragments}"
+  local horizon_fragments_display_name="${VERTEX_SEARCH_HORIZON_DATA_STORE_DISPLAY_NAME:-Horizon Fragments Store}"
+  local horizon_edges_datastore_id="${VERTEX_SEARCH_HORIZON_EDGE_DATA_STORE_ID:-horizon-edges-store}"
+  local horizon_edges_display_name="${VERTEX_SEARCH_HORIZON_EDGE_DATA_STORE_DISPLAY_NAME:-Horizon Edges Store}"
   local discovery_base_url="https://discoveryengine.googleapis.com/v1beta/projects/${PROJECT_ID}/locations/global/collections/default_collection/dataStores"
   local access_token
   access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || echo "")
@@ -784,8 +784,8 @@ setup_infrastructure() {
   if ensure_vertex_datastore "$rag_datastore_id" "$rag_datastore_display_name"; then
     datastore_id="$rag_datastore_id"
   fi
-  ensure_vertex_datastore "$nv_horizon_fragments_datastore_id" "$nv_horizon_fragments_display_name" || true
-  ensure_vertex_datastore "$nv_horizon_edges_datastore_id" "$nv_horizon_edges_display_name" || true
+  ensure_vertex_datastore "$horizon_fragments_datastore_id" "$horizon_fragments_display_name" || true
+  ensure_vertex_datastore "$horizon_edges_datastore_id" "$horizon_edges_display_name" || true
 
   # Import documents from GCS into RAG Data Store (best-effort).
   if [[ -n "$datastore_id" && -n "$access_token" ]]; then
@@ -821,9 +821,9 @@ setup_infrastructure() {
   if [[ -n "$datastore_id" ]]; then
     echo -e "${BLUE}[infra] Updating Cloud Run service with Vertex Search Data Store IDs...${NC}"
     local api_max_instances="${API_CLOUD_RUN_MAX_INSTANCES:-6}"
-    local vertex_import_topic="${VERTEX_IMPORT_INTENTS_TOPIC:-nv_horizon.vertex.imports}"
-    local vertex_import_sub="${VERTEX_IMPORT_INTENTS_SUBSCRIPTION:-nv_horizon.vertex.imports.worker}"
-    local vertex_import_dlq_topic="${VERTEX_IMPORT_INTENTS_DLQ_TOPIC:-nv_horizon.vertex.imports.dlq}"
+    local vertex_import_topic="${VERTEX_IMPORT_INTENTS_TOPIC:-horizon.vertex.imports}"
+    local vertex_import_sub="${VERTEX_IMPORT_INTENTS_SUBSCRIPTION:-horizon.vertex.imports.worker}"
+    local vertex_import_dlq_topic="${VERTEX_IMPORT_INTENTS_DLQ_TOPIC:-horizon.vertex.imports.dlq}"
     local vertex_sync_base_imports_per_minute="${VERTEX_SYNC_BASE_IMPORTS_PER_MINUTE:-$(( api_max_instances > 0 ? api_max_instances * 2 : 6 ))}"
     local vertex_sync_max_imports_per_minute="${VERTEX_SYNC_MAX_IMPORTS_PER_MINUTE:-$(( vertex_sync_base_imports_per_minute * 2 ))}"
     local vertex_sync_base_inflight_imports="${VERTEX_SYNC_BASE_INFLIGHT_IMPORTS:-$(( api_max_instances > 0 ? api_max_instances : 2 ))}"
@@ -831,7 +831,7 @@ setup_infrastructure() {
     local vertex_sync_target_pending_lro="${VERTEX_SYNC_TARGET_PENDING_LRO:-$vertex_sync_base_inflight_imports}"
     if gcloud run services describe api --region="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
       gcloud run services update api --region="$REGION" --project="$PROJECT_ID" \
-        --update-env-vars "VERTEX_SEARCH_DATA_STORE_ID=$datastore_id,VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID=$nv_horizon_fragments_datastore_id,VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID=$nv_horizon_edges_datastore_id,VERTEX_IMPORT_INTENTS_TOPIC=$vertex_import_topic,VERTEX_IMPORT_INTENTS_SUBSCRIPTION=$vertex_import_sub,VERTEX_IMPORT_INTENTS_DLQ_TOPIC=$vertex_import_dlq_topic,VERTEX_SYNC_BASE_IMPORTS_PER_MINUTE=$vertex_sync_base_imports_per_minute,VERTEX_SYNC_MAX_IMPORTS_PER_MINUTE=$vertex_sync_max_imports_per_minute,VERTEX_SYNC_BASE_INFLIGHT_IMPORTS=$vertex_sync_base_inflight_imports,VERTEX_SYNC_MAX_INFLIGHT_IMPORTS=$vertex_sync_max_inflight_imports,VERTEX_SYNC_TARGET_PENDING_LRO=$vertex_sync_target_pending_lro,VERTEX_SYNC_ENABLE_ADAPTIVE_THROTTLE=${VERTEX_SYNC_ENABLE_ADAPTIVE_THROTTLE:-1}" \
+        --update-env-vars "VERTEX_SEARCH_DATA_STORE_ID=$datastore_id,VERTEX_SEARCH_HORIZON_DATA_STORE_ID=$horizon_fragments_datastore_id,VERTEX_SEARCH_HORIZON_EDGE_DATA_STORE_ID=$horizon_edges_datastore_id,VERTEX_IMPORT_INTENTS_TOPIC=$vertex_import_topic,VERTEX_IMPORT_INTENTS_SUBSCRIPTION=$vertex_import_sub,VERTEX_IMPORT_INTENTS_DLQ_TOPIC=$vertex_import_dlq_topic,VERTEX_SYNC_BASE_IMPORTS_PER_MINUTE=$vertex_sync_base_imports_per_minute,VERTEX_SYNC_MAX_IMPORTS_PER_MINUTE=$vertex_sync_max_imports_per_minute,VERTEX_SYNC_BASE_INFLIGHT_IMPORTS=$vertex_sync_base_inflight_imports,VERTEX_SYNC_MAX_INFLIGHT_IMPORTS=$vertex_sync_max_inflight_imports,VERTEX_SYNC_TARGET_PENDING_LRO=$vertex_sync_target_pending_lro,VERTEX_SYNC_ENABLE_ADAPTIVE_THROTTLE=${VERTEX_SYNC_ENABLE_ADAPTIVE_THROTTLE:-1}" \
         --quiet >/dev/null 2>&1 && \
         echo -e "${GREEN}[infra] Updated Cloud Run with Vertex Search + durable import env${NC}" || \
         echo -e "${YELLOW}[infra] Warning: Failed to update Cloud Run service (may need manual update)${NC}"
@@ -999,7 +999,7 @@ setup_infrastructure() {
   
   # 3.9 Setup Redis (Memorystore)
   echo -e "${BLUE}[infra] Setting up Redis (Memorystore)...${NC}"
-  local redis_instance="${REDIS_INSTANCE_NAME:-nv-horizon-redis-psa}"
+  local redis_instance="${REDIS_INSTANCE_NAME:-horizon-redis-psa}"
   local redis_tier="BASIC"
   local redis_size="1"
   # Use lowercase value expected by gcloud: redis_7_0
@@ -1116,7 +1116,7 @@ setup_infrastructure() {
 
   local api_vpc_network="${API_VPC_NETWORK:-default}"
   local api_vpc_subnet_range="${API_VPC_SUBNET_RANGE:-10.20.0.0/26}"
-  local api_internal_firewall_rule="${API_INTERNAL_FIREWALL_RULE:-nv-horizon-run-allow-internal}"
+  local api_internal_firewall_rule="${API_INTERNAL_FIREWALL_RULE:-horizon-run-allow-internal}"
   if [[ -n "$api_vpc_subnet_range" ]]; then
     if gcloud compute firewall-rules describe "$api_internal_firewall_rule" --project "$PROJECT_ID" >/dev/null 2>&1; then
       gcloud compute firewall-rules update "$api_internal_firewall_rule" \
@@ -1163,17 +1163,17 @@ setup_infrastructure() {
     fi
   done
 
-  # 4.1 Ensure aggregated topics used by ws exist (Horizon realtime depends on nv_horizon.horizon.events)
+  # 4.1 Ensure aggregated topics used by ws exist (Horizon realtime depends on horizon.core.events)
   echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for ws...${NC}"
   agg_topics=(
-    "nv_horizon.genai.streams"
-    "nv_horizon.discovery.events"
-    "nv_horizon.artifact.events"
-    "nv_horizon.interaction.events"
-    "nv_horizon.analysis.events"
-    "nv_horizon.verified.streams"
-    "nv_horizon.horizon.events"
-    "nv_horizon.operations.events"
+    "horizon.genai.streams"
+    "horizon.discovery.events"
+    "horizon.artifact.events"
+    "horizon.interaction.events"
+    "horizon.analysis.events"
+    "horizon.verified.streams"
+    "horizon.core.events"
+    "horizon.operations.events"
   )
   for topic in "${agg_topics[@]}"; do
     if ! gcloud pubsub topics describe "$topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -1215,8 +1215,8 @@ setup_infrastructure() {
   echo -e "${BLUE}[infra] Ensuring Pub/Sub worker subscriptions...${NC}"
   local worker_subs=(
     "ground.refresh:ground.refresh.worker"
-    "nv_horizon.operations.events:nv_horizon.operations.events.worker"
-    "nv_horizon.artifact.events:nv_horizon.artifact.events.document-processor.worker"
+    "horizon.operations.events:horizon.operations.events.worker"
+    "horizon.artifact.events:horizon.artifact.events.document-processor.worker"
     "chat.ontology.process:chat.ontology.process.worker"
   )
   for pair in "${worker_subs[@]}"; do
@@ -1236,9 +1236,9 @@ setup_infrastructure() {
   done
 
   echo -e "${BLUE}[infra] Ensuring durable Vertex import Pub/Sub...${NC}"
-  local vertex_import_topic="${VERTEX_IMPORT_INTENTS_TOPIC:-nv_horizon.vertex.imports}"
-  local vertex_import_sub="${VERTEX_IMPORT_INTENTS_SUBSCRIPTION:-nv_horizon.vertex.imports.worker}"
-  local vertex_import_dlq_topic="${VERTEX_IMPORT_INTENTS_DLQ_TOPIC:-nv_horizon.vertex.imports.dlq}"
+  local vertex_import_topic="${VERTEX_IMPORT_INTENTS_TOPIC:-horizon.vertex.imports}"
+  local vertex_import_sub="${VERTEX_IMPORT_INTENTS_SUBSCRIPTION:-horizon.vertex.imports.worker}"
+  local vertex_import_dlq_topic="${VERTEX_IMPORT_INTENTS_DLQ_TOPIC:-horizon.vertex.imports.dlq}"
   local project_number
   project_number=$(gcloud projects describe "$PROJECT_ID" --format="value(projectNumber)" 2>/dev/null || true)
   if ! gcloud pubsub topics describe "$vertex_import_topic" --project="$PROJECT_ID" >/dev/null 2>&1; then
@@ -1289,8 +1289,8 @@ setup_infrastructure() {
     echo -e "${GREEN}  ✓${NC} Created subscription: $vertex_import_sub"
   fi
 
-  # 5. Ensure Cloud Scheduler jobs when deploying API OR when explicitly asked (e.g. --nv-horizon-watchdog-only, --api-criticalchain)
-  if [[ "$TARGET_API" -eq 1 || "${TARGET_NV_HORIZON_WATCHDOG:-0}" -eq 1 || "${TARGET_CRITICALCHAIN_INFRA:-0}" -eq 1 ]]; then
+  # 5. Ensure Cloud Scheduler jobs when deploying API OR when explicitly asked (e.g. --horizon-watchdog-only, --api-criticalchain)
+  if [[ "$TARGET_API" -eq 1 || "${TARGET_HORIZON_WATCHDOG:-0}" -eq 1 || "${TARGET_CRITICALCHAIN_INFRA:-0}" -eq 1 ]]; then
     echo -e "${BLUE}[infra] Ensuring Cloud Scheduler jobs (optional)...${NC}"
     if gcloud services list --enabled --filter="config.name: cloudscheduler.googleapis.com" --format="value(config.name)" | grep -q cloudscheduler.googleapis.com; then
       SVC_URL=$(gcloud run services describe api --region "$REGION" --format='value(status.url)' 2>/dev/null || true)
@@ -1305,7 +1305,7 @@ setup_infrastructure() {
         fi
 
         # 5a. Source coordinator job
-        JOB_NAME="nv-horizon-source-poller"
+        JOB_NAME="source-poller"
         # Create or update a job that calls admin source coordination with header X-Job-Token
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
           gcloud scheduler jobs update http "$JOB_NAME" \
@@ -1333,7 +1333,7 @@ setup_infrastructure() {
         echo -e "${GREEN}[infra] ✓${NC} Source coordinator scheduler job ensured"
 
         # 5a1. Global canvas ingest job (focused system canvas sources -> event/signal landing).
-        JOB_NAME="nv-horizon-canvas-global"
+        JOB_NAME="horizon-canvas-global"
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
           gcloud scheduler jobs update http "$JOB_NAME" \
             --location="$REGION" \
@@ -1361,12 +1361,12 @@ setup_infrastructure() {
         fi
         echo -e "${GREEN}[infra] ✓${NC} Global canvas ingest scheduler job ensured (every 2 hours)"
 
-        JOB_NAME="nv-horizon-lens-runtime-sync"
+        JOB_NAME="horizon-lens-runtime-sync"
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
           gcloud scheduler jobs update http "$JOB_NAME" \
             --location="$REGION" \
             --schedule="15 */4 * * *" \
-            --uri="$SVC_URL/api/v1/admin/nv_horizon/lens_runtime/sync" \
+            --uri="$SVC_URL/api/v1/admin/horizon/lens_runtime/sync" \
             --http-method=POST \
             --oidc-service-account-email="$SA_BACKEND" \
             --oidc-token-audience="$SVC_URL" \
@@ -1378,7 +1378,7 @@ setup_infrastructure() {
           gcloud scheduler jobs create http "$JOB_NAME" \
             --location="$REGION" \
             --schedule="15 */4 * * *" \
-            --uri="$SVC_URL/api/v1/admin/nv_horizon/lens_runtime/sync" \
+            --uri="$SVC_URL/api/v1/admin/horizon/lens_runtime/sync" \
             --http-method=POST \
             --oidc-service-account-email="$SA_BACKEND" \
             --oidc-token-audience="$SVC_URL" \
@@ -1390,7 +1390,7 @@ setup_infrastructure() {
         echo -e "${GREEN}[infra] ✓${NC} Lens runtime sync scheduler job ensured (every 4 hours)"
         
         # 5b. Artifact scheduler job (checks for scheduled artifact updates)
-        JOB_NAME="nv-horizon-artifact-scheduler"
+        JOB_NAME="horizon-artifact-scheduler"
         # Schedule: every hour at minute 0 (e.g., 00:00, 01:00, 02:00, ...)
         # This checks all artifacts and triggers updates for those with daily/weekly schedules
         if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
@@ -1439,20 +1439,20 @@ setup_infrastructure() {
         fi
         echo -e "${GREEN}[infra] ✓${NC} Subscription billing scheduler job ensured (runs daily at 02:00 UTC)"
 
-        # 5d. Horizon Watchdog job (optional; enabled via --nv-horizon-watchdog)
-        if [[ "${TARGET_NV_HORIZON_WATCHDOG}" -eq 1 ]]; then
+        # 5d. Horizon Watchdog job (optional; enabled via --horizon-watchdog)
+        if [[ "${TARGET_HORIZON_WATCHDOG}" -eq 1 ]]; then
           echo -e "${BLUE}[infra] Ensuring Horizon Watchdog scheduler job...${NC}"
 
           # Ensure API env vars aligned with Cloud Scheduler mode
           # (disable any internal ticker if introduced later; keep knobs explicit)
           gcloud run services update api --region "$REGION" \
-            --update-env-vars "ENABLE_NV_HORIZON_WATCHDOG=1,DISABLE_NV_HORIZON_WATCHDOG_TICKER=true,NV_HORIZON_WATCHDOG_CRON_LIMIT=200,NV_HORIZON_WATCHDOG_CRON_LOCK_TTL=9m" \
+            --update-env-vars "ENABLE_HORIZON_WATCHDOG=1,DISABLE_HORIZON_WATCHDOG_TICKER=true,HORIZON_WATCHDOG_CRON_LIMIT=200,HORIZON_WATCHDOG_CRON_LOCK_TTL=9m" \
             --quiet || true
 
-          JOB_NAME="nv-horizon-watchdog"
-          WATCHDOG_LIMIT="${NV_HORIZON_WATCHDOG_CRON_LIMIT:-200}"
-          WATCHDOG_SCHEDULE="${NV_HORIZON_WATCHDOG_CRON_SCHEDULE:-*/5 * * * *}"
-          WATCHDOG_URI="$SVC_URL/api/v1/admin/nv_horizon/watchdog/run?limit=$WATCHDOG_LIMIT"
+          JOB_NAME="horizon-watchdog"
+          WATCHDOG_LIMIT="${HORIZON_WATCHDOG_CRON_LIMIT:-200}"
+          WATCHDOG_SCHEDULE="${HORIZON_WATCHDOG_CRON_SCHEDULE:-*/5 * * * *}"
+          WATCHDOG_URI="$SVC_URL/api/v1/admin/horizon/watchdog/run?limit=$WATCHDOG_LIMIT"
 
           if gcloud scheduler jobs describe "$JOB_NAME" --location="$REGION" >/dev/null 2>&1; then
             gcloud scheduler jobs update http "$JOB_NAME" \
@@ -1591,17 +1591,17 @@ deploy_api() {
   echo -e "${GREEN}[api] Go build successful locally${NC}"
 
   # Ensure Horizon fragments dedicated bucket exists (even on --api deploys that skip infra).
-  local nv_horizon_fragments_bucket="${NV_HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-nv-horizon-fragments}"
-  if gcloud storage buckets describe "gs://${nv_horizon_fragments_bucket}" --project="$PROJECT_ID" >/dev/null 2>&1; then
-    echo -e "${GREEN}[api] Horizon fragments bucket exists:${NC} gs://${nv_horizon_fragments_bucket}"
+  local horizon_fragments_bucket="${HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-fragments}"
+  if gcloud storage buckets describe "gs://${horizon_fragments_bucket}" --project="$PROJECT_ID" >/dev/null 2>&1; then
+    echo -e "${GREEN}[api] Horizon fragments bucket exists:${NC} gs://${horizon_fragments_bucket}"
   else
-    echo -e "${BLUE}[api] Creating Horizon fragments bucket:${NC} gs://${nv_horizon_fragments_bucket}"
-    gcloud storage buckets create "gs://${nv_horizon_fragments_bucket}" --location=US --uniform-bucket-level-access --project="$PROJECT_ID" || true
+    echo -e "${BLUE}[api] Creating Horizon fragments bucket:${NC} gs://${horizon_fragments_bucket}"
+    gcloud storage buckets create "gs://${horizon_fragments_bucket}" --location=US --uniform-bucket-level-access --project="$PROJECT_ID" || true
   fi
 
   # Ensure dedicated Vertex AI Search Data Stores for Horizon fragments and edges (store isolation; no filters).
-  local nv_horizon_fragments_datastore="${VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID:-nv-horizon-fragments-store}"
-  local nv_horizon_edges_datastore="${VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID:-nv-horizon-edges-store}"
+  local horizon_fragments_datastore="${VERTEX_SEARCH_HORIZON_DATA_STORE_ID:-horizon-fragments}"
+  local horizon_edges_datastore="${VERTEX_SEARCH_HORIZON_EDGE_DATA_STORE_ID:-horizon-edges-store}"
   local access_token
   access_token=$(gcloud auth print-access-token --project="$PROJECT_ID" 2>/dev/null || true)
   if [[ -n "$access_token" ]]; then
@@ -1632,16 +1632,16 @@ deploy_api() {
           \"contentConfig\": \"CONTENT_REQUIRED\"
         }" >/dev/null 2>&1 || true
     }
-    ensure_horizon_vertex_store "$nv_horizon_fragments_datastore" "Horizon Fragments Store"
-    ensure_horizon_vertex_store "$nv_horizon_edges_datastore" "Horizon Edges Store"
+    ensure_horizon_vertex_store "$horizon_fragments_datastore" "Horizon Fragments Store"
+    ensure_horizon_vertex_store "$horizon_edges_datastore" "Horizon Edges Store"
   else
     echo -e "${YELLOW}[api] Warning: cannot ensure Horizon Vertex Data Stores (no access token).${NC}"
   fi
 
   # Ensure Cloud Tasks queue exists even for --api-only deploys (managed Scout execution).
   # NOTE: default queue is v2 to avoid the "recently deleted queue" lockout.
-  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-nv-horizon-scout}"
-  local scout_background_queue="${CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE:-nv-horizon-scout-bg}"
+  local scout_queue="${CLOUD_TASKS_SCOUT_QUEUE:-scout}"
+  local scout_background_queue="${CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE:-scout-bg}"
   if ! gcloud tasks queues describe "$scout_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $scout_queue"
     gcloud tasks queues create "$scout_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
@@ -1672,7 +1672,7 @@ deploy_api() {
     --quiet >/dev/null 2>&1 || true
 
   # Ensure Cloud Tasks queue exists for per-source polling execution.
-  local source_queue="${CLOUD_TASKS_SOURCE_QUEUE:-nv-horizon-source-poll}"
+  local source_queue="${CLOUD_TASKS_SOURCE_QUEUE:-source-poll}"
   if ! gcloud tasks queues describe "$source_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $source_queue"
     gcloud tasks queues create "$source_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
@@ -1689,7 +1689,7 @@ deploy_api() {
     --quiet >/dev/null 2>&1 || true
 
   # Ensure Cloud Tasks queue exists for risk pipeline as well.
-  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-nv-horizon-risk}"
+  local risk_queue="${CLOUD_TASKS_RISK_QUEUE:-risk}"
   if ! gcloud tasks queues describe "$risk_queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     echo -e "${BLUE}[api] Creating Cloud Tasks queue:${NC} $risk_queue"
     gcloud tasks queues create "$risk_queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
@@ -1745,7 +1745,7 @@ deploy_api() {
   # Clean up any local binaries before Cloud Build (they're not needed, built in Docker)
   echo -e "${BLUE}[api] Cleaning up local build artifacts...${NC}"
   (cd "$API_DIR" && rm -f server verified-proxy ws main test-agent-orchestrator cmd/*/server cmd/*/verified-proxy cmd/*/ws cmd/*/main 2>/dev/null || true)
-  (cd "$API_DIR" && rm -f nv_horizon_* add_* check_* check-* seed_* migrate_* inspect_* purge_* geonames_* loc_* watchdog_* test_* test-* sync-* reindex-* update-* clear_* run_* find_* gemini_* openai_* 2>/dev/null || true)
+  (cd "$API_DIR" && rm -f horizon_* add_* check_* check-* seed_* migrate_* inspect_* purge_* geonames_* loc_* watchdog_* test_* test-* sync-* reindex-* update-* clear_* run_* find_* gemini_* openai_* 2>/dev/null || true)
 
   echo -e "${BLUE}[api] Ensuring Artifact Registry repo (cloud-run-source-deploy)...${NC}"
   gcloud services enable artifactregistry.googleapis.com --project="$PROJECT_ID" >/dev/null 2>&1 || true
@@ -1825,7 +1825,7 @@ deploy_api() {
   # Check if Redis exists and get connection info
   local redis_host=""
   local redis_port="6379"
-  local redis_instance="nv-horizon-redis"
+  local redis_instance="horizon-redis"
   if gcloud redis instances describe "$redis_instance" --region="$REGION" >/dev/null 2>&1; then
     redis_host=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(host)' 2>/dev/null || echo "")
     redis_port=$(gcloud redis instances describe "$redis_instance" --region="$REGION" --format='value(port)' 2>/dev/null || echo "6379")
@@ -1859,7 +1859,7 @@ deploy_api() {
     echo -e "${BLUE}[api] Found Entity Extract service:${NC} $entity_extract_url"
   fi
   local agentmesh_url="${AGENTMESH_PUBLIC_BASE_URL:-}"
-  local agentmesh_service="nv-horizon-agentmesh"
+  local agentmesh_service="agentmesh"
   if [[ -z "$agentmesh_url" ]] && gcloud run services describe "$agentmesh_service" --region="$REGION" >/dev/null 2>&1; then
     agentmesh_url=$(gcloud run services describe "$agentmesh_service" --region="$REGION" --format='value(status.url)' 2>/dev/null || echo "")
   fi
@@ -1876,14 +1876,14 @@ deploy_api() {
   local existing_nlp_env_json=""
   local existing_event_gate_mode=""
   local existing_entity_extract_mode=""
-  local existing_enable_nv_horizon_watchdog=""
+  local existing_enable_horizon_watchdog=""
   if gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then
     existing_api_url=$(gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" --format='value(status.url)' 2>/dev/null || echo "")
     existing_nlp_env_json=$(gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" --format='json(spec.template.spec.containers[0].env)' 2>/dev/null || echo "")
     if [[ -n "$existing_nlp_env_json" ]]; then
       existing_event_gate_mode=$(printf '%s' "$existing_nlp_env_json" | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="EVENT_GATE_MODE"), ""))' 2>/dev/null || echo "")
       existing_entity_extract_mode=$(printf '%s' "$existing_nlp_env_json" | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="ENTITY_EXTRACT_MODE"), ""))' 2>/dev/null || echo "")
-      existing_enable_nv_horizon_watchdog=$(printf '%s' "$existing_nlp_env_json" | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="ENABLE_NV_HORIZON_WATCHDOG"), ""))' 2>/dev/null || echo "")
+      existing_enable_horizon_watchdog=$(printf '%s' "$existing_nlp_env_json" | python3 -c 'import json,sys; env=json.load(sys.stdin); print(next((item.get("value","") for item in env if item.get("name")=="ENABLE_HORIZON_WATCHDOG"), ""))' 2>/dev/null || echo "")
     fi
   fi
   local resolved_event_gate_mode="${EVENT_GATE_MODE:-$existing_event_gate_mode}"
@@ -1893,35 +1893,35 @@ deploy_api() {
   local bigquery_dataset_id
   bigquery_dataset_id=$(echo "${PROJECT_ID}_documents" | tr '-' '_')
 
-  local enable_nv_horizon_watchdog="${ENABLE_NV_HORIZON_WATCHDOG:-$existing_enable_nv_horizon_watchdog}"
-  [[ -z "$enable_nv_horizon_watchdog" ]] && enable_nv_horizon_watchdog="0"
-  if [[ "${TARGET_NV_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
-    enable_nv_horizon_watchdog="1"
+  local enable_horizon_watchdog="${ENABLE_HORIZON_WATCHDOG:-$existing_enable_horizon_watchdog}"
+  [[ -z "$enable_horizon_watchdog" ]] && enable_horizon_watchdog="0"
+  if [[ "${TARGET_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
+    enable_horizon_watchdog="1"
   fi
   local api_cpu="${API_CLOUD_RUN_CPU:-2}"
   local api_memory="${API_CLOUD_RUN_MEMORY:-2Gi}"
   local api_concurrency="${API_CLOUD_RUN_CONCURRENCY:-16}"
   local api_min_instances="${API_CLOUD_RUN_MIN_INSTANCES:-1}"
   local api_max_instances="${API_CLOUD_RUN_MAX_INSTANCES:-6}"
-  local vertex_import_topic="${VERTEX_IMPORT_INTENTS_TOPIC:-nv_horizon.vertex.imports}"
-  local vertex_import_sub="${VERTEX_IMPORT_INTENTS_SUBSCRIPTION:-nv_horizon.vertex.imports.worker}"
-  local vertex_import_dlq_topic="${VERTEX_IMPORT_INTENTS_DLQ_TOPIC:-nv_horizon.vertex.imports.dlq}"
+  local vertex_import_topic="${VERTEX_IMPORT_INTENTS_TOPIC:-horizon.vertex.imports}"
+  local vertex_import_sub="${VERTEX_IMPORT_INTENTS_SUBSCRIPTION:-horizon.vertex.imports.worker}"
+  local vertex_import_dlq_topic="${VERTEX_IMPORT_INTENTS_DLQ_TOPIC:-horizon.vertex.imports.dlq}"
   local vertex_sync_base_imports_per_minute="${VERTEX_SYNC_BASE_IMPORTS_PER_MINUTE:-$(( api_max_instances > 0 ? api_max_instances * 2 : 6 ))}"
   local vertex_sync_max_imports_per_minute="${VERTEX_SYNC_MAX_IMPORTS_PER_MINUTE:-$(( vertex_sync_base_imports_per_minute * 2 ))}"
   local vertex_sync_base_inflight_imports="${VERTEX_SYNC_BASE_INFLIGHT_IMPORTS:-$(( api_max_instances > 0 ? api_max_instances : 2 ))}"
   local vertex_sync_max_inflight_imports="${VERTEX_SYNC_MAX_INFLIGHT_IMPORTS:-$(( vertex_sync_base_inflight_imports + 4 ))}"
   local vertex_sync_target_pending_lro="${VERTEX_SYNC_TARGET_PENDING_LRO:-$vertex_sync_base_inflight_imports}"
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://nordicvision.io|https://www.nordicvision.io|https://*.nordicvision.io|https://horizon.nordicvision.io|https://www.horizon.nordicvision.io|https://*.horizon.nordicvision.io|https://horde.vision|https://www.horde.vision|https://*.horde.vision|https://horizon.horde.vision|https://${FIREBASE_PROJECT_ID}.web.app|https://${FIREBASE_PROJECT_ID}.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,BIGQUERY_DATASET_ID=${bigquery_dataset_id},VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID=${VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID:-${vertex_search_ds_id}},VERTEX_IMPORT_INTENTS_TOPIC=${vertex_import_topic},VERTEX_IMPORT_INTENTS_SUBSCRIPTION=${vertex_import_sub},VERTEX_IMPORT_INTENTS_DLQ_TOPIC=${vertex_import_dlq_topic},VERTEX_SYNC_BASE_IMPORTS_PER_MINUTE=${vertex_sync_base_imports_per_minute},VERTEX_SYNC_MAX_IMPORTS_PER_MINUTE=${vertex_sync_max_imports_per_minute},VERTEX_SYNC_BASE_INFLIGHT_IMPORTS=${vertex_sync_base_inflight_imports},VERTEX_SYNC_MAX_INFLIGHT_IMPORTS=${vertex_sync_max_inflight_imports},VERTEX_SYNC_TARGET_PENDING_LRO=${vertex_sync_target_pending_lro},VERTEX_SYNC_ENABLE_ADAPTIVE_THROTTLE=${VERTEX_SYNC_ENABLE_ADAPTIVE_THROTTLE:-1},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE=${scout_background_queue},CLOUD_TASKS_SCOUT_BACKGROUND_DELAY=${CLOUD_TASKS_SCOUT_BACKGROUND_DELAY:-15s},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_NV_HORIZON_WATCHDOG=${enable_nv_horizon_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://horizon.horde.vision/subscription/success,PAYPAL_CANCEL_URL=https://horizon.horde.vision/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,FIREBASE_AUTH_PROJECT_ID=$FIREBASE_PROJECT_ID,FRONTEND_ORIGINS=https://nordicvision.io|https://www.nordicvision.io|https://*.nordicvision.io|https://horizon.nordicvision.io|https://www.horizon.nordicvision.io|https://*.horizon.nordicvision.io|https://horde.vision|https://www.horde.vision|https://*.horde.vision|https://horizon.horde.vision|https://${FIREBASE_PROJECT_ID}.web.app|https://${FIREBASE_PROJECT_ID}.firebaseapp.com|http://localhost:5173|http://localhost:3000,CORE_DOCS_BUCKET=${PROJECT_ID}-core-docs,RAG_DOCUMENTS_BUCKET=${PROJECT_ID}-rag-documents,BIGQUERY_DATASET_ID=${bigquery_dataset_id},VERTEX_SEARCH_LOCATION=global,VERTEX_SEARCH_DATA_STORE_ID=${vertex_search_ds_id},VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID=${VERTEX_SEARCH_INTERNAL_KNOWLEDGE_STORE_ID:-${vertex_search_ds_id}},VERTEX_IMPORT_INTENTS_TOPIC=${vertex_import_topic},VERTEX_IMPORT_INTENTS_SUBSCRIPTION=${vertex_import_sub},VERTEX_IMPORT_INTENTS_DLQ_TOPIC=${vertex_import_dlq_topic},VERTEX_SYNC_BASE_IMPORTS_PER_MINUTE=${vertex_sync_base_imports_per_minute},VERTEX_SYNC_MAX_IMPORTS_PER_MINUTE=${vertex_sync_max_imports_per_minute},VERTEX_SYNC_BASE_INFLIGHT_IMPORTS=${vertex_sync_base_inflight_imports},VERTEX_SYNC_MAX_INFLIGHT_IMPORTS=${vertex_sync_max_inflight_imports},VERTEX_SYNC_TARGET_PENDING_LRO=${vertex_sync_target_pending_lro},VERTEX_SYNC_ENABLE_ADAPTIVE_THROTTLE=${VERTEX_SYNC_ENABLE_ADAPTIVE_THROTTLE:-1},ENABLE_INTERNAL_WS_SUBSCRIBER=0,DISABLE_POLLER_TICKER=true,ENABLE_SCOUT_FIRESTORE_POLLER=0,ENABLE_CLOUD_TASKS_SCOUT=1,ENABLE_CLOUD_TASKS_RISK=1,CLOUD_TASKS_LOCATION=$REGION,CLOUD_TASKS_SCOUT_QUEUE=${scout_queue},CLOUD_TASKS_SCOUT_BACKGROUND_QUEUE=${scout_background_queue},CLOUD_TASKS_SCOUT_BACKGROUND_DELAY=${CLOUD_TASKS_SCOUT_BACKGROUND_DELAY:-15s},CLOUD_TASKS_RISK_QUEUE=${risk_queue},CLOUD_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,CLOUD_TASKS_OIDC_AUDIENCE=$existing_api_url,CLOUD_TASKS_TARGET_BASE_URL=$existing_api_url,ENABLE_HORIZON_WATCHDOG=${enable_horizon_watchdog},PAYPAL_MODE=live,PAYPAL_RETURN_URL=https://horizon.horde.vision/subscription/success,PAYPAL_CANCEL_URL=https://horizon.horde.vision/subscription/cancel,PAYPAL_CURRENCY=USD,PAYPAL_LOCALE=ru-KZ,PAYPAL_TAX_PERCENTAGE=12,PAYPAL_TAX_INCLUSIVE=false,SIGNAL_MIN_RELEVANCE_SCORE=0.6,SIGNAL_MIN_CONFIDENCE=0.5,SIGNAL_MONITORING_INTERVAL=6h,GEONAMES_USERNAME=${GEONAMES_USERNAME:-kirisyuk}"
   # Horizon Fragments: dedicated bucket + dedicated Vertex AI Search Data Stores (fragments + edges IDs set above).
   # Store isolation is used instead of filters (filters on structData.* are not supported in our current schema).
-  local nv_horizon_fragments_bucket="${NV_HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-nv-horizon-fragments}"
-  env_vars="$env_vars,NV_HORIZON_FRAGMENTS_BUCKET=${nv_horizon_fragments_bucket},VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID=${nv_horizon_fragments_datastore},VERTEX_SEARCH_NV_HORIZON_EDGE_DATA_STORE_ID=${nv_horizon_edges_datastore}"
+  local horizon_fragments_bucket="${HORIZON_FRAGMENTS_BUCKET:-${PROJECT_ID}-fragments}"
+  env_vars="$env_vars,HORIZON_FRAGMENTS_BUCKET=${horizon_fragments_bucket},VERTEX_SEARCH_HORIZON_DATA_STORE_ID=${horizon_fragments_datastore},VERTEX_SEARCH_HORIZON_EDGE_DATA_STORE_ID=${horizon_edges_datastore}"
 
   # NOTE: ADMIN_JOB_TOKEN is provided via Secret Manager (see --set-secrets) to avoid rotation/desync.
 
   # If deploying Horizon Watchdog scheduler mode, keep related env vars in sync (also replaced by deploy).
-  if [[ "${TARGET_NV_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
-    env_vars="$env_vars,DISABLE_NV_HORIZON_WATCHDOG_TICKER=true,NV_HORIZON_WATCHDOG_CRON_LIMIT=${NV_HORIZON_WATCHDOG_CRON_LIMIT:-200},NV_HORIZON_WATCHDOG_CRON_LOCK_TTL=${NV_HORIZON_WATCHDOG_CRON_LOCK_TTL:-9m}"
+  if [[ "${TARGET_HORIZON_WATCHDOG:-0}" -eq 1 ]]; then
+    env_vars="$env_vars,DISABLE_HORIZON_WATCHDOG_TICKER=true,HORIZON_WATCHDOG_CRON_LIMIT=${HORIZON_WATCHDOG_CRON_LIMIT:-200},HORIZON_WATCHDOG_CRON_LOCK_TTL=${HORIZON_WATCHDOG_CRON_LOCK_TTL:-9m}"
   fi
   
   # Add Redis env vars if available (REDIS_HOST/PORT for cache package, REDIS_ADDR for legacy applicability_evaluator)
@@ -1944,11 +1944,11 @@ deploy_api() {
     env_vars="$env_vars,ENTITY_EXTRACT_SERVICE_URL=$entity_extract_url,ENTITY_EXTRACT_MODE=${resolved_entity_extract_mode}"
   fi
   if [[ -n "$agentmesh_url" ]]; then
-    env_vars="$env_vars,AGENTMESH_PUBLIC_BASE_URL=$agentmesh_url,AGENTMESH_TASK_TARGET_URL=${agentmesh_url}/api/v1/internal/tasks/agentmesh/run,AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=$agentmesh_url,AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-0},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts"
+    env_vars="$env_vars,AGENTMESH_PUBLIC_BASE_URL=$agentmesh_url,AGENTMESH_TASK_TARGET_URL=${agentmesh_url}/api/v1/internal/tasks/agentmesh/run,AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=$agentmesh_url,AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-0},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts"
   fi
 
   local api_vpc_network="${API_VPC_NETWORK:-default}"
-  local api_vpc_subnet="${API_VPC_SUBNET:-nv-horizon-run}"
+  local api_vpc_subnet="${API_VPC_SUBNET:-horizon-run}"
   local api_vpc_subnet_range="${API_VPC_SUBNET_RANGE:-10.20.0.0/26}"
   local -a api_vpc_flags=(--clear-network --clear-vpc-connector)
 
@@ -2012,7 +2012,7 @@ deploy_api() {
     post_deploy_env_vars+=("AGENTMESH_PUBLIC_BASE_URL=$agentmesh_url")
     post_deploy_env_vars+=("AGENTMESH_TASK_TARGET_URL=${agentmesh_url}/api/v1/internal/tasks/agentmesh/run")
     post_deploy_env_vars+=("AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION}")
-    post_deploy_env_vars+=("AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh}")
+    post_deploy_env_vars+=("AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-agentmesh}")
     post_deploy_env_vars+=("AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND")
     post_deploy_env_vars+=("AGENTMESH_TASKS_OIDC_AUDIENCE=$agentmesh_url")
     post_deploy_env_vars+=("AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-0}")
@@ -2036,19 +2036,19 @@ deploy_api() {
   if [[ -z "$admin_token" ]]; then
     admin_token=$(openssl rand -hex 12 2>/dev/null || echo dev-admin-token)
   fi
-  if gcloud scheduler jobs describe "nv-horizon-watchdog" --location="$REGION" >/dev/null 2>&1; then
-    gcloud scheduler jobs update http "nv-horizon-watchdog" \
+  if gcloud scheduler jobs describe "horizon-watchdog" --location="$REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "horizon-watchdog" \
       --location="$REGION" \
       --update-headers="X-Job-Token=$admin_token" \
       --quiet >/dev/null 2>&1 || true
-    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for nv-horizon-watchdog"
+    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for horizon-watchdog"
   fi
-  if gcloud scheduler jobs describe "nv-horizon-source-poller" --location="$REGION" >/dev/null 2>&1; then
-    gcloud scheduler jobs update http "nv-horizon-source-poller" \
+  if gcloud scheduler jobs describe "source-poller" --location="$REGION" >/dev/null 2>&1; then
+    gcloud scheduler jobs update http "source-poller" \
       --location="$REGION" \
       --update-headers="X-Job-Token=$admin_token" \
       --quiet >/dev/null 2>&1 || true
-    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for nv-horizon-source-poller"
+    echo -e "${GREEN}[api] ✓${NC} Updated Cloud Scheduler header for source-poller"
   fi
 }
 
@@ -2930,7 +2930,7 @@ setup_agentmesh_infrastructure() {
     echo -e "${GREEN}[agentmesh] Created bucket:${NC} $bucket"
   fi
 
-  local queue="${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh}"
+  local queue="${AGENTMESH_TASKS_QUEUE:-agentmesh}"
   if ! gcloud tasks queues describe "$queue" --location="$REGION" --project="$PROJECT_ID" >/dev/null 2>&1; then
     gcloud tasks queues create "$queue" --location="$REGION" --project="$PROJECT_ID" --quiet >/dev/null 2>&1 || true
     echo -e "${GREEN}[agentmesh] Created Cloud Tasks queue:${NC} $queue"
@@ -2967,7 +2967,7 @@ deploy_agentmesh() {
   fi
 
   echo -e "${BLUE}[agentmesh] Building container image...${NC}"
-  local service="nv-horizon-agentmesh"
+  local service="agentmesh"
   local image_tag
   image_tag=$(date +%s)
   local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/${service}:${image_tag}"
@@ -3009,7 +3009,7 @@ deploy_agentmesh() {
     echo -e "${YELLOW}[agentmesh] Deploy agents/vertex/agentmesh_scout_orchestrator first, then export the printed resource name.${NC}" >&2
     exit 1
   fi
-  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGENTMESH_VERTEX_LOCATION=${agentmesh_vertex_loc},AGENTMESH_VERTEX_REASONING_ENGINE=${AGENTMESH_REASONING_ENGINE},AGENTMESH_SCOUT_AGENT_ENGINE=${scout_agent_engine},AGENTMESH_SCOUT_ORCHESTRATOR_MODE=${scout_orchestrator_mode},AGENTMESH_PUBLIC_BASE_URL=${public_base_url},AGENTMESH_TASK_TARGET_URL=${target_url},AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-nv-horizon-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=${oidc_audience},AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-0},AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS=${AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS:-0},AGENTMESH_RUNTIME_LEASE_OWNER=${AGENTMESH_RUNTIME_LEASE_OWNER:-${service}},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts,AGENTMESH_AGENT_CARD_KMS_KEY_VERSION=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_AGENT_CARD_KEY_ID=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_MODEL_FLASH=${AGENTMESH_MODEL_FLASH:-vertex-gemini-3.1-flash-lite-preview},AGENTMESH_MODEL_FLASH_REASONING=${AGENTMESH_MODEL_FLASH_REASONING:-vertex-gemini-3-flash-preview},AGENTMESH_MODEL_PRO=${AGENTMESH_MODEL_PRO:-vertex-gemini-3.1-pro-preview},AGENTMESH_OTEL_ENABLED=${AGENTMESH_OTEL_ENABLED:-1},AGENTMESH_EVAL_GCS_PREFIX=${AGENTMESH_EVAL_GCS_PREFIX:-gs://${PROJECT_ID}-agentmesh-artifacts/agentmesh/evals},VERTEX_SEARCH_DATA_STORE_ID=${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store},AGENTMESH_VERTEX_SESSION_TTL=${AGENTMESH_VERTEX_SESSION_TTL:-86400s}"
+  local env_vars="GCP_PROJECT_ID=$PROJECT_ID,GOOGLE_CLOUD_PROJECT=$PROJECT_ID,AGENTMESH_VERTEX_LOCATION=${agentmesh_vertex_loc},AGENTMESH_VERTEX_REASONING_ENGINE=${AGENTMESH_REASONING_ENGINE},AGENTMESH_SCOUT_AGENT_ENGINE=${scout_agent_engine},AGENTMESH_SCOUT_ORCHESTRATOR_MODE=${scout_orchestrator_mode},AGENTMESH_PUBLIC_BASE_URL=${public_base_url},AGENTMESH_TASK_TARGET_URL=${target_url},AGENTMESH_TASKS_LOCATION=${AGENTMESH_TASKS_LOCATION:-$REGION},AGENTMESH_TASKS_QUEUE=${AGENTMESH_TASKS_QUEUE:-agentmesh},AGENTMESH_TASKS_OIDC_SERVICE_ACCOUNT=$SA_BACKEND,AGENTMESH_TASKS_OIDC_AUDIENCE=${oidc_audience},AGENTMESH_TASKS_DISABLE_OIDC=${AGENTMESH_TASKS_DISABLE_OIDC:-0},AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS=${AGENTMESH_ALLOW_UNAUTH_INTERNAL_TASKS:-0},AGENTMESH_RUNTIME_LEASE_OWNER=${AGENTMESH_RUNTIME_LEASE_OWNER:-${service}},AGENTMESH_ARTIFACT_BUCKET=${PROJECT_ID}-agentmesh-artifacts,AGENTMESH_AGENT_CARD_KMS_KEY_VERSION=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_AGENT_CARD_KEY_ID=${AGENTMESH_AGENT_CARD_KMS_KEY_VERSION},AGENTMESH_MODEL_FLASH=${AGENTMESH_MODEL_FLASH:-vertex-gemini-3.1-flash-lite-preview},AGENTMESH_MODEL_FLASH_REASONING=${AGENTMESH_MODEL_FLASH_REASONING:-vertex-gemini-3-flash-preview},AGENTMESH_MODEL_PRO=${AGENTMESH_MODEL_PRO:-vertex-gemini-3.1-pro-preview},AGENTMESH_OTEL_ENABLED=${AGENTMESH_OTEL_ENABLED:-1},AGENTMESH_EVAL_GCS_PREFIX=${AGENTMESH_EVAL_GCS_PREFIX:-gs://${PROJECT_ID}-agentmesh-artifacts/agentmesh/evals},VERTEX_SEARCH_DATA_STORE_ID=${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store},AGENTMESH_VERTEX_SESSION_TTL=${AGENTMESH_VERTEX_SESSION_TTL:-86400s}"
 
   echo -e "${BLUE}[agentmesh] Deploying to Cloud Run...${NC}"
   gcloud run deploy "$service" \
@@ -3055,7 +3055,7 @@ deploy_agentmesh() {
 
 # Setup infrastructure only on full deploy or explicit check.
 # Individual service deploys (--api, --ws, --verified-proxy, --py) usually skip infra checks for speed,
-# BUT some flags (e.g. --nv-horizon-watchdog) require infra steps (Cloud Scheduler jobs, env vars).
+# BUT some flags (e.g. --horizon-watchdog) require infra steps (Cloud Scheduler jobs, env vars).
 if [[ "$TARGET_CHECK_INFRA" -eq 1 ]]; then
   setup_infrastructure
   create_indexes
@@ -3063,7 +3063,7 @@ if [[ "$TARGET_CHECK_INFRA" -eq 1 ]]; then
   exit 0
 elif [[ "$TARGET_AGENTMESH" -eq 1 ]]; then
   setup_agentmesh_infrastructure
-elif [[ "$TARGET_NV_HORIZON_WATCHDOG" -eq 1 ]]; then
+elif [[ "$TARGET_HORIZON_WATCHDOG" -eq 1 ]]; then
   # Minimal infra needed for watchdog Cloud Scheduler job creation/update.
   setup_infrastructure
 elif [[ "$TARGET_WEB" -eq 1 && "$TARGET_API" -eq 1 && "$TARGET_PY" -eq 0 && "$TARGET_VERIFIED_PROXY" -eq 0 ]]; then
@@ -3075,14 +3075,14 @@ elif [[ "$TARGET_SETUP_WS_INFRA" -eq 1 ]]; then
   echo -e "${BLUE}[infra] Setting up infrastructure for ws...${NC}"
   # Ensure aggregated topics and subscriptions (reuse logic from setup_infrastructure)
   agg_topics=(
-    "nv_horizon.genai.streams"
-    "nv_horizon.discovery.events"
-    "nv_horizon.artifact.events"
-    "nv_horizon.interaction.events"
-    "nv_horizon.analysis.events"
-    "nv_horizon.verified.streams"
-    "nv_horizon.horizon.events"
-    "nv_horizon.operations.events"
+    "horizon.genai.streams"
+    "horizon.discovery.events"
+    "horizon.artifact.events"
+    "horizon.interaction.events"
+    "horizon.analysis.events"
+    "horizon.verified.streams"
+    "horizon.core.events"
+    "horizon.operations.events"
   )
   # 4.1 Ensure aggregated topics
   echo -e "${BLUE}[infra] Ensuring Pub/Sub aggregated topics for ws...${NC}"
@@ -3172,7 +3172,7 @@ if [[ "$TARGET_CLEANUP_REVISIONS" -eq 1 ]]; then
   # Clean up revisions for all services (keep last 10 per service)
   services=("api" "telegram" "event-gate" "entity-extract" "ws" "verified-proxy")
   if [[ "$TARGET_AGENTMESH" -eq 1 ]]; then
-    services+=("nv-horizon-agentmesh")
+    services+=("agentmesh")
   fi
   for service in "${services[@]}"; do
     if gcloud run services describe "$service" --region "$REGION" --project "$PROJECT_ID" >/dev/null 2>&1; then

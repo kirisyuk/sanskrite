@@ -30,7 +30,7 @@ type kv struct {
 
 func main() {
 	ctx := context.Background()
-	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "nv-horizon"), "GCP project id")
+	projectID := flag.String("project", firstNonEmpty(os.Getenv("GCP_PROJECT_ID"), os.Getenv("GOOGLE_CLOUD_PROJECT"), "prevalent-horizon-test"), "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	topN := flag.Int("top", 20, "top N rows")
 	sampleN := flag.Int("samples", 12, "sample rows to print")

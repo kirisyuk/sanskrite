@@ -52,7 +52,7 @@ gcloud logging read \
    (textPayload~"Tavily" OR textPayload~"WebSearch" OR textPayload~"web_search")' \
   --limit=20 \
   --format="table(timestamp,textPayload)" \
-  --project=nv-horizon \
+  --project=prevalent-horizon-test \
   --freshness=10m
 ```
 
@@ -82,7 +82,7 @@ gcloud logging read \
 ### Если видите ошибку 401:
 1. Проверьте что ключ правильный в секретах:
    ```bash
-   gcloud secrets versions access latest --secret=tavily_api_key --project=nv-horizon
+   gcloud secrets versions access latest --secret=tavily_api_key --project=prevalent-horizon-test
    ```
 
 2. Убедитесь что ключ активирован в Tavily dashboard
@@ -92,7 +92,7 @@ gcloud logging read \
    gcloud run services describe api \
      --region=us-central1 \
      --format="get(spec.template.spec.containers[0].env)" \
-     --project=nv-horizon | grep TAVILY
+     --project=prevalent-horizon-test | grep TAVILY
    ```
 
 ### Если tool не вызывается:
@@ -108,7 +108,7 @@ echo -n "NEW_KEY_HERE" | gcloud secrets versions add tavily_api_key --data-file=
 
 # Cloud Run автоматически подхватит новый ключ (используется :latest)
 # Перезапуск не требуется, но можно принудительно:
-gcloud run services update api --region=us-central1 --project=nv-horizon
+gcloud run services update api --region=us-central1 --project=prevalent-horizon-test
 ```
 
 ## Мониторинг

@@ -8,7 +8,7 @@ import (
 )
 
 func TestSpecPathsAndEdgesAreTaxonomySafe(t *testing.T) {
-	spec := Spec("nv-horizon")
+	spec := Spec("prevalent-horizon-test")
 	if spec.ID == "" || spec.Title == "" {
 		t.Fatalf("spec identity must be populated")
 	}
@@ -82,7 +82,7 @@ func TestSpecPathsAndEdgesAreTaxonomySafe(t *testing.T) {
 }
 
 func TestSpecSimulationRequestsAreBoundToHotPath(t *testing.T) {
-	spec := Spec("nv-horizon")
+	spec := Spec("prevalent-horizon-test")
 	seedSet := map[string]struct{}{}
 	for _, path := range SeedPaths() {
 		seedSet[path] = struct{}{}

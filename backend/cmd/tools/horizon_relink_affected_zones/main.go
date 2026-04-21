@@ -17,7 +17,7 @@ import (
 )
 
 func main() {
-	projectID := flag.String("project", "nv-horizon", "GCP project id")
+	projectID := flag.String("project", "prevalent-horizon-test", "GCP project id")
 	tenantID := flag.String("tenant", "global", "tenant id")
 	limit := flag.Int("limit", 500, "max affected zones to scan")
 	onlyActive := flag.Bool("active-only", true, "process only non-archived zones")
@@ -43,9 +43,9 @@ func main() {
 	if vertexLocation == "" {
 		vertexLocation = "global"
 	}
-	vertexStore := strings.TrimSpace(gcp.GetEnvOrSecret(ctx, strings.TrimSpace(*projectID), "VERTEX_SEARCH_NV_HORIZON_DATA_STORE_ID", "vertex_search_nv_horizon_data_store_id"))
+	vertexStore := strings.TrimSpace(gcp.GetEnvOrSecret(ctx, strings.TrimSpace(*projectID), "VERTEX_SEARCH_HORIZON_DATA_STORE_ID", "vertex_search_horizon_data_store_id"))
 	if vertexStore == "" {
-		vertexStore = "nv-horizon-fragments-store"
+		vertexStore = "horizon-fragments"
 	}
 	vertexClient := ai.NewVertexAISearchClient(vertexProject, vertexLocation, vertexStore, "")
 

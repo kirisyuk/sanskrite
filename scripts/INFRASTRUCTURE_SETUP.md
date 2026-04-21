@@ -4,11 +4,11 @@
 
 ## GCP проект
 
-**Проект по умолчанию:** `nv-horizon` (имя: nv-horizon)
+**Проект по умолчанию:** `prevalent-horizon-test` (имя: prevalent-horizon-test)
 
 Перед развёртыванием убедитесь, что gcloud настроен на нужный проект:
 ```bash
-gcloud config set project nv-horizon
+gcloud config set project prevalent-horizon-test
 ```
 
 ## Скрипты
@@ -27,16 +27,16 @@ gcloud config set project nv-horizon
   - Agent топики: `agent.update`
   - Interaction топики: `interaction.created`, `interaction.updated`
   - Verified топики: `verified.stream`
-  - Aggregated топики: `nv-horizon.*` (9 топиков)
+  - Aggregated топики: `prevalent-horizon-test.*` (9 топиков)
 
 - **Pub/Sub подписки** (11 подписок):
   - Подписки для ws (aggregated топиков): `<topic>-ws-broker` (9 подписок)
 
 - **Cloud Scheduler Jobs** (4 jobs):
-  - `nv-horizon-source-poller` - опрос источников каждые 5 минут
-  - `nv-horizon-artifact-scheduler` - проверка запланированных обновлений артефактов каждый час
+  - `prevalent-horizon-test-source-poller` - опрос источников каждые 5 минут
+  - `prevalent-horizon-test-artifact-scheduler` - проверка запланированных обновлений артефактов каждый час
   - `subscription-billing-daily` - ежедневный биллинг подписок в 02:00 UTC
-  - `nv-horizon-watchdog` - опциональный watchdog для Horizon (Nordic Vision) Horizon (только с флагом `--nv-horizon-watchdog`)
+  - `prevalent-horizon-test-watchdog` - опциональный watchdog для Horizon (Nordic Vision) Horizon (только с флагом `--prevalent-horizon-test-watchdog`)
 
 ### 2. `scripts/create-secrets.sh` - Создание секретов
 
@@ -121,7 +121,7 @@ python3 /tmp/check_infrastructure.py
 ## Дополнительные скрипты
 
 - `scripts/setup-interaction-topics.sh` - создание топиков для interaction событий (интегрировано в deploy)
-- `scripts/setup-nv-horizon-pubsub.sh` - создание топиков для Horizon (Nordic Vision) (интегрировано в deploy)
+- `scripts/setup-horizon-pubsub.sh` - создание топиков для Horizon (интегрировано в deploy)
 - `scripts/create-vertex-search-datastore.sh` - создание Vertex AI Search Data Store (rag-documents-store)
 - `scripts/ensure-vertex-ai-sa-bucket-access.sh` - выдача Vertex AI SA доступа к RAG bucket (если deploy не смог — SA создаётся при первом использовании Vertex AI)
 

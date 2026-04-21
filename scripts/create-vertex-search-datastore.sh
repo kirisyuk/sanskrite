@@ -13,7 +13,7 @@ DATA_STORE_ID="${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store}"
 LOCATION="${VERTEX_SEARCH_LOCATION:-global}"
 DISPLAY_NAME="${VERTEX_SEARCH_DATA_STORE_DISPLAY_NAME:-}"
 if [ -z "$DISPLAY_NAME" ]; then
-  if [ "$DATA_STORE_ID" = "nv-horizon-fragments-store" ]; then
+  if [ "$DATA_STORE_ID" = "prevalent-horizon-test-fragments-store" ]; then
     DISPLAY_NAME="Horizon Fragments Store"
   else
     DISPLAY_NAME="RAG Documents Store"
