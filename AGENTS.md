@@ -24,6 +24,22 @@
 2. [PRODUCT_CANONICAL_NAMES_AND_PATHS.md](docs/canonical_names_and_paths/PRODUCT_CANONICAL_NAMES_AND_PATHS.md)
 3. [PRODUCT_CANONICAL_TRANSFORMS.md](docs/canonical_names_and_paths/PRODUCT_CANONICAL_TRANSFORMS.md)
 
+## Taxonomy system of record
+
+AH-таксономия **генерируется** — не правьте сгенерированные привязки вручную.
+
+- **Источник правды:** `agents/shared/agenthorde_common/agenthorde_common/taxonomy.py` (Python) и зеркало `shared/taxonomy/taxonomy.json`.
+- **Go:** `backend/internal/taxonomy/ah/taxonomy_generated.go` — регенерация из каталога `backend`: `go generate ./internal/taxonomy/ah/...` (см. `//go:generate` в `backend/internal/taxonomy/ah/doc.go`).
+- **TypeScript:** `web/src/lib/taxonomy.generated.ts` — `cd web && npm run gen:taxonomy`; проверка свежести: `npm run gen:taxonomy:check`.
+- Пайплайн и CI-гарды описаны в [`docs/taxonomy/CODEGEN.md`](docs/taxonomy/CODEGEN.md).
+
+### Обязательные правила для таксономии
+
+- **Никогда** не редактируйте `taxonomy_generated.go` и `taxonomy.generated.ts` вручную — меняйте источник и регенерируйте.
+- **Никогда** не вводите новые wire-токены в UPPER_SNAKE: wire-язык сейчас AH snake_case (`ah.RelationName`, `ah.FragmentClass` + `Subtype`).
+- UPPER_SNAKE допустим только в двух carve-out доменах: граница LLM-промптов (см. [`docs/agents/agenthorde-runtimes.md`](docs/agents/agenthorde-runtimes.md)) и runtime-ontology (`backend/internal/taxonomy/*`, Firestore-словари). При сомнении — спросите.
+- Завершённая миграция P0–P14 и исторические карты лежат в [`docs/archive/taxonomy-migration-2026/`](docs/archive/taxonomy-migration-2026/README.md); это **не** оперативный SoT для рантайма.
+
 ## Обязательная модель мышления
 
 Для supply-chain работы агент должен считать истинным следующее:
@@ -53,6 +69,7 @@
   - transformation
   - assembly
   - generic dependency
+- вводить локальные alias-таблицы или legacy-shim слои в application-коде; если нужен перевод wire-формы, он допускается только в явных Category B (промпты / разбор LLM-JSON) или Category C (`internal/taxonomy/*`), а не новыми скрытыми словарями в сервисах.
 
 ## Где это уже встроено в runtime
 
