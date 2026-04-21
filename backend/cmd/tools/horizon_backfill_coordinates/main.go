@@ -512,8 +512,8 @@ func parseTypesFilter(s string) map[ah.FragmentClass]struct{} {
 		if t == "" {
 			continue
 		}
-		if alias, ok := hmodels.LookupLegacyFragmentType(t); ok && alias.Class != "" {
-			out[alias.Class] = struct{}{}
+		if cls, _, ok := hmodels.NormalizeFragmentClassName(t, ""); ok {
+			out[cls] = struct{}{}
 			continue
 		}
 		out[ah.FragmentClass(strings.ToLower(t))] = struct{}{}

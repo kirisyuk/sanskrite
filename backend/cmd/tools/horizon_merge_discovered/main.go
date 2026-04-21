@@ -518,10 +518,10 @@ func cloneFragmentForCanonical(src *horizonmodels.HorizonFragment, canonicalPath
 		dst.Governance.Status = string(horizonmodels.FragmentStatusActive)
 	}
 	if strings.TrimSpace(targetType) != "" {
-		if alias, ok := horizonmodels.LookupLegacyFragmentType(targetType); ok {
-			dst.Class = alias.Class
-			if alias.Subtype != "" {
-				dst.Subtype = alias.Subtype
+		if cls, sub, ok := horizonmodels.NormalizeFragmentClassName(targetType, canonicalPath); ok {
+			dst.Class = cls
+			if sub != "" {
+				dst.Subtype = sub
 			}
 		}
 	}

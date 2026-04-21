@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -27,7 +26,6 @@ type lensBootstrapSummary struct {
 	SelectedCanonicalPath string                `json:"selectedCanonicalPath,omitempty"`
 	VisibleNodeRefs       []string              `json:"visibleNodeRefs,omitempty"`
 	Before                bootstrapScopeSummary `json:"before"`
-	Repair                map[string]any        `json:"repair,omitempty"`
 	CandidatesFound       int                   `json:"candidatesFound"`
 	Imported              int                   `json:"imported"`
 	SkippedExisting       int                   `json:"skippedExisting"`
@@ -72,9 +70,6 @@ func main() {
 	maxNodes := flag.Int("max-nodes", 40, "max visible nodes to use")
 	maxArtifacts := flag.Int("max-artifacts", 25, "max current lens artifacts to use when building visible scope")
 	importLimit := flag.Int("import-limit", 40, "max matching global artifacts to import into the lens")
-	repairLimit := flag.Int("repair-limit", 2000, "max evidence rows for supply repair")
-	applyRepair := flag.Bool("repair", true, "run focused supply-repair before importing artifacts")
-	expandOwned := flag.Bool("expand-owned-facilities", true, "expand org refs to owned facilities for repair")
 	outdir := flag.String("outdir", "", "output directory")
 	flag.Parse()
 
@@ -122,18 +117,6 @@ func main() {
 		Before:                summarizeLensScope(ctx, lens, visibleNodeRefs, materializedRepo, lensesRepo),
 	}
 
-	if *applyRepair {
-		log.Printf("running focused supply repair for %d refs", len(visibleNodeRefs))
-		repairResult, err := runSupplyRepair(ctx, strings.TrimSpace(*projectID), strings.TrimSpace(lens.TenantID), visibleNodeRefs, *repairLimit, *expandOwned)
-		if err != nil {
-			summary.Errors = append(summary.Errors, err.Error())
-			log.Printf("repair warning: %v", err)
-		} else {
-			summary.Repair = repairResult
-			log.Printf("repair completed")
-		}
-	}
-
 	log.Printf("collecting bootstrap candidates")
 	candidates, err := collectBootstrapCandidates(ctx, strings.TrimSpace(lens.TenantID), visibleNodeRefs, materializedRepo)
 	if err != nil {
@@ -165,41 +148,6 @@ func main() {
 	fmt.Printf("Before: paths=%d supplyLinks=%d scopeArtifacts=%d\n", summary.Before.LensPaths, summary.Before.LensSupplyLinks, summary.Before.LensScopeArtifacts)
 	fmt.Printf("Candidates found: %d | imported=%d | skippedExisting=%d\n", summary.CandidatesFound, summary.Imported, summary.SkippedExisting)
 	fmt.Printf("After: paths=%d supplyLinks=%d scopeArtifacts=%d\n", summary.After.LensPaths, summary.After.LensSupplyLinks, summary.After.LensScopeArtifacts)
-}
-
-func runSupplyRepair(ctx context.Context, projectID, tenantID string, refs []string, limit int, expandOwned bool) (map[string]any, error) {
-	args := []string{
-		"run", "./backend/cmd/tools/horizon_supply_repair",
-		"-project", strings.TrimSpace(projectID),
-		"-tenant", strings.TrimSpace(tenantID),
-		"-mode", "repair",
-		"-apply=true",
-		"-skip-audit=true",
-		"-rebuild-upstream=true",
-		"-limit", fmt.Sprintf("%d", maxInt(limit, 1)),
-		"-page-size", "400",
-		"-max-depth", "6",
-		"-max-paths", "12",
-		"-refs", strings.Join(compactStrings(refs), ","),
-	}
-	if expandOwned {
-		args = append(args, "-expand-owned-facilities=true")
-	}
-	cmd := exec.CommandContext(ctx, "go", args...)
-	cmd.Dir = backendRoot()
-	output, err := cmd.CombinedOutput()
-	raw := strings.TrimSpace(string(output))
-	if err != nil {
-		return nil, fmt.Errorf("supply repair failed: %w: %s", err, raw)
-	}
-	if raw == "" {
-		return map[string]any{"status": "completed"}, nil
-	}
-	var parsed map[string]any
-	if jsonErr := json.Unmarshal(output, &parsed); jsonErr == nil {
-		return parsed, nil
-	}
-	return map[string]any{"raw": raw}, nil
 }
 
 func collectBootstrapCandidates(ctx context.Context, tenantID string, visibleNodeRefs []string, materializedRepo *horizonrepo.MaterializedArtifactsRepository) ([]artifactImportRow, error) {
@@ -616,13 +564,6 @@ func buildReport(summary lensBootstrapSummary) string {
 	}
 	b.WriteString(fmt.Sprintf("- Visible nodes used: **%d**\n", summary.Before.VisibleNodes))
 	b.WriteString(fmt.Sprintf("- Before: **%d** lens paths, **%d** lens supply links, **%d** scope artifacts\n", summary.Before.LensPaths, summary.Before.LensSupplyLinks, summary.Before.LensScopeArtifacts))
-	if len(summary.Repair) > 0 {
-		b.WriteString(fmt.Sprintf("- Repair triads scanned: **%d**; supply links created: **%d**; artifacts created/merged: **%d**\n",
-			int(floatValue(summary.Repair["triadsScanned"])),
-			int(floatValue(summary.Repair["supplyLinksCreated"])),
-			int(floatValue(summary.Repair["artifactsCreatedOrMerged"])),
-		))
-	}
 	b.WriteString(fmt.Sprintf("- Candidates found: **%d**; imported into lens: **%d**\n", summary.CandidatesFound, summary.Imported))
 	b.WriteString(fmt.Sprintf("- After: **%d** lens paths, **%d** lens supply links, **%d** scope artifacts\n\n", summary.After.LensPaths, summary.After.LensSupplyLinks, summary.After.LensScopeArtifacts))
 
@@ -656,14 +597,6 @@ func buildReport(summary lensBootstrapSummary) string {
 		}
 	}
 	return b.String()
-}
-
-func backendRoot() string {
-	wd, err := os.Getwd()
-	if err == nil && strings.TrimSpace(wd) != "" {
-		return wd
-	}
-	return "."
 }
 
 func overlapCount(values []string, allowed map[string]struct{}) int {
@@ -727,22 +660,6 @@ func firstNonEmpty(values ...string) string {
 	return ""
 }
 
-func floatValue(raw any) float64 {
-	switch v := raw.(type) {
-	case float64:
-		return v
-	case int:
-		return float64(v)
-	case int64:
-		return float64(v)
-	case json.Number:
-		out, _ := v.Float64()
-		return out
-	default:
-		return 0
-	}
-}
-
 func humanizeRef(ref string) string {
 	ref = strings.TrimSpace(ref)
 	if ref == "" {
@@ -770,13 +687,6 @@ func humanizeSlug(value string) string {
 
 func minInt(a, b int) int {
 	if a < b {
-		return a
-	}
-	return b
-}
-
-func maxInt(a, b int) int {
-	if a > b {
 		return a
 	}
 	return b
