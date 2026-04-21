@@ -366,6 +366,9 @@ func AllObjectQualifierStrings() []string {
 	return out
 }
 
+// Category B — LLM prompt boundary: everything below feeds scout system/user
+// prompts and must stay aligned with historical UPPER_SNAKE enumerations.
+//
 // dependencyTypeWireLabelOverrides maps scout DependencyType values
 // (which under AH point at canonical RelationName slugs like
 // "beneficially_owns", "joint_venture_with", "operates", …) back to
@@ -477,6 +480,7 @@ func AllEdgeTypesForPrompt() string {
 
 // DomainScaffoldRelationTypesString returns the closed list of "scaffold"
 // relations (DEPENDS_ON family) as a quoted pipe-separated enum.
+// Category B — LLM prompt boundary (domain scaffold prompts).
 func DomainScaffoldRelationTypesString() string {
 	rels := []string{
 		"DEPENDS_ON", "INFLUENCES", "RELATED_TO", "ASSOCIATED_WITH",

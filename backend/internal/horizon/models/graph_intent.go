@@ -974,9 +974,11 @@ var graphIntentAllowedNodeTypes = func() map[string]struct{} {
 	out["GOVERNMENT_AGENCY"] = struct{}{}
 	out["COMMUNITY_DYNASTY"] = struct{}{}
 	out["COMMUNITY_TRIBE"] = struct{}{}
-	// Legacy graph-intent / LLM wire labels (UPPER_SNAKE) that still map to AH
-	// classes via MapGraphIntentNodeTypeToClass — keep them allowed here so
-	// validation can reach path/namespace rules.
+	// Category B — LLM graph-intent JSON wire alphabet: legacy graph-intent /
+	// prompt labels (UPPER_SNAKE + split DEP*OSIT / SUPPLY*_LINK tokens) that
+	// still map to AH classes via MapGraphIntentNodeTypeToClass. Keep them
+	// allowed here so validation can reach path/namespace rules; removal
+	// requires coordinated prompt + snapshot updates.
 	legacyUpper := []string{
 		"ORGANIZATION", "FACILITY", "PROGRAM", "PRODUCT", "MARKET", "COMMUNITY",
 		"PERSON", "GEO_REGION", "TRACK", "EVENT", "DOMAIN", "SPHERE",

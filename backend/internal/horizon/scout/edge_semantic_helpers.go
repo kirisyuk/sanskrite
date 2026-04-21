@@ -465,6 +465,7 @@ func AllEdgeTypesForPrompt() string {
 
 // DomainScaffoldRelationTypesString returns the closed list of "scaffold"
 // relations (DEPENDS_ON family) as a quoted pipe-separated enum.
+// Category B — LLM prompt boundary (domain scaffold prompts).
 func DomainScaffoldRelationTypesString() string {
 	rels := []string{
 		"DEPENDS_ON", "INFLUENCES", "RELATED_TO", "ASSOCIATED_WITH",
