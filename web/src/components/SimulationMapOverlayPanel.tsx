@@ -8,6 +8,7 @@ import {
   type HorizonSimulationRunSummary,
 } from '../lib/api';
 import type { MaterializedArtifact } from './SupplyChainOverlay';
+import { pathPayloadNodeIsProduct } from '../lib/materializedPayload';
 
 type OverlayKind = 'shoulders' | 'products' | 'pathChains' | 'cascades' | 'roles';
 
@@ -40,18 +41,20 @@ const normalizeCountryFromPath = (value: string): string => {
 
 const routeProductPaths = (artifact: MaterializedArtifact): string[] => {
   const set = new Set<string>();
-  const direct = String(artifact.productAxis || '').trim();
-  if (direct.startsWith('/product/')) set.add(direct);
+  const addProductRef = (node: unknown, refRaw: unknown) => {
+    const ref = String(refRaw || '').trim();
+    if (!ref) return;
+    const stub = node && typeof node === 'object' ? (node as Record<string, unknown>) : { ref };
+    if (!pathPayloadNodeIsProduct({ ...stub, ref })) return;
+    set.add(ref);
+  };
+  addProductRef({ ref: artifact.productAxis }, artifact.productAxis);
   const productNodes = Array.isArray(artifact.payload?.productNodes) ? artifact.payload!.productNodes! : [];
-  for (const node of productNodes) {
-    const ref = String(node?.ref || '').trim();
-    if (ref.startsWith('/product/')) set.add(ref);
-  }
+  for (const node of productNodes) addProductRef(node, node?.ref);
+  const pathNodes = Array.isArray(artifact.payload?.nodes) ? artifact.payload!.nodes! : [];
+  for (const node of pathNodes) addProductRef(node, node?.ref);
   const legs = Array.isArray(artifact.payload?.legs) ? artifact.payload!.legs! : [];
-  for (const leg of legs) {
-    const ref = String(leg?.productRef || '').trim();
-    if (ref.startsWith('/product/')) set.add(ref);
-  }
+  for (const leg of legs) addProductRef({ ref: leg?.productRef }, leg?.productRef);
   return Array.from(set);
 };
 

@@ -409,7 +409,7 @@ function artifactRouteProductEntries(artifact: MaterializedArtifact | null | und
   }
   for (const node of productNodes) {
     const productRef = String(node?.ref || '').trim();
-    if (!productRef) continue;
+    if (!productRef || !pathPayloadNodeIsProduct(node)) continue;
     push(productRef, node?.name);
   }
   return out;
