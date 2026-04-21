@@ -1,10 +1,13 @@
 package pathbinding
 
-import "testing"
+import (
+	"context"
+	"testing"
+)
 
 func TestBindSegment_InferRouteAndZoneBindings(t *testing.T) {
 	engine := NewEngine(nil, nil)
-	binding := engine.BindSegment(nil, SegmentInput{
+	binding := engine.BindSegment(context.TODO(), SegmentInput{
 		SupplierRef:      "/fac/ae/jebel-ali-terminal",
 		CustomerRef:      "/fac/in/mundra-port-terminal",
 		ProductRef:       "/product/raw/hydrocarbon/distribution/lng",
@@ -26,7 +29,7 @@ func TestBindSegment_InferRouteAndZoneBindings(t *testing.T) {
 
 func TestBindSegment_DoesNotOverbindGenericFacilityPair(t *testing.T) {
 	engine := NewEngine(nil, nil)
-	binding := engine.BindSegment(nil, SegmentInput{
+	binding := engine.BindSegment(context.TODO(), SegmentInput{
 		SupplierRef: "/fac/na/industrial-shredding-complex",
 		CustomerRef: "/fac/na/sensor-based-sorting-facility",
 		ProductRef:  "/product/processed/material/shredded-scrap-mix",
@@ -41,7 +44,7 @@ func TestBindSegment_DoesNotOverbindGenericFacilityPair(t *testing.T) {
 
 func TestBindSegment_KeepsTargetedSeaRouteBinding(t *testing.T) {
 	engine := NewEngine(nil, nil)
-	binding := engine.BindSegment(nil, SegmentInput{
+	binding := engine.BindSegment(context.TODO(), SegmentInput{
 		SupplierRef:      "/fac/ae/jebel-ali-terminal",
 		CustomerRef:      "/fac/in/mundra-port-terminal",
 		ProductRef:       "/product/raw/hydrocarbon/lng",
@@ -63,7 +66,7 @@ func TestBindSegment_KeepsTargetedSeaRouteBinding(t *testing.T) {
 
 func TestBindSegment_DoesNotBindRandomRegionalFlowFromGenericRoadEvidence(t *testing.T) {
 	engine := NewEngine(nil, nil)
-	binding := engine.BindSegment(nil, SegmentInput{
+	binding := engine.BindSegment(context.TODO(), SegmentInput{
 		SupplierRef: "/fac/na/frejus-road-tunnel",
 		CustomerRef: "/org/de/bmw-ag",
 		ProductRef:  "/product/services/logistics/road-freight",

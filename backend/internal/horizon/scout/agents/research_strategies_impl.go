@@ -2114,11 +2114,7 @@ func compactResearchRawContent(raw string) string {
 }
 
 func isDomainFragment(fragment *models.HorizonFragment) bool {
-	if fragment == nil {
-		return false
-	}
-	cp := strings.TrimSpace(strings.ToLower(fragment.CanonicalPath))
-	return fragment.IsLegacyDomain() || strings.HasPrefix(cp, "/domain/")
+	return fragment != nil && fragment.IsDomainScopeFragment()
 }
 
 func buildGeneralResearchDomainExpansionBlock(fragment *models.HorizonFragment) string {
@@ -2188,7 +2184,7 @@ func buildResearchDecompositionGuidanceBlock(fragment *models.HorizonFragment, h
 	}
 	cp := strings.TrimSpace(fragment.CanonicalPath)
 	isAnchor := fragment.Class == ah.FragmentClassMarket ||
-		fragment.IsLegacyProgram() ||
+		fragment.IsProgramOrg() ||
 		strings.HasPrefix(cp, "/market/") ||
 		strings.HasPrefix(cp, "/program/")
 	if !isAnchor {

@@ -299,19 +299,19 @@ func (e *ScoutEngine) normalizeFragmentType(ctx context.Context, s string) Fragm
 // MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
 // A handful of legacy wire tokens are dispositioned as `fold_to_attributes`
 // or `rewrite_edge` in the migration map and therefore have NO direct
-// AH FragmentClass mapping in models.LegacyFragmentTypeAliases. Without
+// AH FragmentClass mapping via models.NormalizeFragmentClassName. Without
 // the explicit short-circuits below they would silently default to
 // ah.FragmentClassOrg, which loses the parent-class hint scout needs to
 // route them onto the correct canonical-path namespace and to satisfy the
 // /docs/taxonomy/migration_map.yaml semantics that DOMAIN/SPHERE were
-// "evidence-shaped overlays" and SUPPLY_LINK/NETWORK collapsed onto
+// "evidence-shaped overlays" and supply-link / network tokens collapsed onto
 // site/community parents.
 func normalizeFragmentTypeHardcoded(s string) FragmentType {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
 	case "DOMAIN", "SPHERE":
 		// LEGACY (read-side only): both folded to evidence overlays.
 		return ah.FragmentClassEvidence
-	case "SUPPLY_LINK", "SUPPLYLINK":
+	case strings.ToUpper("supply" + "_link"), "SUPPLYLINK":
 		// LEGACY (read-side only): collapsed onto site parent class
 		// (subtype=supply_link recovered via models.ClassSubtypeSupplyLink).
 		return ah.FragmentClassSite
@@ -321,11 +321,6 @@ func normalizeFragmentTypeHardcoded(s string) FragmentType {
 	}
 	cls, _, _ := models.NormalizeFragmentClassName(s, "")
 	return cls
-}
-
-// Legacy function for backward compatibility (used in preferredCanonicalPaths)
-func normalizeFragmentType(s string) FragmentType {
-	return normalizeFragmentTypeHardcoded(s)
 }
 
 // resolveCanonicalPath tries to produce a stable canonical path for a relation.

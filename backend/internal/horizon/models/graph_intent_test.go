@@ -107,7 +107,7 @@ func TestGraphIntentPlanResponseNormalizeAndValidate_RejectsOrgGovPath(t *testin
 }
 
 func TestGraphIntentPlanResponseMapToActions(t *testing.T) {
-	renameTo := "RENAMED_TO" // legacy wire alias still parseable; decoded as Dropped per migration_map
+	renameTo := "MERGED_INTO"
 	forward := "forward"
 	newLabel := "Renamed Entity"
 	newType := "ORGANIZATION"
@@ -152,10 +152,10 @@ func TestGraphIntentPlanResponseMapToActions(t *testing.T) {
 				{
 					RewriteID: "rw1",
 					Match: GraphIntentRelationMatch{
-						RelationType: "DEPENDS_ON",
+						RelationType: "INFLUENCES",
 					},
 					ReplaceWith: GraphIntentRelationReplacement{
-						RelationType: "SUPPLIES_TO",
+						RelationType: "SUPPLIES",
 						Direction:    forward,
 					},
 				},
@@ -168,7 +168,7 @@ func TestGraphIntentPlanResponseMapToActions(t *testing.T) {
 					FromNodeID: "A",
 					ToNodeID:   "B",
 					Constraints: GraphIntentChainConstraints{
-						AllowedRelationTypes: []string{"SUPPLIES_TO"},
+						AllowedRelationTypes: []string{"SUPPLIES"},
 						MaxHops:              4,
 					},
 				},

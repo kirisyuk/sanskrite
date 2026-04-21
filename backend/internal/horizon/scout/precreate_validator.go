@@ -179,7 +179,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// Policy 1.5: Validate canonical path format (fail-open with deterministic repair)
 	// ==========================================================================
 	trimmedCanonicalPath := strings.TrimSpace(fragment.CanonicalPath)
-	if !fragment.IsLegacySupplyLink() {
+	if !fragment.IsSupplyLinkFragment() {
 		if err := taxonomy.ValidateCanonicalPath(trimmedCanonicalPath); err != nil {
 			// Keep scouting pipeline fail-open: try deterministic repair before any hard block.
 			if fixed, ok := repairInvalidCanonicalPath(fragment); ok {
@@ -604,7 +604,7 @@ func (v *PreCreateValidator) ValidateAndProcess(ctx context.Context, fragment *m
 	// Zones are uniquely path-scoped by condition_type, so the same place can drift into
 	// multiple thin twins (e.g. /political_tension/... and /military_conflict/...).
 	// Reuse an existing richer sibling only when the incoming zone is clearly skeletal.
-	if fragment.IsLegacyAffectedZone() && v.geoBuilder != nil && v.geoBuilder.fragmentsRepo != nil && result.ReplacementFrag == nil {
+	if fragment.IsAffectedZoneGeo() && v.geoBuilder != nil && v.geoBuilder.fragmentsRepo != nil && result.ReplacementFrag == nil {
 		candidates, err := FindAffectedZoneTwinCandidates(ctx, v.geoBuilder.fragmentsRepo, fragment.CanonicalPath, fragment.ID, 128)
 		if err == nil && len(candidates) > 0 {
 			if existing, reason := SelectAffectedZoneTwinReplacement(fragment, candidates); existing != nil {
@@ -779,15 +779,15 @@ func repairInvalidCanonicalPath(fragment *models.HorizonFragment) (string, bool)
 
 	var candidate string
 	switch {
-	case fragment.IsLegacyProgram():
+	case fragment.IsProgramOrg():
 		candidate = taxonomy.JoinPath("program", "global", slug)
-	case fragment.IsLegacyMediaChannel():
+	case fragment.IsMediaChannelOrg():
 		candidate = taxonomy.JoinPath("media", slug)
-	case fragment.IsLegacyDeposit():
+	case fragment.IsDepositSite():
 		candidate = taxonomy.JoinPath("deposit", "other", slug)
-	case fragment.IsLegacyDomain():
+	case fragment.IsDomainScopeFragment():
 		candidate = taxonomy.JoinPath("domain", "v1", "other", slug)
-	case fragment.IsLegacySphere():
+	case fragment.IsSphereScopeFragment():
 		candidate = taxonomy.JoinPath("sphere", slug)
 	case fragment.Class == ah.FragmentClassOrg:
 		candidate = taxonomy.JoinPath("org", "na", slug)

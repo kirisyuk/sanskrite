@@ -129,7 +129,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-qatargas",
       "targetFragmentId": "frag-eu-gas-market",
-      "type": "SUPPLIES_TO",
+      "relation": "supplies",
       "properties": {
         "criticality": 0.91,
         "amplification": 1.0,
@@ -149,7 +149,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-equinor",
       "targetFragmentId": "frag-eu-gas-market",
-      "type": "SUPPLIES_TO",
+      "relation": "supplies",
       "properties": {
         "criticality": 0.84,
         "amplification": 0.96,

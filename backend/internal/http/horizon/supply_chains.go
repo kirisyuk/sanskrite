@@ -15,6 +15,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathquery"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	redis "github.com/redis/go-redis/v9"
 )
 
@@ -349,25 +350,6 @@ func (h *HorizonHandlers) searchSupplyChainCandidates(r *http.Request, tenantID 
 	return pathquery.SearchSupplyChainAnchors(r.Context(), h.materializedArtifactsRepo, lenses, tenantID, req.Anchors, req.LensID, req.Limit)
 }
 
-func filterSupplyChainCandidates(artifacts []*horizonmodels.MaterializedArtifact, anchors []string) []*horizonmodels.MaterializedArtifact {
-	out := make([]*horizonmodels.MaterializedArtifact, 0, len(artifacts))
-	seen := make(map[string]struct{}, len(artifacts))
-	for _, artifact := range artifacts {
-		if artifact == nil {
-			continue
-		}
-		if _, ok := seen[artifact.ID]; ok {
-			continue
-		}
-		if !artifactContainsAllAnchors(artifact, anchors) {
-			continue
-		}
-		seen[artifact.ID] = struct{}{}
-		out = append(out, artifact)
-	}
-	return out
-}
-
 func artifactsFromSearchResults(results []supplyChainSearchResult) []*horizonmodels.MaterializedArtifact {
 	out := make([]*horizonmodels.MaterializedArtifact, 0, len(results))
 	for _, result := range results {
@@ -596,7 +578,7 @@ func buildSupplyChainSearchAnchors(anchors []string) []supplyChainSearchAnchor {
 func inferCanonicalPathType(path string) string {
 	switch {
 	case strings.HasPrefix(path, "/supply-link/"):
-		return "SUPPLY_LINK"
+		return horizonmodels.FormatClassSubtype(ah.FragmentClassSite, "supply_link")
 	case strings.HasPrefix(path, "/org/"):
 		return "ORGANIZATION"
 	case strings.HasPrefix(path, "/fac/"):
@@ -606,21 +588,12 @@ func inferCanonicalPathType(path string) string {
 	case strings.HasPrefix(path, "/market/"):
 		return "MARKET"
 	case strings.HasPrefix(path, "/zone/"):
-		return "AFFECTED_ZONE"
+		return horizonmodels.FormatClassSubtype(ah.FragmentClassGeo, "affected_zone")
 	case strings.HasPrefix(path, "/loc/"), strings.HasPrefix(path, "/region/"):
 		return "GEO_REGION"
 	default:
 		return ""
 	}
-}
-
-func hasSupplyLinkAnchor(anchors []string) bool {
-	for _, anchor := range anchors {
-		if isSupplyLinkAnchor(anchor) {
-			return true
-		}
-	}
-	return false
 }
 
 func isSupplyLinkAnchor(anchor string) bool {

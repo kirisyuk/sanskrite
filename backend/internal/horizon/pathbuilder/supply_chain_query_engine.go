@@ -265,7 +265,7 @@ func (e *SupplyChainQueryEngine) loadSupplyLinksForQuery(ctx context.Context, op
 		}
 		links := make([]*models.HorizonFragment, 0, len(raw))
 		for _, link := range raw {
-			if link == nil || !link.IsLegacySupplyLink() {
+			if link == nil || !link.IsSupplyLinkFragment() {
 				continue
 			}
 			links = append(links, link)
@@ -324,7 +324,7 @@ func (e *SupplyChainQueryEngine) snapshotFromLinks(links []*models.HorizonFragme
 }
 
 func normalizeSupplyChainQueryLinks(raw *models.HorizonFragment) []*supplyChainQueryLink {
-	if raw == nil || !raw.IsLegacySupplyLink() || raw.ProductRef == nil {
+	if raw == nil || !raw.IsSupplyLinkFragment() || raw.ProductRef == nil {
 		return nil
 	}
 	productRef := canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(*raw.ProductRef))

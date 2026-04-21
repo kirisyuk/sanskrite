@@ -101,7 +101,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-baltic-cell-plant",
       "targetFragmentId": "frag-euro-mobility",
-      "type": "SUPPLIES_TO",
+      "relation": "supplies",
       "properties": {
         "criticality": 0.98,
         "amplification": 1.14,
@@ -116,7 +116,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-baltic-cathodes",
       "targetFragmentId": "frag-baltic-cell-plant",
-      "type": "SUPPLIES_TO",
+      "relation": "supplies",
       "properties": {
         "criticality": 0.96,
         "amplification": 1.14,
@@ -131,7 +131,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-andes-lithium",
       "targetFragmentId": "frag-baltic-cathodes",
-      "type": "SUPPLIES_TO",
+      "relation": "supplies",
       "properties": {
         "criticality": 0.98,
         "amplification": 1.20,

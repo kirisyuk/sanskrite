@@ -470,7 +470,7 @@ func collectFragmentEvidence(fragment *horizonmodels.HorizonFragment) []evidence
 			fragment.Identifiers["marketVertical"],
 		)
 	}
-	if fragment.IsLegacySupplyLink() {
+	if fragment.IsSupplyLinkFragment() {
 		appendField("supply_refs", 1.2,
 			valueOrEmpty(fragment.SupplierRef),
 			valueOrEmpty(fragment.CustomerRef),

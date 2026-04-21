@@ -1,6 +1,7 @@
 package watchruntime
 
 import (
+	"context"
 	"testing"
 	"time"
 
@@ -112,7 +113,7 @@ func TestBuildWatchUniverseIncludesLensSurfaces(t *testing.T) {
 			},
 		},
 	}
-	universe := svc.buildWatchUniverse(nil, lens)
+	universe := svc.buildWatchUniverse(context.TODO(), lens)
 	expected := map[string]struct{}{
 		"/org/qa/qatarenergy":                   {},
 		"/fac/qa/ras-laffan-industrial-city":    {},

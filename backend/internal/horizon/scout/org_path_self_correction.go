@@ -114,9 +114,9 @@ func (e *ScoutEngine) maybeUpgradeLegacyOrgPath(_ context.Context, fragment *mod
 	if strings.HasPrefix(oldPath, "/gov/") {
 		return nil
 	}
-	isLegacy := isLegacyOrgPath(oldPath)
+	isShortOrg := isTwoSegmentOrgPath(oldPath)
 	isOrgNa := strings.HasPrefix(oldPath, "/org/na/")
-	if !isLegacy && !isOrgNa {
+	if !isShortOrg && !isOrgNa {
 		return nil
 	}
 

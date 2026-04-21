@@ -21,7 +21,7 @@ import (
 // To avoid duplicates (A->B and B->A), we normalize by always placing the
 // lexicographically smaller ID as source.
 
-// SymmetricEdgeTypes is provided by scout/legacy_helpers.go after the AH
+// SymmetricEdgeTypes is provided by scout/edge_semantic_helpers.go after the AH
 // "Big Bang" migration removed models.SymmetricEdgeTypes.
 
 // NormalizeSymmetricEdge mirrors the legacy models.NormalizeSymmetricEdge

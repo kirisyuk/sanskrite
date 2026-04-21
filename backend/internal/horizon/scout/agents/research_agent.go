@@ -503,7 +503,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 	spheresLine := strings.Join(dedupNonEmptyStrings(spherePaths), ", ")
 	keywordsLine := strings.Join(dedupNonEmptyStrings(keywords), ", ")
 	specialties = taxonomy.NormalizeSpecialties(specialties)
-	isDomain := fragment != nil && (fragment.IsLegacyDomain() || strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/domain/"))
+	isDomain := fragment != nil && fragment.IsDomainScopeFragment()
 	chainBlock := ""
 	if strings.TrimSpace(chainContext) != "" {
 		chainBlock = strings.TrimSpace(chainContext) + "\n"
@@ -549,7 +549,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 
 	// Add MARKET decomposition block if applicable
 	decompositionBlock := ""
-	if !isDomain && fragment != nil && (fragment.Class == ah.FragmentClassMarket || fragment.IsLegacyProgram() || strings.HasPrefix(fragment.CanonicalPath, "/market/") || strings.HasPrefix(fragment.CanonicalPath, "/program/")) {
+	if !isDomain && fragment != nil && (fragment.Class == ah.FragmentClassMarket || fragment.IsProgramOrg() || strings.HasPrefix(fragment.CanonicalPath, "/market/") || strings.HasPrefix(fragment.CanonicalPath, "/program/")) {
 		// Find matching decomposition hint
 		var hint *DecompositionHint
 		for i := range decompositionHints {

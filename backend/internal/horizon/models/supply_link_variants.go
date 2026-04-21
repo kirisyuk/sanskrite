@@ -301,7 +301,7 @@ func ValidateSupplyLinkFields(f *HorizonFragment) error {
 	if f == nil {
 		return fmt.Errorf("fragment is nil")
 	}
-	if !f.IsLegacySupplyLink() {
+	if !f.IsSupplyLinkFragment() {
 		return fmt.Errorf("fragment must be a supply-link site (Class=site, Subtype=supply_link, or /supply-link/ canonical path)")
 	}
 	// SupplyLink can be tenant-scoped OR global-scoped (global = assumption layer).
@@ -357,7 +357,7 @@ func ValidateSupplyLinkFields(f *HorizonFragment) error {
 
 // IsSupplyLink reports site/subtype supply_link fragments (or /supply-link/ paths).
 func IsSupplyLink(f *HorizonFragment) bool {
-	return f.IsLegacySupplyLink()
+	return f.IsSupplyLinkFragment()
 }
 
 // GetSupplyLinkKey returns a stable key for a SupplyLink (for deduplication).

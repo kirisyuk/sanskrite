@@ -9,21 +9,11 @@ import (
 	"strings"
 )
 
-// =============================================================================
-// LEGACY HELPER PORTS
-// =============================================================================
-// During the AH taxonomy "Big Bang" migration, several helper functions and
-// closed-vocabulary constants were removed from package `models` (their
-// replacements live in agent-side prompts and the canonicalizer pipeline).
-// Scout still needs the local concepts to drive prompt specialization,
-// strategic-overlay critic gates, and relevance ranking, so we port the
-// removed logic here under scout-package scope. These ports are intentionally
-// faithful copies of the pre-removal definitions; see git history for
-// `models/edge_semantic_groups.go`, `models/facility_semantic_contracts.go`,
-// and `models/object_qualifier_contracts.go` for the original sources.
+// Edge semantic groups, facility-specialization hints, and related scout-local
+// vocabulary (prompts, critics, ranking).
 
 // -----------------------------------------------------------------------------
-// Edge semantic groups (formerly models.SemanticGroup*).
+// Edge semantic groups
 // -----------------------------------------------------------------------------
 
 const (
@@ -118,7 +108,7 @@ var edgeTypeToSemanticGroup = map[DependencyType]string{
 
 // -----------------------------------------------------------------------------
 // FacilitySemantic — closed business lane for facility scouting specialization.
-// Ported from deleted models/facility_semantic_contracts.go.
+// Facility scouting lane classifier.
 // -----------------------------------------------------------------------------
 
 type FacilitySemantic string
@@ -309,7 +299,7 @@ func DetectFacilitySemanticFromFragment(fragment *models.HorizonFragment) Facili
 
 // -----------------------------------------------------------------------------
 // ObjectQualifier — closed business qualifier vocabulary.
-// Ported from deleted models/object_qualifier_contracts.go.
+// Qualifier contracts for agent prompts.
 // -----------------------------------------------------------------------------
 
 type ObjectQualifier string

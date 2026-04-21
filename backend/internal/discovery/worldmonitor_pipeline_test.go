@@ -1725,7 +1725,7 @@ func TestBuildIncomingAffectedZoneFragment_MapReadyCoordinates(t *testing.T) {
 	if fragment == nil {
 		t.Fatal("expected fragment")
 	}
-	if !fragment.IsLegacyAffectedZone() {
+	if !fragment.IsAffectedZoneGeo() {
 		t.Fatalf("expected affected zone fragment, got class=%q subtype=%q", fragment.Class, fragment.Subtype)
 	}
 	if !fragment.HasCoordinates || fragment.Coordinates == nil {

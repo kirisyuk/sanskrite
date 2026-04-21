@@ -85,30 +85,24 @@ var fragmentClassAliases = map[string]fragmentClassAlias{
 	"HUMAN":      {ah.FragmentClassPerson, ""},
 	"INDIVIDUAL": {ah.FragmentClassPerson, ""},
 
-	"MEDIA_CHANNEL": {ah.FragmentClassOrg, "media_channel"},
-	"MEDIA":         {ah.FragmentClassOrg, "media_channel"},
-	"CHANNEL":       {ah.FragmentClassOrg, "media_channel"},
-	"MEDIACHANNEL":  {ah.FragmentClassOrg, "media_channel"},
+	"MEDIA":   {ah.FragmentClassOrg, "media_channel"},
+	"CHANNEL": {ah.FragmentClassOrg, "media_channel"},
 
-	"DEPOSIT":   {ah.FragmentClassSite, "deposit"},
 	"MINE":      {ah.FragmentClassSite, "deposit"},
 	"FIELD":     {ah.FragmentClassSite, "deposit"},
 	"BASIN":     {ah.FragmentClassSite, "deposit"},
 	"RESERVOIR": {ah.FragmentClassSite, "deposit"},
 
-	"DECISION":       {ah.FragmentClassDecision, ""},
-	"DECISIONPOINT":  {ah.FragmentClassDecision, ""},
-	"DECISION_POINT": {ah.FragmentClassDecision, ""},
-	"MECHANISM":      {ah.FragmentClassMechanism, ""},
+	"DECISION":      {ah.FragmentClassDecision, ""},
+	"DECISIONPOINT": {ah.FragmentClassDecision, ""},
 
 	"COMMUNITY":  {ah.FragmentClassCommunity, ""},
 	"NETWORK":    {ah.FragmentClassCommunity, ""},
 	"GROUP":      {ah.FragmentClassCommunity, ""},
 	"COLLECTIVE": {ah.FragmentClassCommunity, ""},
 
-	"AFFECTED_ZONE": {ah.FragmentClassGeo, "affected_zone"},
-	"AFFECTEDZONE":  {ah.FragmentClassGeo, "affected_zone"},
-	"ZONE":          {ah.FragmentClassGeo, "affected_zone"},
+	"AFFECTEDZONE": {ah.FragmentClassGeo, "affected_zone"},
+	"ZONE":         {ah.FragmentClassGeo, "affected_zone"},
 
 	"REGIME":  {ah.FragmentClassRegime, ""},
 	"ROUTE":   {ah.FragmentClassRoute, ""},
@@ -125,8 +119,6 @@ var fragmentClassAliases = map[string]fragmentClassAlias{
 
 	// Legacy strategic overlays — folded but recognised so legacy LLM
 	// output still resolves to a valid class for normalisation.
-	"DOMAIN":      {ah.FragmentClassEvidence, "domain_legacy"},
-	"SPHERE":      {ah.FragmentClassEvidence, "sphere_legacy"},
-	"SUPPLY_LINK": {ah.FragmentClassSite, "supply_link"},
-	"SUPPLYLINK":  {ah.FragmentClassSite, "supply_link"},
+	"DOMAIN": {ah.FragmentClassEvidence, "domain_legacy"},
+	"SPHERE": {ah.FragmentClassEvidence, "sphere_legacy"},
 }

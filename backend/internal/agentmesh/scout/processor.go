@@ -7401,9 +7401,9 @@ func buildEnvironmentFrame(req InvestigationRequest, graphCtx map[string]any) En
 		"synonym equivalence, transforms, assemblies, and generic dependencies are distinct semantics",
 	))
 	env.EdgeSemantics = compactStrings(append(env.EdgeSemantics,
-		"ASSEMBLES_INTO captures nearest assembly steps",
-		"SUPPLY_LINK and DEPENDS_ON are not substitutes for product identity or transforms",
-		"TRANSFORMS_INTO captures canonical product conversion steps",
+		"Assembly relations capture nearest assembly steps between products",
+		"Generic flow or dependency edges are not substitutes for product identity or canonical transform steps",
+		"Product conversion steps use canonical lowercase transform relations between products",
 		"typed edges carry metadata and should be reasoned over as graph facts or hypotheses",
 	))
 	env.ArtifactSemantics = compactStrings(append(env.ArtifactSemantics,
@@ -8965,9 +8965,9 @@ func synthesizeBridgeOps(result BridgeResult) []ProposedGraphOp {
 func inferBridgeRelationType(step BridgeStep) string {
 	switch strings.ToLower(strings.TrimSpace(step.StepClass)) {
 	case "transform", "processor":
-		return "TRANSFORMS_INTO"
+		return "transforms_into"
 	case "logistics", "port", "market_link", "contract":
-		return "SUPPLY_LINK"
+		return "supplies"
 	default:
 		return strings.TrimSpace(step.RelationType)
 	}

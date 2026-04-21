@@ -820,7 +820,7 @@ func validateSupplyChainAssemblyGraphPayload(payload map[string]interface{}) err
 	}
 	for i, node := range productNodes {
 		if strings.TrimSpace(node.Ref) == "" || !strings.HasPrefix(strings.TrimSpace(node.Ref), "/product/") {
-			return fmt.Errorf("payload productNode[%d] must reference /product/...", i)
+			return fmt.Errorf("payload productNode[%d] must reference a path under /product/", i)
 		}
 		if node.Class != ah.FragmentClassProduct {
 			return fmt.Errorf("payload productNode[%d] class must be product", i)

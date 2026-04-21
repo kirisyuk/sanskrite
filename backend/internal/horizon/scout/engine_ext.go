@@ -5153,17 +5153,11 @@ func (e *ScoutEngine) processRelationsInternal(
 		// Domain-mode strict filtering: only recurse on edges allowed by the active mode.
 		if isSupplyChainMode {
 			allow := EdgeAllowlistByDomainMode("supply_chain")
-			if !AllowlistContains(allow, DependencyType(rt)) {
-				return false
-			}
-			return true
+			return AllowlistContains(allow, DependencyType(rt))
 		}
 		if isGovernanceMode {
 			allow := EdgeAllowlistByDomainMode("governance")
-			if !AllowlistContains(allow, DependencyType(rt)) {
-				return false
-			}
-			return true
+			return AllowlistContains(allow, DependencyType(rt))
 		}
 
 		// General mode: exclude known noisy edge types
@@ -11978,19 +11972,19 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 	actorNodeType := func(path string) string {
 		path = strings.TrimSpace(path)
 		if strings.HasPrefix(path, "/deposit/") {
-			return "DEPOSIT"
+			return models.FormatClassSubtype(ah.FragmentClassSite, "deposit")
 		}
-		return "FACILITY"
+		return string(ah.FragmentClassSite)
 	}
 	buildChains := func(segments []chainSegment) []agents.SupplyChain {
 		chains := make([]agents.SupplyChain, 0, len(segments))
 		for _, seg := range segments {
 			nodes := []agents.SupplyChainNode{
-				{CanonicalPath: seg.orgPath, Type: "ORGANIZATION", Role: "supplier"},
+				{CanonicalPath: seg.orgPath, Type: string(ah.FragmentClassOrg), Role: "supplier"},
 				{CanonicalPath: seg.facPath, Type: actorNodeType(seg.facPath), Role: "producer"},
-				{CanonicalPath: seg.productPath, Type: "PRODUCT"},
+				{CanonicalPath: seg.productPath, Type: string(ah.FragmentClassProduct)},
 				{CanonicalPath: seg.recipientFac, Type: actorNodeType(seg.recipientFac), Role: "consumer"},
-				{CanonicalPath: seg.recipientOrg, Type: "ORGANIZATION", Role: "customer"},
+				{CanonicalPath: seg.recipientOrg, Type: string(ah.FragmentClassOrg), Role: "customer"},
 			}
 			chains = append(chains, agents.SupplyChain{
 				Nodes:      nodes,
@@ -12019,7 +12013,7 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 			seen[key] = struct{}{}
 			chains = append(chains, agents.SupplyChain{
 				Nodes: []agents.SupplyChainNode{
-					{CanonicalPath: org, Type: "ORGANIZATION", Role: "supplier"},
+					{CanonicalPath: org, Type: string(ah.FragmentClassOrg), Role: "supplier"},
 					{CanonicalPath: fac, Type: actorNodeType(fac), Role: "producer"},
 				},
 				Confidence: 0.6,
@@ -12048,9 +12042,9 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 			seen[key] = struct{}{}
 			chains = append(chains, agents.SupplyChain{
 				Nodes: []agents.SupplyChainNode{
-					{CanonicalPath: org, Type: "ORGANIZATION", Role: "supplier"},
+					{CanonicalPath: org, Type: string(ah.FragmentClassOrg), Role: "supplier"},
 					{CanonicalPath: fac, Type: actorNodeType(fac), Role: "producer"},
-					{CanonicalPath: prod, Type: "PRODUCT"},
+					{CanonicalPath: prod, Type: string(ah.FragmentClassProduct)},
 				},
 				Confidence: 0.65,
 				Reason:     "recursive unwinding step2",
@@ -12083,9 +12077,9 @@ func (e *ScoutEngine) runSupplyChainRecursiveUnwinding(
 				seen[key] = struct{}{}
 				chains = append(chains, agents.SupplyChain{
 					Nodes: []agents.SupplyChainNode{
-						{CanonicalPath: srcOrg, Type: "ORGANIZATION", Role: "supplier"},
+						{CanonicalPath: srcOrg, Type: string(ah.FragmentClassOrg), Role: "supplier"},
 						{CanonicalPath: srcFac, Type: actorNodeType(srcFac), Role: "producer"},
-						{CanonicalPath: prod, Type: "PRODUCT"},
+						{CanonicalPath: prod, Type: string(ah.FragmentClassProduct)},
 						{CanonicalPath: recipFac, Type: actorNodeType(recipFac), Role: "consumer"},
 					},
 					Confidence: 0.68,
@@ -12487,19 +12481,19 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 	actorNodeType := func(path string) string {
 		path = strings.TrimSpace(path)
 		if strings.HasPrefix(path, "/deposit/") {
-			return "DEPOSIT"
+			return models.FormatClassSubtype(ah.FragmentClassSite, "deposit")
 		}
-		return "FACILITY"
+		return string(ah.FragmentClassSite)
 	}
 	buildChains := func(segments []chainSegment) []agents.SupplyChain {
 		chains := make([]agents.SupplyChain, 0, len(segments))
 		for _, seg := range segments {
 			nodes := []agents.SupplyChainNode{
-				{CanonicalPath: seg.supplierOrg, Type: "ORGANIZATION", Role: "supplier"},
+				{CanonicalPath: seg.supplierOrg, Type: string(ah.FragmentClassOrg), Role: "supplier"},
 				{CanonicalPath: seg.supplierFac, Type: actorNodeType(seg.supplierFac), Role: "producer"},
-				{CanonicalPath: seg.productPath, Type: "PRODUCT"},
+				{CanonicalPath: seg.productPath, Type: string(ah.FragmentClassProduct)},
 				{CanonicalPath: seg.consumerFac, Type: actorNodeType(seg.consumerFac), Role: "consumer"},
-				{CanonicalPath: seg.consumerOrg, Type: "ORGANIZATION", Role: "customer"},
+				{CanonicalPath: seg.consumerOrg, Type: string(ah.FragmentClassOrg), Role: "customer"},
 			}
 			chains = append(chains, agents.SupplyChain{
 				Nodes:      nodes,
@@ -12528,7 +12522,7 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 			seen[key] = struct{}{}
 			chains = append(chains, agents.SupplyChain{
 				Nodes: []agents.SupplyChainNode{
-					{CanonicalPath: org, Type: "ORGANIZATION", Role: "customer"},
+					{CanonicalPath: org, Type: string(ah.FragmentClassOrg), Role: "customer"},
 					{CanonicalPath: fac, Type: actorNodeType(fac), Role: "consumer"},
 				},
 				Confidence: 0.6,
@@ -12557,9 +12551,9 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 			seen[key] = struct{}{}
 			chains = append(chains, agents.SupplyChain{
 				Nodes: []agents.SupplyChainNode{
-					{CanonicalPath: org, Type: "ORGANIZATION", Role: "customer"},
+					{CanonicalPath: org, Type: string(ah.FragmentClassOrg), Role: "customer"},
 					{CanonicalPath: fac, Type: actorNodeType(fac), Role: "consumer"},
-					{CanonicalPath: prod, Type: "PRODUCT"},
+					{CanonicalPath: prod, Type: string(ah.FragmentClassProduct)},
 				},
 				Confidence: 0.65,
 				Reason:     "upstream unwinding U1",
@@ -12595,9 +12589,9 @@ func (e *ScoutEngine) runSupplyChainUpstreamUnwinding(
 				seen[key] = struct{}{}
 				chains = append(chains, agents.SupplyChain{
 					Nodes: []agents.SupplyChainNode{
-						{CanonicalPath: consumerOrg, Type: "ORGANIZATION", Role: "customer"},
+						{CanonicalPath: consumerOrg, Type: string(ah.FragmentClassOrg), Role: "customer"},
 						{CanonicalPath: supplierFac, Type: actorNodeType(supplierFac), Role: "supplier"},
-						{CanonicalPath: prod, Type: "PRODUCT"},
+						{CanonicalPath: prod, Type: string(ah.FragmentClassProduct)},
 						{CanonicalPath: consumerFac, Type: actorNodeType(consumerFac), Role: "consumer"},
 					},
 					Confidence: 0.68,

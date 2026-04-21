@@ -39,7 +39,7 @@ type FragmentMergeAuditRecord struct {
 
 	// Origin
 	Source   FragmentMergeAuditSource `json:"source" firestore:"source"`
-	ToolName string                  `json:"toolName,omitempty" firestore:"toolName,omitempty"` // e.g. horizon_smart_dedup, horizon_deduplicate_fragments
+	ToolName string                  `json:"toolName,omitempty" firestore:"toolName,omitempty"` // e.g. horizon_deduplicate_fragments, horizon_merge_discovered
 	JobID   string                  `json:"jobId,omitempty" firestore:"jobId,omitempty"`         // enforcement job, scouting job, etc.
 	LensID  string                  `json:"lensId,omitempty" firestore:"lensId,omitempty"`       // for lens_combine / graph_intent
 

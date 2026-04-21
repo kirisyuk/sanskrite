@@ -36,7 +36,7 @@ func TestBuildGroundedCompletionPromptUsesWideMapSlice(t *testing.T) {
 			{
 				SourceCanonicalPath: "/org/de/carl-zeiss-smt-gmbh",
 				TargetCanonicalPath: "/org/nl/asml-holding-nv",
-				RelationType:        "SUPPLIES_TO",
+				RelationType:        string(ah.RelationNameSupplies),
 				RelationFamily:      "context",
 				RelationRole:        "context",
 				BusinessMeaning:     "ZEISS optics to ASML",

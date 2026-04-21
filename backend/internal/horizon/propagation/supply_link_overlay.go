@@ -133,7 +133,7 @@ func buildSupplyLinkOverlayRecords(ctx context.Context, links []*horizonmodels.H
 }
 
 func buildSupplyLinkOverlayRecord(link *horizonmodels.HorizonFragment) (supplyLinkOverlayRecord, bool) {
-	if link == nil || !link.IsLegacySupplyLink() {
+	if link == nil || !link.IsSupplyLinkFragment() {
 		return supplyLinkOverlayRecord{}, false
 	}
 	supplier := firstNonEmptyPath(link.SupplierFacilityRef, link.SupplierRef)

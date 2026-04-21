@@ -6,14 +6,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
-// =============================================================================
-// LEGACY HELPER PORTS
-// =============================================================================
-// Pathbuilder still relies on a handful of product-canonicalization helpers
-// that lived in `models/edge_canonicalization.go` before the AH "Big Bang"
-// migration removed that file. We port the bare implementations here under
-// pathbuilder-package scope; they are pure functions over canonical paths
-// and the local DependencyType alias.
+// Product canonical-path helpers for supply-chain path assembly.
 
 // IsProductTransitionEdgeType reports whether the edge type is a
 // product->product upstream/downstream step used in supply-chain

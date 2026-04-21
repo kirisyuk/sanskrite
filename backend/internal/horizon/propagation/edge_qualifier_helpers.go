@@ -8,14 +8,9 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
-// =============================================================================
-// LEGACY HELPER PORTS
-// =============================================================================
-// AH "Big Bang" removed these constants/methods from models. Propagation
-// still relies on them. Keep them as plain constants/shims here so the
-// propagation package compiles unchanged.
+// Edge facet constants and qualifier accessors for signal propagation.
 
-// Legacy edge facet constants — re-exported from graphenrich. The canonical
+// Edge facet constants — re-exported from graphenrich. The canonical
 // definitions live next to the inference rules in graphenrich/facets.go.
 const (
 	FacetLogistics      = graphenrich.FacetLogistics
@@ -25,17 +20,15 @@ const (
 	FacetPayment        = graphenrich.FacetPayment
 )
 
-// DependencyTypeTriggeredBy is a legacy snake_case relation kept for
-// read-side back-compat with persisted graphs.
+// DependencyTypeTriggeredBy is a persisted-graph relation token outside AH.
 const DependencyTypeTriggeredBy DependencyType = "triggered_by"
 
-// edgeSubstitutability returns the substitutability score recorded in the
-// edge qualifier bag (no dedicated method exists post-migration).
+// edgeSubstitutability returns substitutability from the edge qualifier bag.
 func edgeSubstitutability(edge *models.DependencyEdge) float64 {
 	if edge == nil || edge.Qualifiers == nil {
 		return 0
 	}
-	val, ok := edge.Qualifiers[models.QualifierAliasSubstitutability]
+	val, ok := edge.Qualifiers[models.QualifierSubstitutability]
 	if !ok || val == nil {
 		return 0
 	}
@@ -58,8 +51,7 @@ func edgeSubstitutability(edge *models.DependencyEdge) float64 {
 	return 0
 }
 
-// edgeFacet reads the edge facet from the qualifier bag (legacy GetFacet
-// helper was removed).
+// edgeFacet reads the edge facet from the qualifier bag.
 func edgeFacet(edge *models.DependencyEdge) graphenrich.EdgeFacet {
 	if edge == nil || edge.Qualifiers == nil {
 		return ""

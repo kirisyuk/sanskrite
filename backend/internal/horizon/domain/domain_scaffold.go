@@ -8,11 +8,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
-// =============================================================================
-// LEGACY HELPER PORTS
-// =============================================================================
-// The AH "Big Bang" migration removed these helpers from edgesemantics/models;
-// domain still relies on them. Pure logic, ported verbatim.
+// Domain scaffold relations and edge qualifier shims used by the domain engine.
 
 // domainScaffoldRelationTypes is the canonical relation set used for DOMAIN
 // expansion prompts and domain-anchor sanitization. Names are kept as
@@ -40,17 +36,13 @@ func IsDomainScaffoldRelationType(t ah.RelationName) bool {
 	return false
 }
 
-// =============================================================================
-// edge.GetSubstitutability shim
-// =============================================================================
-// The dedicated method was dropped along with influence_qualifiers.go; the
-// underlying value is still available via the qualifier alias bag.
+// edgeSubstitutability reads substitutability from the edge qualifier bag.
 
 func edgeSubstitutability(edge *models.DependencyEdge) float64 {
 	if edge == nil || edge.Qualifiers == nil {
 		return 0
 	}
-	val, ok := edge.Qualifiers[models.QualifierAliasSubstitutability]
+	val, ok := edge.Qualifiers[models.QualifierSubstitutability]
 	if !ok || val == nil {
 		return 0
 	}

@@ -171,7 +171,7 @@ func (g *Generator) Generate(ctx context.Context, fragmentID string, opts Genera
 		profile = p
 		genModel = usedModel
 		genNotes = notes
-	} else if fragment.IsLegacyProgram() {
+	} else if fragment.IsProgramOrg() {
 		// PROGRAM uses multi-step generation with program-specific structure.
 		p, usedModel, notes, err := g.generateProgramProfileMultiStep(ctx, fragment, graphContext)
 		if err != nil {

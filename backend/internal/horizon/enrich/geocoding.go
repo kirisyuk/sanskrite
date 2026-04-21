@@ -172,7 +172,7 @@ func enrichCoordinatesFromGeoNamesCanonicalZone(
 	fragment *hmodels.HorizonFragment,
 ) (bool, error) {
 	cp := strings.TrimSpace(fragment.CanonicalPath)
-	if !strings.HasPrefix(cp, "/zone/") || !fragment.IsLegacyAffectedZone() {
+	if !strings.HasPrefix(cp, "/zone/") || !fragment.IsAffectedZoneGeo() {
 		return false, nil
 	}
 	parts := strings.Split(strings.Trim(cp, "/"), "/")
@@ -478,7 +478,7 @@ func BuildAddressFromFragmentWithSource(f *hmodels.HorizonFragment) (string, str
 			}
 		}
 		// For geo-centric fragment kinds, a plain place name can still be geocoded.
-		if name != "" && (f.Class == FragmentTypeGeoRegion || f.Class == FragmentTypeEvent || f.IsLegacyAffectedZone()) {
+		if name != "" && (f.Class == FragmentTypeGeoRegion || f.Class == FragmentTypeEvent || f.IsAffectedZoneGeo()) {
 			if addressvalidate.IsPlausibleAddress(name) {
 				return name, geoAddressSourcePlaceCountry
 			}
@@ -486,7 +486,7 @@ func BuildAddressFromFragmentWithSource(f *hmodels.HorizonFragment) (string, str
 	}
 
 	// 2b. /zone/{geo}/{condition_type}/{slug}: build "slug, CC" from canonical path for AFFECTED_ZONE.
-	if f.IsLegacyAffectedZone() && strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/zone/") {
+	if f.IsAffectedZoneGeo() && strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/zone/") {
 		parts := strings.Split(strings.Trim(strings.TrimSpace(f.CanonicalPath), "/"), "/")
 		if len(parts) >= 4 && parts[0] == "zone" {
 			geo := strings.TrimSpace(parts[1])
@@ -539,7 +539,7 @@ func BuildAddressFromFragmentWithSource(f *hmodels.HorizonFragment) (string, str
 	}
 
 	// 4. Labels["en"] + country for DEPOSIT (e.g. "Permian Basin, US") — deposit names are place names, not company names.
-	if f.IsLegacyDeposit() {
+	if f.IsDepositSite() {
 		name := ""
 		if f.Labels != nil {
 			name = strings.TrimSpace(f.Labels["en"])

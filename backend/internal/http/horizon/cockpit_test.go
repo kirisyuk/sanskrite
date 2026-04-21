@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestShouldSkipDomainIncomingEdgeForCockpit(t *testing.T) {

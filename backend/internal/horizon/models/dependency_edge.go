@@ -1,9 +1,7 @@
 package models
 
 import (
-	"encoding/json"
 	"fmt"
-	"strings"
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
@@ -88,45 +86,6 @@ func (e *DependencyEdge) Validate() error {
 	}
 	if e.Properties.Amplification < 0 {
 		return fmt.Errorf("properties.amplification must be non-negative")
-	}
-	return nil
-}
-
-// dependencyEdgeBase is a type alias used purely to break the recursive
-// MarshalJSON / UnmarshalJSON loop. It is NEVER referenced outside the
-// custom marshalers below.
-type dependencyEdgeBase DependencyEdge
-
-// dependencyEdgeJSONShim mirrors DependencyEdge 1:1 except it accepts
-// the legacy `type` field (UPPER_SNAKE DependencyType) alongside the
-// canonical `relation`. Persisted Firestore docs and test fixtures
-// written before P1.04 are auto-upgraded on read via
-// NormalizeWireRelationStrict.
-type dependencyEdgeJSONShim struct {
-	*dependencyEdgeBase
-	LegacyType string `json:"type,omitempty"`
-}
-
-// UnmarshalJSON accepts both the new wire shape (`relation`) and the
-// legacy shape (`type: "OWNS"`). Legacy values are translated through
-// NormalizeWireRelationStrict (which delegates to graph_intent.go's
-// legacyRelationAliases / migration_map.yaml). Unknown legacy strings
-// fall through to a lowercase guess so caller-side validation
-// (Validate, scout pipeline, migrate-cli) can still flag them.
-func (e *DependencyEdge) UnmarshalJSON(data []byte) error {
-	shim := dependencyEdgeJSONShim{dependencyEdgeBase: (*dependencyEdgeBase)(e)}
-	if err := json.Unmarshal(data, &shim); err != nil {
-		return err
-	}
-	if e.Relation == "" {
-		legacy := strings.TrimSpace(shim.LegacyType)
-		if legacy != "" {
-			if canonical, ok := NormalizeWireRelationStrict(legacy); ok {
-				e.Relation = canonical
-			} else if rel, ok := ah.NormalizeRelation(strings.ToLower(legacy)); ok {
-				e.Relation = rel
-			}
-		}
 	}
 	return nil
 }

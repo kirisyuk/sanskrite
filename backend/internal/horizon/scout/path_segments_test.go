@@ -57,13 +57,13 @@ func TestBuildSegmentsFromParsed_FallsBackToEdgeDerivedSegments(t *testing.T) {
 			{
 				SourceCanonicalPath: "/fac/jp/yazaki",
 				TargetCanonicalPath: "/product/component/electrical/manufacturing/automotive-wire-harness",
-				RelationType:        "PRODUCES",
+				RelationType:        "produces",
 				Confidence:          0.63,
 			},
 			{
 				SourceCanonicalPath: "/product/component/electrical/manufacturing/automotive-wire-harness",
 				TargetCanonicalPath: "/fac/toyota-motor-corp/toyota-city-plant",
-				RelationType:        "SUPPLIES_TO",
+				RelationType:        "supplies",
 				Confidence:          0.74,
 			},
 		},

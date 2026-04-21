@@ -3204,7 +3204,7 @@ func (p *HorizonMonitorPipeline) resolveSignalLandingZoneFragment(ctx context.Co
 	}
 	for _, ref := range signalLandingZoneRefs(result) {
 		frag, err := p.fragmentsRepo.GetByCanonicalPath(ctx, ref)
-		if err == nil && frag != nil && frag.IsLegacyAffectedZone() {
+		if err == nil && frag != nil && frag.IsAffectedZoneGeo() {
 			return frag
 		}
 	}
@@ -3299,7 +3299,7 @@ func signalLandingZonePriority(ref string) int {
 }
 
 func landingZoneFragmentToCandidate(zone *horizonmodels.HorizonFragment) *affectedZoneCandidate {
-	if zone == nil || !zone.IsLegacyAffectedZone() {
+	if zone == nil || !zone.IsAffectedZoneGeo() {
 		return nil
 	}
 	precision := strings.TrimSpace(asString(zone.Qualifiers["geoPrecision"]))
@@ -3369,7 +3369,7 @@ func (p *HorizonMonitorPipeline) upsertAffectedZoneGraphLinks(
 		return nil
 	}
 	zoneID := strings.TrimSpace(zone.ID)
-	if zoneID == "" || !zone.IsLegacyAffectedZone() {
+	if zoneID == "" || !zone.IsAffectedZoneGeo() {
 		return nil
 	}
 	affectsTargets, locatedInTarget := p.resolveAffectedZoneGraphTargets(ctx, candidate)
@@ -3825,9 +3825,9 @@ func affectedZoneFallbackTargetScore(candidate *affectedZoneCandidate, frag *hor
 	// Legacy DEPOSIT is site/deposit and legacy PROGRAM is org/program under the
 	// AH taxonomy; disambiguate via predicates before falling back to the bare class.
 	switch {
-	case frag.IsLegacyDeposit():
+	case frag.IsDepositSite():
 		score += 0.18
-	case frag.IsLegacyProgram():
+	case frag.IsProgramOrg():
 		score += 0.06
 	case frag.Class == FragmentTypeFacility:
 		score += 0.22
@@ -4164,7 +4164,7 @@ func (p *HorizonMonitorPipeline) applyAffectedZoneRecoveryObservation(
 	now := time.Now().UTC()
 	for _, path := range uniqueStrings(candidates) {
 		frag, err := p.fragmentsRepo.GetByCanonicalPath(ctx, path)
-		if err != nil || frag == nil || !frag.IsLegacyAffectedZone() {
+		if err != nil || frag == nil || !frag.IsAffectedZoneGeo() {
 			continue
 		}
 		if !applyStickyRecoveryObservation(frag, e, now) {
@@ -4237,7 +4237,7 @@ func (p *HorizonMonitorPipeline) findSemanticAffectedZoneMatch(
 		return nil
 	}
 	f, err := p.fragmentsRepo.GetByCanonicalPath(ctx, bestPath)
-	if err != nil || f == nil || !f.IsLegacyAffectedZone() {
+	if err != nil || f == nil || !f.IsAffectedZoneGeo() {
 		return nil
 	}
 	return f
@@ -4310,7 +4310,7 @@ func selectDeterministicAffectedZoneMatch(candidate *affectedZoneCandidate, frag
 	bestScore := 0.0
 	var best *horizonmodels.HorizonFragment
 	for _, frag := range fragments {
-		if frag == nil || !frag.IsLegacyAffectedZone() {
+		if frag == nil || !frag.IsAffectedZoneGeo() {
 			continue
 		}
 		if strings.EqualFold(strings.TrimSpace(frag.Status), string(horizonmodels.FragmentStatusArchived)) {
@@ -4519,7 +4519,7 @@ func mergeAffectedZoneFragment(
 	if dst == nil || c == nil {
 		return false
 	}
-	if !dst.IsLegacyAffectedZone() {
+	if !dst.IsAffectedZoneGeo() {
 		return false
 	}
 	changed := false
@@ -4658,7 +4658,7 @@ func (p *HorizonMonitorPipeline) publishAffectedZoneUpsert(
 	sourceID string,
 	operation string,
 ) {
-	if p == nil || p.realtimePublisher == nil || f == nil || !f.IsLegacyAffectedZone() {
+	if p == nil || p.realtimePublisher == nil || f == nil || !f.IsAffectedZoneGeo() {
 		return
 	}
 	tenantID = strings.TrimSpace(tenantID)
@@ -4747,7 +4747,7 @@ func (p *HorizonMonitorPipeline) maybeCreateStrategicGapRecommendation(
 	event *horizonMonitorFeedEvent,
 	audit *horizonMonitorSignalFlowAudit,
 ) {
-	if p == nil || p.strategicRecommendations == nil || zone == nil || !zone.IsLegacyAffectedZone() {
+	if p == nil || p.strategicRecommendations == nil || zone == nil || !zone.IsAffectedZoneGeo() {
 		return
 	}
 	input := horizonrecommendations.DetectionInput{
@@ -4839,7 +4839,7 @@ func (p *HorizonMonitorPipeline) emitWatchRuntimeSignals(
 }
 
 func (p *HorizonMonitorPipeline) watchTriggerAnchorsForZone(ctx context.Context, tenantID string, zone *horizonmodels.HorizonFragment) []string {
-	if zone == nil || !zone.IsLegacyAffectedZone() {
+	if zone == nil || !zone.IsAffectedZoneGeo() {
 		return nil
 	}
 	anchors := make([]string, 0, 12)
@@ -4931,7 +4931,7 @@ func (p *HorizonMonitorPipeline) coolAffectedZones(ctx context.Context, tenantID
 	}
 	now := time.Now().UTC()
 	for _, frag := range items {
-		if frag == nil || !frag.IsLegacyAffectedZone() {
+		if frag == nil || !frag.IsAffectedZoneGeo() {
 			continue
 		}
 		st := parseAffectedZoneState(frag)
@@ -8303,7 +8303,7 @@ func affectedZoneExactAnchorFragmentScore(seed string, frag *horizonmodels.Horiz
 	// Legacy DEPOSIT (=site/deposit) gets a slightly different score than a generic
 	// facility/site; disambiguate via predicate before falling back to the bare class.
 	switch {
-	case frag.IsLegacyDeposit():
+	case frag.IsDepositSite():
 		score += 0.32
 	case frag.Class == FragmentTypeFacility:
 		score += 0.36
@@ -8357,7 +8357,7 @@ func affectedZoneLinkedFragmentScore(
 	score := baseScore
 	// Legacy DEPOSIT (=site/deposit) needs to be matched separately from a generic facility/site.
 	switch {
-	case frag.IsLegacyDeposit():
+	case frag.IsDepositSite():
 		score += 0.26
 	case frag.Class == FragmentTypeFacility:
 		score += 0.28
@@ -8461,7 +8461,7 @@ func buildAffectedZoneAnchorFromFragment(
 	score := baseScore
 	// Legacy DEPOSIT (=site/deposit) needs to be matched separately from a generic facility/site.
 	switch {
-	case frag.IsLegacyDeposit():
+	case frag.IsDepositSite():
 		score += 0.28
 	case frag.Class == FragmentTypeFacility:
 		score += 0.30

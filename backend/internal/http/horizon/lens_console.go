@@ -145,7 +145,7 @@ func isLensConsoleToolAllowed(tool string) bool {
 	}
 }
 
-func (h *HorizonHandlers) executeLensConsoleTool(ctx context.Context, tenantID string, lens *horizonmodels.Lens, req *horizonmodels.LensConsoleToolRunRequest) (map[string]any, map[string]any, []string, bool, error) {
+func (h *HorizonHandlers) executeLensConsoleTool(ctx context.Context, _ string, lens *horizonmodels.Lens, req *horizonmodels.LensConsoleToolRunRequest) (map[string]any, map[string]any, []string, bool, error) {
 	switch req.Tool {
 	case horizonmodels.LensConsoleToolObserveGraph:
 		result, warnings, err := h.lensConsoleObserveGraph(ctx, lens)

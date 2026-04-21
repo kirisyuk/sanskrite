@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func TestRepairGraphIntentPlanWithResolvers_RewritesProductPathFromLabel(t *testing.T) {

@@ -770,11 +770,7 @@ func isCrossJurisdictionSuspicious(edgeType DependencyType, srcPath, dstPath str
 		"CONTROLLED_BY":                     true,
 	}
 
-	if localEdgeTypes[edgeType] {
-		return true
-	}
-
-	return false
+	return localEdgeTypes[edgeType]
 }
 
 type edgeBatchBufferKey struct{}

@@ -595,7 +595,7 @@ func classifyLensChatAnalyticalIntent(question string) string {
 	}
 }
 
-func (h *HorizonHandlers) loadLensChatAnalyticalEvidence(ctx context.Context, lens *horizonmodels.Lens, message, intent string) ([]lensChatInternalHit, []lensChatPreparedEvidenceDoc, []string, []string) {
+func (h *HorizonHandlers) loadLensChatAnalyticalEvidence(ctx context.Context, lens *horizonmodels.Lens, _, intent string) ([]lensChatInternalHit, []lensChatPreparedEvidenceDoc, []string, []string) {
 	if h == nil || lens == nil || intent == "" {
 		return nil, nil, nil, nil
 	}

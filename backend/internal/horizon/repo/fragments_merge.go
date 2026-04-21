@@ -17,6 +17,19 @@ import (
 
 const mergeRedirectStableTTL = 7 * 24 * time.Hour
 
+// mergeMaterializedProfile selects secondary materialized-artifact index
+// lookups during merge path rewrites. Intentionally not stringly-typed
+// against legacy UPPER_SNAKE fragment labels.
+type mergeMaterializedProfile int
+
+const (
+	mergeMaterializedNone mergeMaterializedProfile = iota
+	mergeMaterializedGeoPlain
+	mergeMaterializedAffectedZone
+	mergeMaterializedSupplyLink
+	mergeMaterializedProduct
+)
+
 // Ensure FragmentsMergeRepository implements policy.MergeFragments.
 var _ policy.MergeFragments = (*FragmentsMergeRepository)(nil)
 
@@ -294,34 +307,26 @@ func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPaths(ctx context
 	if target == "" {
 		return
 	}
-	r.rewriteMaterializedArtifactsPathsForPaths(ctx, tenantID, fragmentMergeProfile(dup), collectFragmentMergePaths(dup, target), target)
+	r.rewriteMaterializedArtifactsPathsForPaths(ctx, tenantID, fragmentMergeMaterializedProfile(dup), collectFragmentMergePaths(dup, target), target)
 }
 
-// fragmentMergeProfile returns a coarse string discriminator that the
-// materialized-artifact rewrite uses to pick between geo / supply-link /
-// affected-zone secondary lookups. Returns the legacy uppercase aliases
-// expected by the pre-existing switch logic (kept for behavioral
-// equivalence after the AH migration removed FragmentType).
-func fragmentMergeProfile(frag *models.HorizonFragment) string {
+func fragmentMergeMaterializedProfile(frag *models.HorizonFragment) mergeMaterializedProfile {
 	if frag == nil {
-		return ""
+		return mergeMaterializedNone
 	}
-	if frag.IsLegacySupplyLink() {
-		return "SUPPLY_LINK"
+	if frag.IsSupplyLinkFragment() {
+		return mergeMaterializedSupplyLink
 	}
-	switch frag.Class {
-	case ah.FragmentClassGeo:
-		switch strings.TrimSpace(frag.Subtype) {
-		case "affected_zone":
-			return "AFFECTED_ZONE"
-		default:
-			return "GEO_REGION"
+	if frag.Class == ah.FragmentClassGeo {
+		if strings.TrimSpace(frag.Subtype) == "affected_zone" {
+			return mergeMaterializedAffectedZone
 		}
+		return mergeMaterializedGeoPlain
 	}
-	return ""
+	return mergeMaterializedNone
 }
 
-func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPathsForPaths(ctx context.Context, tenantID string, fragType string, pathsToReplace []string, target string) {
+func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPathsForPaths(ctx context.Context, tenantID string, profile mergeMaterializedProfile, pathsToReplace []string, target string) {
 	if r.materializedRepo == nil {
 		return
 	}
@@ -356,16 +361,16 @@ func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPathsForPaths(ctx
 			if artifacts, err := r.materializedRepo.FindByNodeRefAnyTenant(ctx, oldPath, kind, 500); err == nil {
 				collectArtifacts(artifacts)
 			}
-			switch fragType {
-			case "GEO_REGION":
+			switch profile {
+			case mergeMaterializedGeoPlain:
 				if artifacts, err := r.materializedRepo.FindByGeoRefsAnyTenant(ctx, []string{oldPath}, kind, 500); err == nil {
 					collectArtifacts(artifacts)
 				}
-			case "SUPPLY_LINK":
+			case mergeMaterializedSupplyLink:
 				if artifacts, err := r.materializedRepo.FindByFlowRefsAnyTenant(ctx, []string{oldPath}, kind, 500); err == nil {
 					collectArtifacts(artifacts)
 				}
-			case "AFFECTED_ZONE":
+			case mergeMaterializedAffectedZone:
 				if artifacts, err := r.materializedRepo.FindByZoneRefsAnyTenant(ctx, []string{oldPath}, kind, 500); err == nil {
 					collectArtifacts(artifacts)
 				}
@@ -381,22 +386,22 @@ func (r *FragmentsMergeRepository) rewriteMaterializedArtifactsPathsForPaths(ctx
 		if artifacts, err := r.materializedRepo.FindByNodeRef(ctx, "global", oldPath, kind); err == nil {
 			collectArtifacts(artifacts)
 		}
-		switch fragType {
-		case "GEO_REGION":
+		switch profile {
+		case mergeMaterializedGeoPlain:
 			if artifacts, err := r.materializedRepo.FindByGeoRefsAny(ctx, tenantID, []string{oldPath}, kind, 500); err == nil {
 				collectArtifacts(artifacts)
 			}
 			if artifacts, err := r.materializedRepo.FindByGeoRefsAny(ctx, "global", []string{oldPath}, kind, 500); err == nil {
 				collectArtifacts(artifacts)
 			}
-		case "SUPPLY_LINK":
+		case mergeMaterializedSupplyLink:
 			if artifacts, err := r.materializedRepo.FindByFlowRefsAny(ctx, tenantID, []string{oldPath}, kind, 500); err == nil {
 				collectArtifacts(artifacts)
 			}
 			if artifacts, err := r.materializedRepo.FindByFlowRefsAny(ctx, "global", []string{oldPath}, kind, 500); err == nil {
 				collectArtifacts(artifacts)
 			}
-		case "AFFECTED_ZONE":
+		case mergeMaterializedAffectedZone:
 			if artifacts, err := r.materializedRepo.FindByZoneRefsAny(ctx, tenantID, []string{oldPath}, kind, 500); err == nil {
 				collectArtifacts(artifacts)
 			}
@@ -537,7 +542,7 @@ func (r *FragmentsMergeRepository) rewriteSupplyLinksPaths(ctx context.Context, 
 	_, _ = r.RewriteSupplyLinksForPathPairs(ctx, tenantID, replacements)
 }
 
-// RewriteSupplyLinksForPathPairs rewrites embedded canonical-path refs inside SUPPLY_LINK fragments.
+// RewriteSupplyLinksForPathPairs rewrites embedded canonical-path refs inside site/subtype supply_link fragments.
 // It is safe to run as a repair pass after merges, because it rewrites by old->new path pairs and
 // then re-materializes the supply-link canonicalPath plus dependent redirects/materialized stores.
 func (r *FragmentsMergeRepository) RewriteSupplyLinksForPathPairs(ctx context.Context, tenantID string, replacements map[string]string) (int, error) {
@@ -603,8 +608,8 @@ func (r *FragmentsMergeRepository) RewriteSupplyLinksForPathPairs(ctx context.Co
 			return updated, err
 		}
 		if oldLinkPath != "" && link.CanonicalPath != "" && oldLinkPath != link.CanonicalPath {
-			r.recordPathRedirects(ctx, "SUPPLY_LINK", []string{oldLinkPath}, link.CanonicalPath)
-			r.rewriteMaterializedArtifactsPathsForPaths(ctx, link.TenantID, "SUPPLY_LINK", []string{oldLinkPath}, link.CanonicalPath)
+			r.recordPathRedirects(ctx, models.FormatClassSubtype(ah.FragmentClassSite, "supply_link"), []string{oldLinkPath}, link.CanonicalPath)
+			r.rewriteMaterializedArtifactsPathsForPaths(ctx, link.TenantID, mergeMaterializedSupplyLink, []string{oldLinkPath}, link.CanonicalPath)
 			r.rewriteLensScopePathsForPaths(ctx, link.TenantID, []string{oldLinkPath}, link.CanonicalPath)
 			r.rewriteWatchSubjectsPathsForPaths(ctx, link.TenantID, []string{oldLinkPath}, link.CanonicalPath, "", "")
 			r.rewriteOntologyFactsPathsForPaths(ctx, link.TenantID, []string{oldLinkPath}, link.CanonicalPath)
@@ -637,8 +642,8 @@ func (r *FragmentsMergeRepository) RewriteProductPathReferencesForPathPairs(ctx 
 			log.Printf("[FragmentsMerge] rewrite product path references progress: processed=%d total=%d", idx, len(orderedOldPaths))
 		}
 		target := replacements[oldPath]
-		r.recordPathRedirects(ctx, "PRODUCT", []string{oldPath}, target)
-		r.rewriteMaterializedArtifactsPathsForPaths(ctx, tenantID, "PRODUCT", []string{oldPath}, target)
+		r.recordPathRedirects(ctx, string(ah.FragmentClassProduct), []string{oldPath}, target)
+		r.rewriteMaterializedArtifactsPathsForPaths(ctx, tenantID, mergeMaterializedProduct, []string{oldPath}, target)
 		r.rewriteLensScopePathsForPaths(ctx, tenantID, []string{oldPath}, target)
 		r.rewriteWatchSubjectsPathsForPaths(ctx, tenantID, []string{oldPath}, target, "", "")
 		r.rewriteOntologyFactsPathsForPaths(ctx, tenantID, []string{oldPath}, target)
@@ -655,7 +660,7 @@ func (r *FragmentsMergeRepository) collectSupplyLinksForPathPairs(ctx context.Co
 	supplyLinks := make(map[string]*models.HorizonFragment)
 	collectLinks := func(items []*models.HorizonFragment) {
 		for _, item := range items {
-			if item == nil || !item.IsLegacySupplyLink() || strings.TrimSpace(item.ID) == "" {
+			if item == nil || !item.IsSupplyLinkFragment() || strings.TrimSpace(item.ID) == "" {
 				continue
 			}
 			supplyLinks[item.ID] = item
@@ -694,7 +699,7 @@ func (r *FragmentsMergeRepository) findSupplyLinksByPath(ctx context.Context, te
 	limit := 10000
 	collect := func(out map[string]*models.HorizonFragment, items []*models.HorizonFragment) {
 		for _, item := range items {
-			if item == nil || !item.IsLegacySupplyLink() || strings.TrimSpace(item.ID) == "" {
+			if item == nil || !item.IsSupplyLinkFragment() || strings.TrimSpace(item.ID) == "" {
 				continue
 			}
 			out[item.ID] = item

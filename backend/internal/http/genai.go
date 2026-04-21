@@ -19,7 +19,6 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	gen_retry "github.com/igorkirisyuk/sanskrite/internal/genai"
 	gen_combined "github.com/igorkirisyuk/sanskrite/internal/genai/combined"
-	g "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	gen_gemini "github.com/igorkirisyuk/sanskrite/internal/genai/gemini"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/repo"
@@ -231,7 +230,7 @@ func (h *GenAIHandler) GenerateStructuredViaTaskExecutor(ctx context.Context, re
 	return &gen_combined.GenAIResponse{
 		Content: string(jsonBytes),
 		Model:   fullResult.Model,
-		Usage: g.Usage{
+		Usage: gen_gemini.Usage{
 			PromptTokens: inT,
 			OutputTokens: outT,
 			TotalTokens:  inT + outT,
@@ -394,7 +393,7 @@ func (h *GenAIHandler) GenAIGenerate(w http.ResponseWriter, r *http.Request) {
 		resp := gen_combined.GenAIResponse{
 			Content: string(jsonBytes),
 			Model:   actualModelName, // Use actual model name, not alias
-			Usage: g.Usage{
+			Usage: gen_gemini.Usage{
 				PromptTokens: inputTokens,
 				OutputTokens: outputTokens,
 				TotalTokens:  inputTokens + outputTokens,
@@ -1653,7 +1652,7 @@ func (h *GenAIHandler) executeResearchMode(ctx context.Context, req gen_combined
 	}
 
 	// Combine usage from all stages
-	var usage g.Usage
+	var usage gen_gemini.Usage
 	if result.Usage != nil {
 		usage = *result.Usage
 	}

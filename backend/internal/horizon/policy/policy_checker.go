@@ -1473,7 +1473,7 @@ func (pc *PolicyChecker) checkEdgeCompleteness(edge *horizonmodels.DependencyEdg
 			Type:          ViolationMissingField,
 			Severity:      sev,
 			EdgeID:        edge.ID,
-			ActualValue:   fmt.Sprintf("%s", edge.Relation),
+			ActualValue:   string(edge.Relation),
 			ExpectedValue: expected,
 			Rule:          rule,
 			Description:   desc,

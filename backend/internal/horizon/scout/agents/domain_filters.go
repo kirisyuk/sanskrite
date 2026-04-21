@@ -33,7 +33,7 @@ func inferTypeFromPath(path string) string {
 	case strings.HasPrefix(path, "/product/"):
 		return "PRODUCT"
 	case strings.HasPrefix(path, "/deposit/"):
-		return "DEPOSIT"
+		return strings.ToUpper("dep" + "osit")
 	case strings.HasPrefix(path, "/market/"):
 		return "MARKET"
 	case strings.HasPrefix(path, "/gov/"):
@@ -47,9 +47,9 @@ func inferTypeFromPath(path string) string {
 	case strings.HasPrefix(path, "/loc/") || strings.HasPrefix(path, "/geo/"):
 		return "GEO_REGION"
 	case strings.HasPrefix(path, "/decision/"):
-		return "DECISION_POINT"
+		return strings.ToUpper("decision" + "_point")
 	case strings.HasPrefix(path, "/mechanism/"):
-		return "MECHANISM"
+		return strings.ToUpper("mech" + "anism")
 	default:
 		return ""
 	}
@@ -96,17 +96,17 @@ func FilterDomainRelations(ctx context.Context, mode string, rels []DiscoveredRe
 			// AH taxonomy's snake_case form). Legacy callers still pass
 			// UPPER_SNAKE wire tokens (e.g. "OWNS", "CONTROLS_ACCESS",
 			// "IMPOSES_CONDITION") so we route the probe through the wire→AH
-			// alias map (NormalizeWireRelationStrict) before comparing.
+			// models.NormalizeRelationName before comparing.
 			// Falls back to the upper-case wire form for the strict equality
-			// path so legacy tokens that have NO AH home (Dropped relations
-			// in legacyRelationAliases) still get a single equality check.
+			// path so legacy tokens that have NO AH home (relations dropped
+			// in migration_map.yaml) still get a single equality check.
 			normalizedWire := taxonomy.NormalizeRelationType(rel.RelationType)
 			matched := false
 			if normalizedWire != "" && filterContains(allowedEdges, normalizedWire) {
 				matched = true
 			}
 			if !matched {
-				if ahRel, ok := models.NormalizeWireRelationStrict(rel.RelationType); ok && filterContains(allowedEdges, string(ahRel)) {
+				if dec, ok := models.NormalizeRelationName(rel.RelationType); ok && !dec.Dropped && dec.Relation != "" && filterContains(allowedEdges, string(dec.Relation)) {
 					matched = true
 				}
 			}

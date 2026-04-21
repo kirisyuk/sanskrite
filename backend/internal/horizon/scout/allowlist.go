@@ -85,7 +85,7 @@ func EdgeAllowlistByDomainModes(modes []string) []DependencyType {
 // MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
 // We can't rely solely on contractsemantics.ProfileForDomainMode here:
 //
-//  1. Tokens marked `Dropped: true` in legacyRelationAliases (e.g.
+//  1. Tokens marked `Dropped: true` in migration_map.yaml (e.g.
 //     TRANSFORMS_INTO, HAS_SUBGROUP, AFFILIATED_WITH) are stripped from
 //     the AH allowedEdges set but are still listed by the SoT taxonomy
 //     for the corresponding mode and must remain in scout's runtime
@@ -112,7 +112,7 @@ func scoutLegacyAllowlistFor(mode string) []DependencyType {
 			continue
 		}
 		out = append(out, DependencyType(w))
-		if _, ok := models.NormalizeWireRelationStrict(w); ok {
+		if dec, ok := models.NormalizeRelationName(w); ok && !dec.Dropped && dec.Relation != "" {
 			continue
 		}
 		if legacy := normalizeToScoutRelation(w); legacy != "" {
@@ -224,8 +224,8 @@ func normalizeToScoutRelation(s string) DependencyType {
 	if _, ok := scoutKnownDependencyTypes[lower]; ok {
 		return lower
 	}
-	if rel, ok := models.NormalizeWireRelationStrict(s); ok {
-		return rel
+	if dec, ok := models.NormalizeRelationName(s); ok && !dec.Dropped && dec.Relation != "" {
+		return DependencyType(dec.Relation)
 	}
 	return lower
 }
@@ -239,8 +239,8 @@ func normalizeToScoutRelation(s string) DependencyType {
 // agent runtimes) still pass UPPER_SNAKE wire tokens such as "PRODUCES"
 // or "OWNS". Normalize the probe through the wire→AH alias map so a
 // strict equality check can match either form. We never weaken the
-// allowlist: a wire token that has no AH home (Dropped relations from
-// legacyRelationAliases, e.g. AUDITED_BY) still falls through to the
+// allowlist: a wire token that has no AH home (Dropped relations in
+// migration_map.yaml, e.g. AUDITED_BY) still falls through to the
 // strict edgesemantics equality check and is rejected.
 func AllowlistContains(allowlist []DependencyType, t DependencyType) bool {
 	if edgesemantics.AllowlistContains(allowlist, t) {
@@ -255,7 +255,7 @@ func AllowlistContains(allowlist []DependencyType, t DependencyType) bool {
 }
 
 // DomainScaffoldRelationTypesString / IsDomainScaffoldRelationType /
-// IsMarketRelationType are provided by scout/legacy_helpers.go after the
+// IsMarketRelationType are provided by scout/edge_semantic_helpers.go after the
 // AH "Big Bang" migration removed the edgesemantics helpers.
 
 // SupplyChainEdgeTypesForPrompt returns prompt enum string for supply-chain-only schemas.

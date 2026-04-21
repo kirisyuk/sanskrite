@@ -379,7 +379,7 @@ func (s *Service) ListRoutes(ctx context.Context) ([]*Route, error) {
 	return out, nil
 }
 
-// ListConflictZones lists geo fragments with subtype affected_zone (plus legacy AFFECTED_ZONE during transition).
+// ListConflictZones lists geo fragments with subtype affected_zone.
 func (s *Service) ListConflictZones(ctx context.Context) ([]*ConflictZone, error) {
 	if s.frags == nil {
 		return []*ConflictZone{}, nil
@@ -390,10 +390,6 @@ func (s *Service) ListConflictZones(ctx context.Context) ([]*ConflictZone, error
 		return nil, err
 	}
 	raw = append(raw, modern...)
-	legacy, err := s.frags.ListByLegacyTypeAndTenant(ctx, globalTenant, "AFFECTED_ZONE", 200)
-	if err == nil {
-		raw = append(raw, legacy...)
-	}
 	seen := map[string]struct{}{}
 	var out []*ConflictZone
 	for _, f := range raw {

@@ -174,28 +174,6 @@ func attrTime(bag map[string]interface{}, key string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-// attrCoordinates extracts an AH "coordinates" attribute. The wire shape
-// is {"lat": float, "lng": float} per ATTRIBUTE_SPEC.
-func attrCoordinates(bag map[string]interface{}, key string) (Coordinates, bool) {
-	v, ok := bag[key]
-	if !ok || v == nil {
-		return Coordinates{}, false
-	}
-	m, ok := v.(map[string]interface{})
-	if !ok {
-		return Coordinates{}, false
-	}
-	lat, latOK := numericFromAny(m["lat"])
-	lng, lngOK := numericFromAny(m["lng"])
-	if !latOK || !lngOK {
-		return Coordinates{}, false
-	}
-	if !IsValidCoordinates(lat, lng) {
-		return Coordinates{}, false
-	}
-	return Coordinates{Lat: lat, Lon: lng}, true
-}
-
 func numericFromAny(v interface{}) (float64, bool) {
 	switch x := v.(type) {
 	case float64:

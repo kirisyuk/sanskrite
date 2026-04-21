@@ -2015,7 +2015,7 @@ func looksLikeBeneficiary(fragment *horizonmodels.HorizonFragment, overlay hprop
 	if fragment == nil {
 		return false
 	}
-	if fragment.IsLegacyDeposit() {
+	if fragment.IsDepositSite() {
 		return true
 	}
 	switch fragment.Class {

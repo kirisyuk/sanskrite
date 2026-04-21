@@ -596,27 +596,7 @@ func uniqueVertexStringValues(values []string) []string {
 	return out
 }
 
-// isLegacyDomainFragment reports whether a fragment is a legacy DOMAIN-class
-// document. The DOMAIN class is removed in AH (see migration_map.yaml:
-// fold_to_attributes; documents are deleted by migrate-cli and the domain
-// identity survives as the {domain-slug} slot on /decision/* canonical paths
-// and as attributes.domain on relevant fragments). Until migrate-cli has
-// finished, we still detect legacy survivors by canonical path prefix.
-//
-// TODO(cleanup-code): once migrate-cli has run on all environments and the
-// /domain/* paths no longer exist, delete this predicate and the
-// SearchDomainFragments / FindDomainByCanonicalPathBestEffort wrappers (and
-// fix the single caller in http/horizon/lenses_preflight.go to drop the
-// hasDomains branch entirely).
-func isLegacyDomainFragment(f *models.HorizonFragment) bool {
-	if f == nil {
-		return false
-	}
-	return strings.HasPrefix(strings.TrimSpace(f.CanonicalPath), "/domain/")
-}
-
-// SearchDomainFragments performs best-effort search for legacy DOMAIN
-// fragments. Post-AH this is a transitional shim — see isLegacyDomainFragment.
+// SearchDomainFragments performs best-effort search for domain-scope fragments.
 func (s *HorizonService) SearchDomainFragments(ctx context.Context, query string, limit int) ([]*models.HorizonFragment, error) {
 	all, err := s.SearchFragments(ctx, query, limit*3)
 	if err != nil {
@@ -628,7 +608,7 @@ func (s *HorizonService) SearchDomainFragments(ctx context.Context, query string
 		if f == nil {
 			continue
 		}
-		if !isLegacyDomainFragment(f) {
+		if !f.IsDomainScopeFragment() {
 			continue
 		}
 		cp := strings.TrimSpace(f.CanonicalPath)
@@ -661,10 +641,10 @@ func (s *HorizonService) FindDomainByCanonicalPathBestEffort(ctx context.Context
 	// 1) Firestore exact lookup (best).
 	if s != nil && s.fragmentsRepo != nil {
 		if frag, err := s.fragmentsRepo.GetByCanonicalPath(ctx, cp); err == nil && frag != nil {
-			if isLegacyDomainFragment(frag) {
+			if frag.IsDomainScopeFragment() {
 				return frag, nil
 			}
-			// Not a legacy DOMAIN fragment; treat as no-match.
+			// Not a domain-scope fragment; treat as no-match.
 			return nil, nil
 		}
 	}
@@ -677,7 +657,7 @@ func (s *HorizonService) FindDomainByCanonicalPathBestEffort(ctx context.Context
 		if c == nil {
 			continue
 		}
-		if strings.TrimSpace(c.CanonicalPath) == cp && isLegacyDomainFragment(c) {
+		if strings.TrimSpace(c.CanonicalPath) == cp && c.IsDomainScopeFragment() {
 			return c, nil
 		}
 	}

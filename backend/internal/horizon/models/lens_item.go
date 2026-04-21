@@ -95,24 +95,16 @@ var lensItemFEOnlyEdgeAliases = []string{
 }
 
 // validLensItemEdgeTypes is the wire-level edge subkind alphabet the FE
-// is allowed to write into a LensItem. Built dynamically from:
-//
-//  1. ah.RelationNames (the AH SoT — both lowercase canonical and
-//     uppercase form for legacy/FE compatibility);
-//  2. legacyRelationAliases keys (graph_intent.go) — every legacy
-//     UPPER_SNAKE DependencyType still parses;
-//  3. lensItemFEOnlyEdgeAliases — the residual FE-only synonyms.
-//
-// Codegen of the AH taxonomy automatically refreshes (1); migrate-cli
-// is the source of truth for what FE-only labels remain valid.
+// is allowed to write into a LensItem: AH RelationNames (all casings),
+// graph-intent affective aliases, and lensItemFEOnlyEdgeAliases.
 var validLensItemEdgeTypes = func() map[string]bool {
-	out := make(map[string]bool, len(ah.RelationNames)*2+len(legacyRelationAliases)+len(lensItemFEOnlyEdgeAliases))
+	out := make(map[string]bool, len(ah.RelationNames)*2+len(graphIntentAffectiveAliases)+len(lensItemFEOnlyEdgeAliases))
 	for _, r := range ah.RelationNames {
 		out[string(r)] = true
 		out[strings.ToUpper(string(r))] = true
 	}
-	for legacy := range legacyRelationAliases {
-		out[legacy] = true
+	for k := range graphIntentAffectiveAliases {
+		out[k] = true
 	}
 	for _, alias := range lensItemFEOnlyEdgeAliases {
 		out[alias] = true

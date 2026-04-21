@@ -615,7 +615,7 @@ func axisNodeWeight(axis string, frag *horizonmodels.HorizonFragment) float64 {
 		if isBusinessType(frag) {
 			weight += 0.08
 		}
-		if frag.IsLegacyAffectedZone() || frag.Class == FragmentTypeGeoRegion {
+		if frag.IsAffectedZoneGeo() || frag.Class == FragmentTypeGeoRegion {
 			weight += 0.06
 		}
 		if overlay.PrimaryRole == "chokepoint" {
@@ -635,7 +635,7 @@ func axisNodeWeight(axis string, frag *horizonmodels.HorizonFragment) float64 {
 			weight += 0.06
 		}
 	case horizonmodels.AxisOperationalContinuity:
-		if frag.Class == FragmentTypeFacility || frag.Class == FragmentTypeOrganization || frag.IsLegacyDeposit() {
+		if frag.Class == FragmentTypeFacility || frag.Class == FragmentTypeOrganization || frag.IsDepositSite() {
 			weight += 0.10
 		}
 		if overlay.HasRole("controller") {
@@ -654,7 +654,7 @@ func axisBusinessTailWeight(axis string, frag *horizonmodels.HorizonFragment) fl
 	}
 	overlay := propagation.BuildPropagationNodeOverlay(frag)
 	weight := 1.0
-	if frag.IsLegacyDeposit() {
+	if frag.IsDepositSite() {
 		weight += 0.08
 	} else {
 		switch frag.Class {
@@ -670,7 +670,7 @@ func axisBusinessTailWeight(axis string, frag *horizonmodels.HorizonFragment) fl
 	}
 	switch strings.TrimSpace(axis) {
 	case horizonmodels.AxisGeoConflict:
-		if frag.Class == FragmentTypeFacility || frag.Class == FragmentTypeMarket || frag.IsLegacyDeposit() {
+		if frag.Class == FragmentTypeFacility || frag.Class == FragmentTypeMarket || frag.IsDepositSite() {
 			weight += 0.14
 		}
 	case horizonmodels.AxisPhysicalFlowSupply, horizonmodels.AxisLogisticsCapacity, horizonmodels.AxisLogisticsLatency:
@@ -750,16 +750,16 @@ func typeTransmissionWeight(frag *horizonmodels.HorizonFragment) float64 {
 	if frag == nil {
 		return 0.62
 	}
-	if frag.IsLegacyDeposit() {
+	if frag.IsDepositSite() {
 		return 0.90
 	}
-	if frag.IsLegacyAffectedZone() {
+	if frag.IsAffectedZoneGeo() {
 		return 0.90
 	}
-	if frag.IsLegacyDomain() {
+	if frag.IsDomainScopeFragment() {
 		return 0.50
 	}
-	if frag.IsLegacySphere() {
+	if frag.IsSphereScopeFragment() {
 		return 0.34
 	}
 	switch frag.Class {
@@ -885,7 +885,7 @@ func isBusinessType(frag *horizonmodels.HorizonFragment) bool {
 	if frag == nil {
 		return false
 	}
-	if frag.IsLegacyDeposit() || frag.IsLegacyProgram() {
+	if frag.IsDepositSite() || frag.IsProgramOrg() {
 		return true
 	}
 	switch frag.Class {
@@ -903,7 +903,7 @@ func isContextType(frag *horizonmodels.HorizonFragment) bool {
 	if frag == nil {
 		return false
 	}
-	if frag.IsLegacyAffectedZone() || frag.IsLegacyDomain() || frag.IsLegacySphere() {
+	if frag.IsAffectedZoneGeo() || frag.IsDomainScopeFragment() || frag.IsSphereScopeFragment() {
 		return true
 	}
 	switch frag.Class {
@@ -922,7 +922,7 @@ func isWeakContextType(frag *horizonmodels.HorizonFragment) bool {
 	if frag == nil {
 		return false
 	}
-	return frag.IsLegacyDomain() || frag.IsLegacySphere()
+	return frag.IsDomainScopeFragment() || frag.IsSphereScopeFragment()
 }
 
 func normalizeTenant(tenantID string, fragment *horizonmodels.HorizonFragment) string {

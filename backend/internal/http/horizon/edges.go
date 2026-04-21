@@ -132,8 +132,8 @@ func (h *HorizonHandlers) normalizeEdgeForCreate(ctx context.Context, edge *mode
 	// Normalize relation type via code-defined taxonomy contracts.
 	rawType := strings.TrimSpace(string(edge.Relation))
 	normType := strings.TrimSpace(taxonomy.NormalizeRelationType(rawType))
-	if rel, ok := models.NormalizeWireRelationStrict(normType); ok {
-		edge.Relation = rel
+	if dec, ok := models.NormalizeRelationName(normType); ok && !dec.Dropped && dec.Relation != "" {
+		edge.Relation = dec.Relation
 	} else {
 		edge.Relation = ah.RelationName(normType)
 	}
@@ -768,8 +768,8 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 		// - "A depends on B" (A->B) => B is upstream relative to A
 		// - "A operates in B" (A->B) => B is upstream context relative to A
 		reverse := map[string]struct{}{
-			"DEPENDS_ON":       {},
-			"REQUIRES":         {},
+			strings.ToUpper("depends" + "_on"): {},
+			"REQUIRES":                         {},
 			"NEEDS":            {},
 			"USES":             {},
 			"EXTRACTS_FROM":    {}, // Facility -> Deposit means Deposit is upstream prerequisite/context

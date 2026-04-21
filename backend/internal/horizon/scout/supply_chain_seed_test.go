@@ -9,12 +9,12 @@ import (
 
 func TestFilterEmptySupplyChains(t *testing.T) {
 	chains := []agents.SupplyChain{
-		{Nodes: []agents.SupplyChainNode{{CanonicalPath: "/org/de/bosch", Name: "Bosch", Type: "ORGANIZATION"}}},
+		{Nodes: []agents.SupplyChainNode{{CanonicalPath: "/org/de/bosch", Name: "Bosch", Type: string(ah.FragmentClassOrg)}}},
 		{Nodes: nil},
 		{Nodes: []agents.SupplyChainNode{}},
 		{Nodes: []agents.SupplyChainNode{
-			{CanonicalPath: "/org/jp/denso", Name: "Denso", Type: "ORGANIZATION"},
-			{CanonicalPath: "/product/auto/sensors", Name: "Sensors", Type: "PRODUCT"},
+			{CanonicalPath: "/org/jp/denso", Name: "Denso", Type: string(ah.FragmentClassOrg)},
+			{CanonicalPath: "/product/auto/sensors", Name: "Sensors", Type: string(ah.FragmentClassProduct)},
 		}},
 	}
 	filtered := filterEmptySupplyChains(chains)
@@ -60,7 +60,7 @@ func TestBuildSeedSupplyChain(t *testing.T) {
 	if n.Name != "Robert Bosch GmbH" {
 		t.Errorf("unexpected name: %s", n.Name)
 	}
-	if n.Type != "ORGANIZATION" {
+	if n.Type != string(ah.FragmentClassOrg) {
 		t.Errorf("unexpected type: %s", n.Type)
 	}
 	if seed.Confidence >= 0.2 {

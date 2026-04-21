@@ -372,10 +372,7 @@ func endpointFragmentAllowed(frag *horizonmodels.HorizonFragment) bool {
 	case FragmentTypePerson, FragmentTypeEvent:
 		return false
 	}
-	if frag.IsLegacyMediaChannel() {
-		return false
-	}
-	return true
+	return !frag.IsMediaChannelOrg()
 }
 
 func endpointTypeBonus(_ string, frag *horizonmodels.HorizonFragment, profile EndpointScoringProfile) (float64, string) {

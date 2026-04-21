@@ -28,12 +28,12 @@ export function pathPayloadNodeIsProduct(node: unknown): boolean {
  */
 export function pathPayloadEdgeRelation(edge: unknown): string {
   const e = edge as Record<string, unknown> | null | undefined;
-  if (!e) return normalizeEdgeType('DEPENDS_ON');
+  if (!e) return RELATION.Supplies;
   const relRaw = String(e.relation ?? '').trim();
   if (relRaw) return normalizeEdgeType(relRaw);
   const role = String(e.role ?? '').trim();
   const typ = String(e.type ?? '').trim();
-  if (role === 'logistics_leg' || typ === 'LOGISTICS') return normalizeEdgeType('OPERATES_VIA');
+  if (role === 'logistics_leg' || typ === 'LOGISTICS') return RELATION.Wields;
   if (typ === 'SUPPLY_LINK') return RELATION.Supplies;
-  return normalizeEdgeType('DEPENDS_ON');
+  return RELATION.Supplies;
 }

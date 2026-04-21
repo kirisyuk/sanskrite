@@ -600,37 +600,6 @@ func rawSupplyChainPathLegHasExplicitRouteOverlays(leg map[string]interface{}) b
 	return false
 }
 
-func supplyChainPathPayloadAlreadyNormalized(payload map[string]interface{}) bool {
-	if len(payload) == 0 {
-		return false
-	}
-	rawLegsValue, ok := payload["legs"]
-	if !ok {
-		rawLegsValue = payload["Legs"]
-	}
-	if rawLegsValue == nil {
-		return false
-	}
-	rawLegs, err := decodeSupplyChainPathLegs(rawLegsValue)
-	if err != nil || len(rawLegs) == 0 {
-		return false
-	}
-	normalizedLegs := normalizeParsedSupplyChainPathLegs(append([]SupplyChainPathLeg(nil), rawLegs...))
-	if len(rawLegs) != len(normalizedLegs) {
-		return false
-	}
-	rawLegMaps := rawSupplyChainPathLegMaps(rawLegsValue)
-	if len(rawLegMaps) != len(rawLegs) {
-		return false
-	}
-	for _, legMap := range rawLegMaps {
-		if !rawSupplyChainPathLegHasExplicitRouteOverlays(legMap) {
-			return false
-		}
-	}
-	return true
-}
-
 func decodeStringSlice(raw interface{}) ([]string, error) {
 	if raw == nil {
 		return nil, nil

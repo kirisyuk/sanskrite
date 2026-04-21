@@ -11,7 +11,7 @@ func TestSupplyChainStrictValidatorAllowsDistributionFacilityProducingPhysicalGo
 	edge := &ChainEdge{
 		SourceCanonicalPath: "/fac/kz/almaty-distribution-center",
 		TargetCanonicalPath: "/product/finished/electronics/mobile/smartphones",
-		RelationType:        "PRODUCES",
+		RelationType:        string(ah.RelationNameProduces),
 	}
 	source := &models.HorizonFragment{
 		CanonicalPath: "/fac/kz/almaty-distribution-center",
@@ -38,7 +38,7 @@ func TestSupplyChainStrictValidatorAllowsDistributionFacilityProducingService(t 
 	edge := &ChainEdge{
 		SourceCanonicalPath: "/fac/de/dhl-leipzig-hub",
 		TargetCanonicalPath: "/product/service/logistics/parcel-sorting",
-		RelationType:        "PRODUCES",
+		RelationType:        string(ah.RelationNameProduces),
 	}
 	source := &models.HorizonFragment{
 		CanonicalPath: "/fac/de/dhl-leipzig-hub",
@@ -64,7 +64,7 @@ func TestSupplyChainStrictValidatorAllowsWarehouseByInference(t *testing.T) {
 	edge := &ChainEdge{
 		SourceCanonicalPath: "/fac/kz/almaty-distribution-center",
 		TargetCanonicalPath: "/product/finished/electronics/mobile/smartphones",
-		RelationType:        "PRODUCES",
+		RelationType:        string(ah.RelationNameProduces),
 	}
 	source := &models.HorizonFragment{
 		CanonicalPath: "/fac/kz/almaty-distribution-center",
@@ -87,7 +87,7 @@ func TestSupplyChainStrictValidatorAllowsManufacturingFacilityProducingPhysicalG
 	edge := &ChainEdge{
 		SourceCanonicalPath: "/fac/kr/samsung-gumi-plant",
 		TargetCanonicalPath: "/product/finished/electronics/mobile/smartphones",
-		RelationType:        "PRODUCES",
+		RelationType:        string(ah.RelationNameProduces),
 	}
 	source := &models.HorizonFragment{
 		CanonicalPath: "/fac/kr/samsung-gumi-plant",

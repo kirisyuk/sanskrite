@@ -61,7 +61,7 @@ func fragmentToGeoItem(f *models.HorizonFragment, inScope bool) (geoObjectRespon
 		return geoObjectResponseItem{}, false
 	}
 	facilityKind := ""
-	if (f.Class == ah.FragmentClassSite && !f.IsLegacySupplyLink()) || strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.CanonicalPath)), "/fac/") {
+	if (f.Class == ah.FragmentClassSite && !f.IsSupplyLinkFragment()) || strings.HasPrefix(strings.ToLower(strings.TrimSpace(f.CanonicalPath)), "/fac/") {
 		kind := taxonomy.NormalizeFacilityKind(strings.TrimSpace(f.Identifiers["facilityKind"]))
 		if kind == taxonomy.FacilityKindUnknown {
 			kind = taxonomy.InferFacilityKind(
@@ -203,7 +203,7 @@ func parseGeoObjectFilter(
 			if part == "" {
 				continue
 			}
-			if class, _, ok := models.FragmentClassFromLegacyType(part); ok {
+			if class, _, ok := models.NormalizeFragmentClassName(part, ""); ok {
 				filter.Types = append(filter.Types, class)
 			} else if class, ok := ah.NormalizeFragmentClass(strings.ToLower(part)); ok {
 				filter.Types = append(filter.Types, class)

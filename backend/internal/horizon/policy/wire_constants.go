@@ -76,8 +76,8 @@ const (
 )
 
 func canonicalRelationFromWire(s string) ah.RelationName {
-	if rel, ok := horizonmodels.NormalizeWireRelationStrict(s); ok {
-		return rel
+	if dec, ok := horizonmodels.NormalizeRelationName(s); ok && !dec.Dropped && dec.Relation != "" {
+		return dec.Relation
 	}
 	return ""
 }

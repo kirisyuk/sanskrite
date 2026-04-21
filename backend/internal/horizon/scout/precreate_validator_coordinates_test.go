@@ -17,8 +17,11 @@ type fakeGeocodingClient struct {
 }
 
 func (f *fakeGeocodingClient) Geocode(_ context.Context, address string) (*coreontology.GeocodingResult, error) {
+	if f == nil {
+		return nil, nil
+	}
 	f.calls = append(f.calls, address)
-	if f == nil || f.results == nil {
+	if f.results == nil {
 		return nil, nil
 	}
 	if res, ok := f.results[address]; ok {

@@ -95,7 +95,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-european-commission",
       "targetFragmentId": "frag-passport-approval",
-      "type": "REGULATES",
+      "relation": "regulates",
       "properties": {
         "criticality": 0.88,
         "amplification": 1.0,
@@ -110,7 +110,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-passport-approval",
       "targetFragmentId": "frag-sino-cathodes",
-      "type": "CONTROLS_ACCESS",
+      "relation": "imposes",
       "properties": {
         "criticality": 0.93,
         "amplification": 1.02,
@@ -125,7 +125,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-sino-cathodes",
       "targetFragmentId": "frag-euro-mobility",
-      "type": "SUPPLIES_TO",
+      "relation": "supplies",
       "properties": {
         "criticality": 0.91,
         "amplification": 1.0,
@@ -140,7 +140,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-baltic-cathodes",
       "targetFragmentId": "frag-euro-mobility",
-      "type": "SUPPLIES_TO",
+      "relation": "supplies",
       "properties": {
         "criticality": 0.76,
         "amplification": 0.95,
@@ -155,7 +155,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-euro-mobility",
       "targetFragmentId": "frag-citybus-fleet",
-      "type": "SUPPLIES_TO",
+      "relation": "supplies",
       "properties": {
         "criticality": 0.69,
         "amplification": 0.92,

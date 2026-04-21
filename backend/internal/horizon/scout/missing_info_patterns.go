@@ -1,8 +1,10 @@
 package scout
 
 import (
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"strings"
+
+	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // =============================================================================
@@ -43,17 +45,17 @@ var PlatformChannelResolutionPattern = MissingInfoPattern{
 	Question: "Which specific channels/groups on {platform} does {entity} use for communication?",
 	Context: map[string]string{
 		"guidance":    "Look for specific Telegram channels, WhatsApp groups, Signal groups that the entity uses",
-		"output_type": "MEDIA_CHANNEL",
+		"output_type": models.FormatClassSubtype(ah.FragmentClassOrg, "media_channel"),
 		"output_path": "/media/{platform}/{channel-slug}",
-		"edge_type":   "OPERATES_VIA",
-		"replaces":    "generic DEPENDS_ON → platform organization",
+		"edge_type":   "operates_via",
+		"replaces":    "generic depends_on → platform organization",
 		"facet":       "communication",
 	},
 	AppliesTo:        []FragmentType{ah.FragmentClassCommunity, ah.FragmentClassOrg, ah.FragmentClassMarket},
-	TriggerCondition: "Entity has DEPENDS_ON edge to a messaging platform organization (Telegram, WhatsApp, Signal, etc.) without specific channel resolution",
+	TriggerCondition: "Entity has depends_on edge to a messaging platform organization (Telegram, WhatsApp, Signal, etc.) without specific channel resolution",
 	ExpectedResolution: []string{
 		"Create /media/{platform}/{channel-slug} fragments",
-		"Update edge to OPERATES_VIA pointing to specific channels",
+		"Update edge to operates_via pointing to specific channels",
 		"Remove generic platform dependency",
 	},
 	Priority: 10,
@@ -72,13 +74,13 @@ var MarketOperatorCommunitiesPattern = MissingInfoPattern{
 		"guidance":    "Look for informal operator networks, dealer networks, distribution communities",
 		"output_type": "COMMUNITY",
 		"output_path": "/community/{geo}/{type}/{slug}",
-		"edge_type":   "PARTICIPATES_IN",
+		"edge_type":   "participates_in",
 	},
 	AppliesTo:        []FragmentType{ah.FragmentClassMarket},
-	TriggerCondition: "Market fragment has no PARTICIPATES_IN edges from COMMUNITY fragments",
+	TriggerCondition: "Market fragment has no participates_in edges from COMMUNITY fragments",
 	ExpectedResolution: []string{
 		"Create /community/{geo}/{type}/{slug} fragments",
-		"Create PARTICIPATES_IN edges from community to market",
+		"Create participates_in edges from community to market",
 	},
 	Priority: 20,
 }
@@ -109,7 +111,7 @@ var OrgCommunityDisambiguationPattern = MissingInfoPattern{
 }
 
 // =============================================================================
-// MEDIA_CHANNEL → COMMUNITY EXTRACTION PATTERNS
+// Org/media_channel subtype → COMMUNITY EXTRACTION PATTERNS
 // =============================================================================
 // When a media channel has an identifiable operator community.
 
@@ -121,17 +123,17 @@ var ChannelCommunityExtractionPattern = MissingInfoPattern{
 		"guidance":    "Look for evidence of an organized group operating the channel",
 		"output_type": "COMMUNITY",
 		"output_path": "/community/{geo}/{type}/{slug}",
-		"edge_type":   "OPERATES_VIA",
-		"edge_dir":    "COMMUNITY → MEDIA_CHANNEL",
+		"edge_type":   "operates_via",
+		"edge_dir":    "COMMUNITY → org/media_channel",
 	},
 	// MIGRATION NOTE: legacy ah.FragmentClassOrg collapses onto
 	// (org, media_channel). The pattern now applies to any /media/-pathed
 	// org fragment; precise (Class, Subtype) routing happens in the caller.
 	AppliesTo: []FragmentType{ah.FragmentClassOrg},
-	TriggerCondition: "MEDIA_CHANNEL has no incoming OPERATES_VIA edges and shows signs of organized operation",
+	TriggerCondition: "Media channel fragments have no incoming operates_via edges and show signs of organized operation",
 	ExpectedResolution: []string{
 		"Create /community/{geo}/{type}/{slug} fragment",
-		"Create OPERATES_VIA edge from community to channel",
+		"Create operates_via edge from community to channel",
 	},
 	Priority: 25,
 }
@@ -151,10 +153,10 @@ var PaymentMechanismResolutionPattern = MissingInfoPattern{
 		"output_types": "PRODUCT (crypto/payment service), ORGANIZATION (exchange/processor), COMMUNITY (hawala network)",
 	},
 	AppliesTo:        []FragmentType{ah.FragmentClassCommunity, ah.FragmentClassOrg, ah.FragmentClassMarket},
-	TriggerCondition: "Entity has generic DEPENDS_ON edge with facet=payment but no specific mechanism",
+	TriggerCondition: "Entity has generic depends_on edge with facet=payment but no specific mechanism",
 	ExpectedResolution: []string{
 		"Create specific payment mechanism dependencies",
-		"Add DEPENDS_ON(facet=payment) edges to specific mechanisms",
+		"Add depends_on(facet=payment) edges to specific mechanisms",
 	},
 	Priority: 30,
 }
@@ -177,7 +179,7 @@ var DistributionNetworkResolutionPattern = MissingInfoPattern{
 	TriggerCondition: "Entity has supply chain dependencies but no distribution network information",
 	ExpectedResolution: []string{
 		"Create distribution operator fragments (COMMUNITY or ORGANIZATION)",
-		"Create DEPENDS_ON(facet=distribution) edges",
+		"Create depends_on(facet=distribution) edges",
 	},
 	Priority: 35,
 }
@@ -193,14 +195,14 @@ var CommunityPlatformsPattern = MissingInfoPattern{
 	Question: "Which communication platforms/channels does {entity} use?",
 	Context: map[string]string{
 		"guidance":    "Look for Telegram channels, WhatsApp groups, forums, websites used by the community",
-		"output_type": "MEDIA_CHANNEL",
-		"edge_type":   "OPERATES_VIA",
+		"output_type": models.FormatClassSubtype(ah.FragmentClassOrg, "media_channel"),
+		"edge_type":   "operates_via",
 	},
 	AppliesTo:        []FragmentType{ah.FragmentClassCommunity},
-	TriggerCondition: "COMMUNITY fragment has empty communityPlatforms and no OPERATES_VIA edges",
+	TriggerCondition: "COMMUNITY fragment has empty communityPlatforms and no operates_via edges",
 	ExpectedResolution: []string{
 		"Populate communityPlatforms field",
-		"Create OPERATES_VIA edges to MEDIA_CHANNEL fragments",
+		"Create operates_via edges to org/media_channel fragments",
 	},
 	Priority: 40,
 }
@@ -212,13 +214,13 @@ var CommunityAffiliationPattern = MissingInfoPattern{
 	Context: map[string]string{
 		"guidance":    "Look for connections to registered companies, NGOs, government bodies",
 		"output_type": "ORGANIZATION",
-		"edge_type":   "AFFILIATED_WITH",
+		"edge_type":   "affiliated_with",
 	},
 	AppliesTo:        []FragmentType{ah.FragmentClassCommunity},
-	TriggerCondition: "COMMUNITY fragment has empty affiliatedOrgPath and no AFFILIATED_WITH edges",
+	TriggerCondition: "COMMUNITY fragment has empty affiliatedOrgPath and no affiliated_with edges",
 	ExpectedResolution: []string{
 		"Populate affiliatedOrgPath field if applicable",
-		"Create AFFILIATED_WITH edges to ORGANIZATION fragments",
+		"Create affiliated_with edges to ORGANIZATION fragments",
 	},
 	Priority: 45,
 }
@@ -236,15 +238,15 @@ var DynastyBranchesPattern = MissingInfoPattern{
 		"guidance":    "Look for family branches, cadet branches, sub-dynasties (e.g., Sudairi Seven for House of Saud)",
 		"output_type": "COMMUNITY",
 		"output_path": "/community/{geo}/dynasty/{branch-slug}",
-		"edge_type":   "HAS_SUBGROUP",
+		"edge_type":   "has_subgroup",
 		"edge_dir":    "parent dynasty → branch",
 		"examples":    "House of Saud → Sudairi Seven, Kennedy family → JFK branch",
 	},
 	AppliesTo:        []FragmentType{ah.FragmentClassCommunity},
-	TriggerCondition: "COMMUNITY fragment has communityType='dynasty' and no HAS_SUBGROUP edges",
+	TriggerCondition: "COMMUNITY fragment has communityType='dynasty' and no has_subgroup edges",
 	ExpectedResolution: []string{
 		"Create /community/{geo}/dynasty/{branch-slug} fragments for branches",
-		"Create HAS_SUBGROUP edges from parent dynasty to branches",
+		"Create has_subgroup edges from parent dynasty to branches",
 	},
 	Priority: 42,
 }
@@ -257,15 +259,15 @@ var TribeSubclansPattern = MissingInfoPattern{
 		"guidance":    "Look for sub-tribes, clans, lineages (e.g., Durrani/Ghilzai for Pashtun, Uysun for Senior Zhuz)",
 		"output_type": "COMMUNITY",
 		"output_path": "/community/{geo}/tribe/{subclan-slug}",
-		"edge_type":   "HAS_SUBGROUP",
+		"edge_type":   "has_subgroup",
 		"edge_dir":    "parent tribe → sub-tribe/clan",
 		"examples":    "Pashtun → Durrani → Popalzai, Senior Zhuz → Uysun",
 	},
 	AppliesTo:        []FragmentType{ah.FragmentClassCommunity},
-	TriggerCondition: "COMMUNITY fragment has communityType='tribe' and no HAS_SUBGROUP edges",
+	TriggerCondition: "COMMUNITY fragment has communityType='tribe' and no has_subgroup edges",
 	ExpectedResolution: []string{
 		"Create /community/{geo}/tribe/{subclan-slug} fragments for sub-tribes",
-		"Create HAS_SUBGROUP edges from parent tribe to sub-tribes",
+		"Create has_subgroup edges from parent tribe to sub-tribes",
 	},
 	Priority: 43,
 }
@@ -277,14 +279,14 @@ var CommunityHierarchyParentPattern = MissingInfoPattern{
 	Context: map[string]string{
 		"guidance":    "Look for parent dynasties, parent tribes, broader community that contains this one",
 		"output_type": "COMMUNITY",
-		"edge_type":   "HAS_SUBGROUP",
+		"edge_type":   "has_subgroup",
 		"edge_dir":    "parent community → this community",
 	},
 	AppliesTo:        []FragmentType{ah.FragmentClassCommunity},
-	TriggerCondition: "COMMUNITY fragment (dynasty/tribe) has HAS_SUBGROUP children but no incoming HAS_SUBGROUP from a parent",
+	TriggerCondition: "COMMUNITY fragment (dynasty/tribe) has has_subgroup children but no incoming has_subgroup from a parent",
 	ExpectedResolution: []string{
 		"Identify parent community if exists",
-		"Create HAS_SUBGROUP edge from parent to this community",
+		"Create has_subgroup edge from parent to this community",
 	},
 	Priority: 44,
 }
@@ -292,7 +294,7 @@ var CommunityHierarchyParentPattern = MissingInfoPattern{
 // =============================================================================
 // DEPENDENCY FACET RESOLUTION PATTERNS
 // =============================================================================
-// When DEPENDS_ON edges lack facet qualifiers.
+// When depends_on edges lack facet qualifiers.
 
 // DependencyFacetResolutionPattern generates missing info for facet classification.
 var DependencyFacetResolutionPattern = MissingInfoPattern{
@@ -303,9 +305,9 @@ var DependencyFacetResolutionPattern = MissingInfoPattern{
 		"valid_facets": "communication, infrastructure, payment, distribution, logistics, supply, labor, legitimization, enforcement, regulatory",
 	},
 	AppliesTo:        []FragmentType{ah.FragmentClassCommunity, ah.FragmentClassOrg, ah.FragmentClassMarket},
-	TriggerCondition: "Entity has DEPENDS_ON edge without facet qualifier",
+	TriggerCondition: "Entity has depends_on edge without facet qualifier",
 	ExpectedResolution: []string{
-		"Add facet qualifier to DEPENDS_ON edge",
+		"Add facet qualifier to depends_on edge",
 		"Optionally add substitutability score",
 	},
 	Priority: 50,

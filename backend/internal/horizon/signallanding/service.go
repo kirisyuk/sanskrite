@@ -459,7 +459,7 @@ func (s *Service) expandAffectedZonesFromHits(ctx context.Context, tenantID stri
 				continue
 			}
 			for _, frag := range matches {
-				if frag == nil || !frag.IsLegacyAffectedZone() {
+				if frag == nil || !frag.IsAffectedZoneGeo() {
 					continue
 				}
 				cp := strings.TrimSpace(frag.CanonicalPath)
@@ -620,7 +620,7 @@ func (s *Service) mergeSignalLandingZone(
 		return false
 	}
 	changed := false
-	if !zone.IsLegacyAffectedZone() {
+	if !zone.IsAffectedZoneGeo() {
 		zone.Class = ah.FragmentClassGeo
 		zone.Subtype = "affected_zone"
 		changed = true
@@ -689,7 +689,7 @@ func (s *Service) mergeSignalLandingZone(
 }
 
 func (s *Service) BackfillAffectedZoneCoordinates(ctx context.Context, zone *horizonmodels.HorizonFragment) (bool, error) {
-	if s == nil || zone == nil || !zone.IsLegacyAffectedZone() {
+	if s == nil || zone == nil || !zone.IsAffectedZoneGeo() {
 		return false, nil
 	}
 	if zone.Coordinates != nil && horizonmodels.IsRealGeoCoordinate(zone.Coordinates.Lat, zone.Coordinates.Lon) {

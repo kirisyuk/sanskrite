@@ -282,14 +282,14 @@ func (e *ScoutEngine) publishDirectedExplorationMaterialized(ctx context.Context
 			if nextCP == "" {
 				continue
 			}
-			edgeType := "SUPPLIES_TO"
+			edgeType := "supplies"
 			switch {
 			case strings.EqualFold(strings.TrimSpace(node.Type), "PRODUCT") && strings.EqualFold(strings.TrimSpace(next.Type), "PRODUCT"):
-				edgeType = "TRANSFORMS_INTO"
+				edgeType = "transforms_into"
 			case strings.EqualFold(strings.TrimSpace(next.Type), "PRODUCT"):
-				edgeType = "PRODUCES"
+				edgeType = "produces"
 			case strings.EqualFold(strings.TrimSpace(node.Type), "PRODUCT"):
-				edgeType = "SUPPLIES_TO"
+				edgeType = "supplies"
 			}
 			edgeID := fmt.Sprintf("directed:%s:%s:%s:%d:%d", strings.TrimSpace(job.ID), cp, nextCP, chainIdx, idx)
 			if _, ok := edgeSeen[edgeID]; !ok {

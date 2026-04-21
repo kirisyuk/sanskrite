@@ -15,6 +15,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/analytical"
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type homeWorkspaceRunRequest struct {
@@ -417,7 +418,7 @@ Return a concise workspace-style answer:
 `)
 }
 
-func fallbackHomeWorkspaceAnswer(query string, entities []homeWorkspaceEntity, hits []lensChatInternalHit, eventCorePaths, haloPaths, affectedZoneRefs, highlightedPaths []string) string {
+func fallbackHomeWorkspaceAnswer(_ string, entities []homeWorkspaceEntity, hits []lensChatInternalHit, eventCorePaths, haloPaths, affectedZoneRefs, highlightedPaths []string) string {
 	lines := make([]string, 0, 6)
 
 	if len(eventCorePaths) > 0 {
@@ -714,9 +715,15 @@ func homeWorkspaceEntityRelevant(query string, fragment *horizonmodels.HorizonFr
 	if tokenOverlapCountLocal(candidateTokens, queryTokens) >= 2 {
 		return true
 	}
-	typ := strings.ToUpper(strings.TrimSpace(string(fragment.Class)))
-	if (typ == "AFFECTED_ZONE" || typ == "FACILITY" || typ == "GEO_REGION" || typ == "PRODUCT" || typ == "ORGANIZATION") &&
-		tokenOverlapCountLocal(candidateTokens, queryTokens) >= 1 {
+	relaxed := false
+	switch fragment.Class {
+	case ah.FragmentClassOrg, ah.FragmentClassSite, ah.FragmentClassProduct, ah.FragmentClassMarket:
+		relaxed = true
+	case ah.FragmentClassGeo:
+		st := strings.TrimSpace(fragment.Subtype)
+		relaxed = st == "" || strings.EqualFold(st, "affected_zone")
+	}
+	if relaxed && tokenOverlapCountLocal(candidateTokens, queryTokens) >= 1 {
 		return true
 	}
 	return false

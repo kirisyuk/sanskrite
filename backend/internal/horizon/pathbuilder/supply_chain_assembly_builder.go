@@ -600,7 +600,7 @@ func buildAssemblyPayloadFromInputs(
 		if srcOK && dstOK && srcRank > dstRank {
 			fromProduct, toProduct = toProduct, fromProduct
 		}
-		if relation != "TRANSFORMS_INTO" && relation != "ASSEMBLES_INTO" && relation != "USED_IN" {
+		if relation != "transforms_into" && relation != "assembles_into" && relation != "used_in" {
 			relation = string(ProductToProductEdgeTypeFromPaths(fromProduct, toProduct))
 		}
 		return fromProduct, toProduct, relation
@@ -617,7 +617,7 @@ func buildAssemblyPayloadFromInputs(
 		if _, ok := transformEdges[key]; ok {
 			return
 		}
-		if downstream := assemblyCandidates[toProduct]; len(downstream) >= opts.MaxTransformsPerProduct && relation == "TRANSFORMS_INTO" {
+		if downstream := assemblyCandidates[toProduct]; len(downstream) >= opts.MaxTransformsPerProduct && relation == "transforms_into" {
 			truncated = true
 			openGapSet["graph_truncated:transform_edges"] = struct{}{}
 			return
@@ -630,7 +630,7 @@ func buildAssemblyPayloadFromInputs(
 		}
 		assemblyAttachTransformSite(productNodes, actorNodes, supplyEdges, fromProduct, toProduct, relation, status)
 		connect(fromProduct, toProduct)
-		if relation != "USED_IN" {
+		if relation != "used_in" {
 			if assemblyCandidates[toProduct] == nil {
 				assemblyCandidates[toProduct] = map[string]struct{}{}
 			}
@@ -670,24 +670,28 @@ func buildAssemblyPayloadFromInputs(
 	for _, edge := range opts.RawEdges {
 		source := canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(edge.Source))
 		target := canonical.NormalizeCanonicalPathForPersist(strings.TrimSpace(edge.Target))
-		edgeType := strings.ToUpper(strings.TrimSpace(edge.EdgeType))
+		edgeRaw := strings.TrimSpace(edge.EdgeType)
+		edgeType := strings.ToLower(edgeRaw)
+		if dec, ok := models.NormalizeRelationName(edgeRaw); ok && !dec.Dropped && dec.Relation != "" {
+			edgeType = string(dec.Relation)
+		}
 		if source == "" || target == "" {
 			continue
 		}
 		switch edgeType {
-		case "TRANSFORMS_INTO":
-			addTransform(source, target, "TRANSFORMS_INTO", "heuristic")
-		case "ASSEMBLES_INTO":
-			addTransform(source, target, "ASSEMBLES_INTO", "heuristic")
-		case "USED_IN":
-			addTransform(source, target, "USED_IN", "heuristic")
-		case "PRODUCES":
+		case "transforms_into":
+			addTransform(source, target, "transforms_into", "heuristic")
+		case "assembles_into":
+			addTransform(source, target, "assembles_into", "heuristic")
+		case "used_in":
+			addTransform(source, target, "used_in", "heuristic")
+		case string(ah.RelationNameProduces):
 			if addActorNode(source, "producer") && addProductNode(target) {
 				connect(source, target)
 			}
-		case "OWNS", "CONTROLS":
+		case string(ah.RelationNameBeneficiallyOwns), string(ah.RelationNameControlsVia):
 			addActorEdge(source, target, edgeType, "heuristic")
-		case "SUPPLIES_TO":
+		case string(ah.RelationNameSupplies):
 			sourceIsProduct := strings.HasPrefix(source, "/product/")
 			targetIsProduct := strings.HasPrefix(target, "/product/")
 			switch {
@@ -702,7 +706,7 @@ func buildAssemblyPayloadFromInputs(
 					connect(source, target)
 				}
 			default:
-				addActorEdge(source, target, "SUPPLIES_TO", "heuristic")
+				addActorEdge(source, target, string(ah.RelationNameSupplies), "heuristic")
 			}
 		case "STORES", "HANDLES":
 			if strings.HasPrefix(target, "/product/") {
@@ -1133,11 +1137,11 @@ func assemblySyntheticTransformLists(actors []models.SupplyChainAssemblyNode) (t
 					edge := models.SupplyChainAssemblyTransformEdge{
 						FromProductRef: in,
 						ToProductRef:   out,
-						Relation:       "TRANSFORMS_INTO",
+						Relation:       "transforms_into",
 						Status:         "materialized",
 					}
 					if isAssembly {
-						edge.Relation = "ASSEMBLES_INTO"
+						edge.Relation = "assembles_into"
 						assemblies = append(assemblies, edge)
 					} else {
 						transforms = append(transforms, edge)

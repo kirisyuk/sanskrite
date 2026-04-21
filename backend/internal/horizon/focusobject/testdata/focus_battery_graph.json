@@ -175,7 +175,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-acme-org",
       "targetFragmentId": "frag-acme-fac",
-      "type": "OWNS",
+      "relation": "beneficially_owns",
       "properties": {
         "criticality": 0.8,
         "amplification": 1.0,
@@ -195,7 +195,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-andes-lithium",
       "targetFragmentId": "frag-acme-fac",
-      "type": "SUPPLIES_TO",
+      "relation": "supplies",
       "properties": {
         "criticality": 0.92,
         "amplification": 1.0,
@@ -215,7 +215,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-acme-fac",
       "targetFragmentId": "frag-euro-mobility",
-      "type": "SUPPLIES_TO",
+      "relation": "supplies",
       "properties": {
         "criticality": 0.85,
         "amplification": 1.0,
@@ -235,7 +235,7 @@
       "tenantId": "global",
       "sourceFragmentId": "frag-euro-mobility",
       "targetFragmentId": "frag-citybus-fleet",
-      "type": "SUPPLIES_TO",
+      "relation": "supplies",
       "properties": {
         "criticality": 0.58,
         "amplification": 0.88,

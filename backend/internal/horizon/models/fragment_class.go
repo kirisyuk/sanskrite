@@ -11,9 +11,6 @@ import (
 // layer split, IsKnownFragmentClass, …) lives in `internal/taxonomy/ah`;
 // this file adds:
 //
-//   - the LEGACY → AH mapping every model touchpoint needs while we run
-//     mixed-shape Firestore data (UnmarshalJSON shims, migrate-cli, scout
-//     adapters, FE compatibility logs, …);
 //   - subtype helpers for the closed-enum subtype slots (community,
 //     decision, mechanism, evidence, mobile_asset, product) so callers
 //     stop poking strings literally;
@@ -23,123 +20,6 @@ import (
 //   - struct definitions for HorizonFragment / Fragment fields — those
 //     land in fragment.go (P1.04).
 //   - taxonomy data — that is generated into internal/taxonomy/ah.
-
-// -----------------------------------------------------------------------------
-// Legacy FragmentType → ah.FragmentClass mapping
-// -----------------------------------------------------------------------------
-
-// LegacyFragmentDisposition mirrors the disposition values used in
-// docs/taxonomy/migration_map.yaml. Every legacy FragmentType value falls
-// into exactly one of these buckets.
-type LegacyFragmentDisposition string
-
-const (
-	// LegacyDispositionRename — the legacy value renames 1:1 to a new
-	// FragmentClass. Subtype is empty.
-	LegacyDispositionRename LegacyFragmentDisposition = "rename"
-	// LegacyDispositionSubtype — the legacy value collapses into an
-	// existing class with a non-empty Subtype.
-	LegacyDispositionSubtype LegacyFragmentDisposition = "subtype"
-	// LegacyDispositionFoldToAttributes — the legacy value disappears as
-	// a fragment class entirely; its identity survives only on attributes
-	// of *other* fragments. Migrate-cli deletes the original docs.
-	LegacyDispositionFoldToAttributes LegacyFragmentDisposition = "fold_to_attributes"
-	// LegacyDispositionRewriteEdge — the legacy value is an edge-as-
-	// fragment artifact (SUPPLY_LINK), rewritten by migrate-cli as one
-	// or more edges and then deleted.
-	LegacyDispositionRewriteEdge LegacyFragmentDisposition = "rewrite_edge"
-)
-
-// LegacyFragmentAlias describes how a legacy FragmentType (UPPER_SNAKE
-// string from the old common.go enum) lands on the AH taxonomy.
-//
-// For Disposition=Rename / Subtype, Class is non-empty.
-// For Disposition=FoldToAttributes / RewriteEdge, Class is empty and the
-// caller MUST treat the document as something to be migrated away rather
-// than reshaped in place.
-type LegacyFragmentAlias struct {
-	LegacyType  string
-	Class       ah.FragmentClass
-	Subtype     string
-	Disposition LegacyFragmentDisposition
-	Notes       string
-}
-
-// LegacyFragmentTypeAliases is the canonical lookup for the migration
-// shim. Source of truth: docs/taxonomy/migration_map.yaml. Keep this map
-// in sync with that file — there is a CLI check (cmd/taxonomy_migrate
-// validate) that fails if any legacy enum value is missing here.
-var LegacyFragmentTypeAliases = map[string]LegacyFragmentAlias{
-	"ORGANIZATION":   {LegacyType: "ORGANIZATION", Class: ah.FragmentClassOrg, Disposition: LegacyDispositionRename},
-	"PROGRAM":        {LegacyType: "PROGRAM", Class: ah.FragmentClassOrg, Subtype: "program", Disposition: LegacyDispositionSubtype},
-	"PERSON":         {LegacyType: "PERSON", Class: ah.FragmentClassPerson, Disposition: LegacyDispositionRename},
-	"FACILITY":       {LegacyType: "FACILITY", Class: ah.FragmentClassSite, Disposition: LegacyDispositionRename},
-	"DEPOSIT":        {LegacyType: "DEPOSIT", Class: ah.FragmentClassSite, Subtype: "deposit", Disposition: LegacyDispositionSubtype},
-	"GEO_REGION":     {LegacyType: "GEO_REGION", Class: ah.FragmentClassGeo, Disposition: LegacyDispositionRename},
-	"PRODUCT":        {LegacyType: "PRODUCT", Class: ah.FragmentClassProduct, Disposition: LegacyDispositionRename},
-	"MARKET":         {LegacyType: "MARKET", Class: ah.FragmentClassMarket, Disposition: LegacyDispositionRename},
-	"COMMUNITY":      {LegacyType: "COMMUNITY", Class: ah.FragmentClassCommunity, Disposition: LegacyDispositionRename},
-	"MEDIA_CHANNEL":  {LegacyType: "MEDIA_CHANNEL", Class: ah.FragmentClassOrg, Subtype: "media_channel", Disposition: LegacyDispositionSubtype},
-	"TRACK":          {LegacyType: "TRACK", Class: ah.FragmentClassMobileAsset, Disposition: LegacyDispositionRename, Notes: "mobile_asset_kind required attribute"},
-	"EVENT":          {LegacyType: "EVENT", Class: ah.FragmentClassEvidence, Subtype: string(ah.EvidenceSubtypeEntity), Disposition: LegacyDispositionSubtype, Notes: "Subtype carries EvidenceSubtype enum value (event-style entries land as 'entity' or 'press_release' depending on shape)"},
-	"AFFECTED_ZONE":  {LegacyType: "AFFECTED_ZONE", Class: ah.FragmentClassGeo, Subtype: "affected_zone", Disposition: LegacyDispositionSubtype},
-	"DECISION_POINT": {LegacyType: "DECISION_POINT", Class: ah.FragmentClassDecision, Disposition: LegacyDispositionRename, Notes: "decision_subtype attribute required"},
-	"MECHANISM":      {LegacyType: "MECHANISM", Class: ah.FragmentClassMechanism, Disposition: LegacyDispositionRename, Notes: "mechanism_category required"},
-	"DOMAIN":         {LegacyType: "DOMAIN", Disposition: LegacyDispositionFoldToAttributes, Notes: "Identity survives only as attributes.domain on other fragments"},
-	"SPHERE":         {LegacyType: "SPHERE", Disposition: LegacyDispositionFoldToAttributes, Notes: "Folded into HorizonFragment.spherePaths attribute"},
-	"SUPPLY_LINK":    {LegacyType: "SUPPLY_LINK", Disposition: LegacyDispositionRewriteEdge, Notes: "Rewritten as supplies + leg_connects edges, original doc deleted"},
-}
-
-// LookupLegacyFragmentType returns the alias for a legacy FragmentType
-// string (case-insensitive in the input). ok=false when the value is not
-// a known legacy type.
-func LookupLegacyFragmentType(legacy string) (LegacyFragmentAlias, bool) {
-	key := strings.ToUpper(strings.TrimSpace(legacy))
-	if key == "" {
-		return LegacyFragmentAlias{}, false
-	}
-	alias, ok := LegacyFragmentTypeAliases[key]
-	return alias, ok
-}
-
-// FragmentClassFromLegacyType is a convenience wrapper: returns
-// (Class, Subtype, ok) for callers that don't care about the disposition
-// detail. ok=false when the legacy value is unknown OR maps to a
-// FoldToAttributes/RewriteEdge disposition (no in-place class).
-func FragmentClassFromLegacyType(legacy string) (ah.FragmentClass, string, bool) {
-	alias, ok := LookupLegacyFragmentType(legacy)
-	if !ok {
-		return "", "", false
-	}
-	if alias.Class == "" {
-		return "", "", false
-	}
-	return alias.Class, alias.Subtype, true
-}
-
-// LegacyTypeForClass returns the historical UPPER_SNAKE FragmentType for
-// a given (Class, Subtype) pair. Used purely for transition logging /
-// telemetry parity — never for new wire formats.
-//
-// Returns "" when no clean inverse exists (e.g. the migration was a
-// fold_to_attributes for which there is no fragment-class anchor).
-func LegacyTypeForClass(class ah.FragmentClass, subtype string) string {
-	subtype = strings.TrimSpace(subtype)
-	for _, alias := range LegacyFragmentTypeAliases {
-		if alias.Class != class {
-			continue
-		}
-		if alias.Subtype == subtype {
-			return alias.LegacyType
-		}
-	}
-	for _, alias := range LegacyFragmentTypeAliases {
-		if alias.Class == class && alias.Subtype == "" {
-			return alias.LegacyType
-		}
-	}
-	return ""
-}
 
 // -----------------------------------------------------------------------------
 // Subtype helpers — closed-enum classes only

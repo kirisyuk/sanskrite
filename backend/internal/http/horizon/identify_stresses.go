@@ -37,46 +37,6 @@ const (
 )
 
 var (
-	identifyPrimaryScalarMetrics = map[string]struct{}{
-		"supply_chain_criticality":            {},
-		"route_fragility":                     {},
-		"route_rerouteability":                {},
-		"confidence":                          {},
-		"volume":                              {},
-		"share":                               {},
-		"lead_time_days":                      {},
-		"customs_clearance_days":              {},
-		"inventory_cover_days_at_destination": {},
-		"switch_time_days":                    {},
-		"technical_fit":                       {},
-		"regulatory_fit":                      {},
-		"fill_rate":                           {},
-		"rejection_rate":                      {},
-		"annual_capacity":                     {},
-		"annual_output":                       {},
-		"lead_time_days_baseline":             {},
-		"lead_time_volatility_days":           {},
-		"inventory_days_baseline":             {},
-		"on_time_delivery_baseline":           {},
-		"yield_ratio":                         {},
-		"scrap_rate":                          {},
-		"quality_score":                       {},
-		"purity_percent":                      {},
-		"available_export_share":              {},
-		"utilization_rate":                    {},
-		"downtime_days_per_year":              {},
-		"technical_substitutability":          {},
-		"regulatory_substitutability":         {},
-		"service_criticality":                 {},
-		"path_stress_score":                   {},
-		"path_fragility":                      {},
-		"path_rerouteability":                 {},
-		"path_zone_pressure":                  {},
-		"path_affected_pressure":              {},
-		"recovery_latency_hours":              {},
-		"binding_confidence":                  {},
-		"segment_confidence":                  {},
-	}
 	identifyControlQualifierKeys = map[string]struct{}{
 		"export_license_required":   {},
 		"license_required":          {},
@@ -2072,7 +2032,7 @@ func (c *IdentifyStressesCanvas) applyFindingToArtifact(ctx context.Context, ten
 	return &copyArtifact, uniqueStrings(touchedEdgeIDs), uniqueStrings(observationIDs)
 }
 
-func (c *IdentifyStressesCanvas) persistObservationArtifacts(ctx context.Context, tenantID string, artifact *horizonmodels.MaterializedArtifact, finding StressFinding, evidenceIDs []string, now time.Time) ([]string, []string) {
+func (c *IdentifyStressesCanvas) persistObservationArtifacts(ctx context.Context, _ string, artifact *horizonmodels.MaterializedArtifact, finding StressFinding, evidenceIDs []string, now time.Time) ([]string, []string) {
 	if artifact == nil || c == nil || c.analyticalPrimitivesRepo == nil {
 		return nil, nil
 	}
@@ -2972,21 +2932,6 @@ func buildSingleSupplyLinkArtifact(fragment *horizonmodels.HorizonFragment, tena
 	return artifact
 }
 
-func parsedEdgeEndpointRefs(parsed *horizonmodels.SupplyChainPathPayload, edge horizonmodels.SupplyChainPathEdge) (string, string) {
-	if parsed == nil {
-		return "", ""
-	}
-	supplierRef := ""
-	customerRef := ""
-	if edge.From >= 0 && edge.From < len(parsed.Nodes) {
-		supplierRef = strings.TrimSpace(parsed.Nodes[edge.From].Ref)
-	}
-	if edge.To >= 0 && edge.To < len(parsed.Nodes) {
-		customerRef = strings.TrimSpace(parsed.Nodes[edge.To].Ref)
-	}
-	return supplierRef, customerRef
-}
-
 func findingPriorityScore(finding StressFinding) float64 {
 	severityBase := 0.45
 	switch strings.TrimSpace(strings.ToLower(finding.Severity)) {
@@ -3060,19 +3005,6 @@ func makeMetricValueFromObservation(obs StressMetricObservation, sourceIDs []str
 	}
 }
 
-func makeDerivedMetric(value float64, observedAt time.Time, sourceIDs []string) horizonmodels.MetricValue {
-	return horizonmodels.MetricValue{
-		Value:      value,
-		Confidence: 0.72,
-		ObservedAt: observedAt,
-		Provenance: horizonmodels.Provenance{
-			Method:     "identify_stresses",
-			SourceIDs:  append([]string(nil), sourceIDs...),
-			ObservedAt: &observedAt,
-		},
-	}
-}
-
 func cloneMetricMap(in map[string]horizonmodels.MetricValue) map[string]horizonmodels.MetricValue {
 	if len(in) == 0 {
 		return nil
@@ -3091,35 +3023,6 @@ func cloneInterfaceMap(in map[string]interface{}) map[string]interface{} {
 	out := make(map[string]interface{}, len(in))
 	for key, value := range in {
 		out[key] = value
-	}
-	return out
-}
-
-func selectMetricKeys[V any](in map[string]V, allowed interface{}) map[string]V {
-	if len(in) == 0 {
-		return nil
-	}
-	set := map[string]struct{}{}
-	switch raw := allowed.(type) {
-	case map[string]struct{}:
-		for key := range raw {
-			set[key] = struct{}{}
-		}
-	case []string:
-		for _, key := range raw {
-			set[strings.TrimSpace(key)] = struct{}{}
-		}
-	default:
-		return nil
-	}
-	out := make(map[string]V)
-	for key, value := range in {
-		if _, ok := set[strings.TrimSpace(key)]; ok {
-			out[key] = value
-		}
-	}
-	if len(out) == 0 {
-		return nil
 	}
 	return out
 }

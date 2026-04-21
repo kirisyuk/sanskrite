@@ -11,7 +11,7 @@ func edgeSubstitutability(e *horizonmodels.DependencyEdge) float64 {
 	if e == nil || e.Qualifiers == nil {
 		return 0
 	}
-	raw, ok := e.Qualifiers[horizonmodels.QualifierAliasSubstitutability]
+	raw, ok := e.Qualifiers[horizonmodels.QualifierSubstitutability]
 	if !ok || raw == nil {
 		return 0
 	}
@@ -38,11 +38,8 @@ func clampUnit(v float64) float64 {
 	return v
 }
 
-// Legacy helper port of the deleted models.SemanticGroup* vocabulary and
-// SemanticGroupForEdgeType resolver. Importance reuses the same closed
-// vocabulary the scout package keeps in scout/legacy_helpers.go; this is
-// a faithful local replica so the importance scorer/explainer can keep
-// classifying edges without the now-removed models helper.
+// SemanticGroupForEdgeType and related constants — local to the importance
+// package (scout keeps an analogous map in scout/edge_semantic_helpers.go).
 
 const (
 	SemanticGroupSupplyChain = "supply_chain"

@@ -63,7 +63,7 @@ func BuildPropagationNodeOverlay(fragment *horizonmodels.HorizonFragment) Propag
 	}
 
 	switch {
-	case fragment.IsLegacyAffectedZone():
+	case fragment.IsAffectedZoneGeo():
 		strategic := overlayFragmentMetricValue(fragment, horizonmodels.MetricPathImportanceStrategic)
 		bridge := overlayFragmentMetricValue(fragment, horizonmodels.MetricPathImportanceBridge)
 		businessBlast := overlayFragmentMetricValue(fragment, horizonmodels.MetricPathImportanceBusinessBlastRadius)
@@ -107,7 +107,7 @@ func BuildPropagationNodeOverlay(fragment *horizonmodels.HorizonFragment) Propag
 		overlay.BridgeScore = 0.44
 		overlay.CriticalityScore = 0.76
 	case overlayHasAny(text, "lng", "natural-gas", "gas", "oil", "refinery", "pipeline", "petrochem", "terminal", "power", "grid", "field") ||
-		fragment.IsLegacyDeposit():
+		fragment.IsDepositSite():
 		setPrimary("energy_asset")
 		setBusiness("producer")
 		addRole("source")
@@ -183,7 +183,7 @@ func BuildPropagationNodeOverlay(fragment *horizonmodels.HorizonFragment) Propag
 	if strings.HasPrefix(strings.TrimSpace(fragment.CanonicalPath), "/fac/") {
 		addRole("operator")
 	}
-	if fragment.IsLegacyDeposit() {
+	if fragment.IsDepositSite() {
 		addRole("source")
 	}
 	return overlay

@@ -79,8 +79,8 @@ func (h *HorizonHandlers) HumanInTheLoopEdge(w http.ResponseWriter, r *http.Requ
 	// UPPER_SNAKE or AH lower_snake — normalise to AH.
 	newType := edge.Relation
 	if raw := strings.TrimSpace(req.Type); raw != "" {
-		if rel, ok := models.NormalizeWireRelationStrict(raw); ok {
-			newType = rel
+		if dec, ok := models.NormalizeRelationName(raw); ok && !dec.Dropped && dec.Relation != "" {
+			newType = dec.Relation
 		} else {
 			newType = ah.RelationName(strings.ToLower(raw))
 		}

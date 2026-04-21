@@ -1,7 +1,6 @@
 package models
 
 import (
-	"encoding/json"
 	"fmt"
 	"sort"
 	"strings"
@@ -43,9 +42,7 @@ type HorizonFragment struct {
 	GeoSlug string `json:"geoSlug,omitempty" firestore:"geoSlug,omitempty"`
 	// Class is the canonical AgentHorde fragment class (org, site, product,
 	// decision, mechanism, …). Replaces the legacy `Type FragmentType`
-	// field. Wire shape: top-level `class` JSON/Firestore key. Legacy
-	// documents storing `type: "ORGANIZATION"` are auto-translated by
-	// UnmarshalJSON via models.LegacyFragmentTypeAliases.
+	// field. Wire shape: top-level `class` JSON/Firestore key.
 	Class ah.FragmentClass `json:"class" firestore:"class"`
 	// Subtype refines Class with an open-ended (org, site, geo, project)
 	// or closed-enum (community, decision, mechanism, evidence,
@@ -209,7 +206,7 @@ type HorizonFragment struct {
 	// Fields support leg materialization and route variants alongside `supplies` edges.
 	SupplierRef         *string  `json:"supplierRef,omitempty" firestore:"supplierRef,omitempty"`                 // MUST be /fac/... or /deposit/... for extraction. NOT /org/. (nil = natural resource)
 	CustomerRef         *string  `json:"customerRef,omitempty" firestore:"customerRef,omitempty"`                 // MUST be /fac/... NOT /org/. (nil = end consumer)
-	ProductRef          *string  `json:"productRef,omitempty" firestore:"productRef,omitempty"`                   // /product/... (required for SUPPLY_LINK)
+	ProductRef          *string  `json:"productRef,omitempty" firestore:"productRef,omitempty"`                   // /product/... (required for site/subtype supply_link fragments)
 	SupplierFacilityRef *string  `json:"supplierFacilityRef,omitempty" firestore:"supplierFacilityRef,omitempty"` // /fac/... (optional)
 	CustomerFacilityRef *string  `json:"customerFacilityRef,omitempty" firestore:"customerFacilityRef,omitempty"` // /fac/... (optional)
 	TransportViaRefs    []string `json:"transportViaRefs,omitempty" firestore:"transportViaRefs,omitempty"`       // ordered /fac/... paths (ports, terminals, pipelines, warehouses)
@@ -227,143 +224,67 @@ type HorizonFragment struct {
 	ActualEndDate *time.Time `json:"actualEndDate,omitempty" firestore:"actualEndDate,omitempty"`
 }
 
-// horizonFragmentJSONShim is the wire-decode envelope used by
-// HorizonFragment.UnmarshalJSON. It mirrors HorizonFragment 1:1 except:
-//   - the `type` legacy field is accepted alongside `class` so docs
-//     written before P1.04 are auto-upgraded on read;
-//   - both `class` and the legacy `type` are accepted for the new field.
-//
-// We deliberately use json.RawMessage for everything to avoid double-
-// definition and to preserve unknown fields verbatim.
-type horizonFragmentJSONShim struct {
-	*horizonFragmentBase
-	LegacyType string `json:"type,omitempty"`
-}
-
-// horizonFragmentBase is a type alias used purely to break the recursive
-// MarshalJSON / UnmarshalJSON loop. It is NEVER referenced outside the
-// custom marshalers below.
-type horizonFragmentBase HorizonFragment
-
-// UnmarshalJSON accepts both the new wire shape (`class` + `subtype`)
-// and the legacy shape (`type: "ORGANIZATION"`). Legacy values are
-// translated through models.LegacyFragmentTypeAliases — a SUPPLY_LINK
-// document is mapped to Class=site, Subtype="supply_link".
-func (f *HorizonFragment) UnmarshalJSON(data []byte) error {
-	shim := horizonFragmentJSONShim{horizonFragmentBase: (*horizonFragmentBase)(f)}
-	if err := json.Unmarshal(data, &shim); err != nil {
-		return err
-	}
-	if f.Class == "" && strings.TrimSpace(shim.LegacyType) != "" {
-		legacy := strings.ToUpper(strings.TrimSpace(shim.LegacyType))
-		alias, ok := LookupLegacyFragmentType(legacy)
-		switch {
-		case ok && alias.Disposition == LegacyDispositionRewriteEdge && legacy == "SUPPLY_LINK":
-			f.Class = ah.FragmentClassSite
-			f.Subtype = "supply_link"
-		case ok && alias.Class != "":
-			f.Class = alias.Class
-			if f.Subtype == "" {
-				f.Subtype = alias.Subtype
-			}
-		default:
-			// Unknown legacy enum: try lower-casing it and hope it is
-			// already the new shape (canonicalizer / migrate-cli will
-			// catch genuinely bad values).
-			if class, ok := ah.NormalizeFragmentClass(strings.ToLower(legacy)); ok {
-				f.Class = class
-			}
-		}
-	}
-	return nil
-}
-
-// LegacyTypeAlias returns the historical UPPER_SNAKE FragmentType
-// string for telemetry / transition logging. Returns "" when no clean
-// inverse exists.
-func (f *HorizonFragment) LegacyTypeAlias() string {
-	if f == nil {
-		return ""
-	}
-	if f.IsLegacySupplyLink() {
-		return "SUPPLY_LINK"
-	}
-	return LegacyTypeForClass(f.Class, f.Subtype)
-}
-
-// IsLegacySupplyLink reports a supply-link modeled as site/subtype supply_link
+// IsSupplyLinkFragment reports a supply-link modeled as site/subtype supply_link
 // or a /supply-link/ canonical path (companion to supplies edges / legs).
-func (f *HorizonFragment) IsLegacySupplyLink() bool {
+func (f *HorizonFragment) IsSupplyLinkFragment() bool {
 	if f == nil {
 		return false
 	}
-	if f.Class == ah.FragmentClassSite && strings.EqualFold(f.Subtype, "supply_link") {
+	if ClassSubtypeSupplyLink.MatchesFragment(f) {
 		return true
 	}
 	cp := strings.TrimSpace(f.CanonicalPath)
 	return strings.HasPrefix(strings.ToLower(cp), "/supply-link/")
 }
 
-// IsLegacyProgram reports whether the fragment carries the legacy PROGRAM
-// identity. Canonical AH form: Class=org, Subtype=program. This predicate
-// is the canonical replacement for legacy `frag.Type == FragmentTypeProgram`
-// switch arms anywhere in the codebase. DO NOT introduce parallel
-// __legacy_program-style sentinel constants — they break identity matching
-// against real persisted documents.
-func (f *HorizonFragment) IsLegacyProgram() bool {
+// IsProgramOrg reports Class=org, Subtype=program.
+func (f *HorizonFragment) IsProgramOrg() bool {
 	if f == nil {
 		return false
 	}
-	return f.Class == ah.FragmentClassOrg && strings.EqualFold(f.Subtype, "program")
+	return ClassSubtypeProgram.MatchesFragment(f)
 }
 
-// IsLegacyMediaChannel — canonical form: Class=org, Subtype=media_channel.
-func (f *HorizonFragment) IsLegacyMediaChannel() bool {
+// IsMediaChannelOrg reports Class=org, Subtype=media_channel.
+func (f *HorizonFragment) IsMediaChannelOrg() bool {
 	if f == nil {
 		return false
 	}
-	return f.Class == ah.FragmentClassOrg && strings.EqualFold(f.Subtype, "media_channel")
+	return ClassSubtypeMediaChannel.MatchesFragment(f)
 }
 
-// IsLegacyDeposit — canonical form: Class=site, Subtype=deposit.
-func (f *HorizonFragment) IsLegacyDeposit() bool {
+// IsDepositSite reports Class=site, Subtype=deposit.
+func (f *HorizonFragment) IsDepositSite() bool {
 	if f == nil {
 		return false
 	}
-	return f.Class == ah.FragmentClassSite && strings.EqualFold(f.Subtype, "deposit")
+	return ClassSubtypeDeposit.MatchesFragment(f)
 }
 
-// IsLegacyAffectedZone — canonical form: Class=geo, Subtype=affected_zone.
-// (Per migration_map.yaml AFFECTED_ZONE folds onto geo with subtype.)
-func (f *HorizonFragment) IsLegacyAffectedZone() bool {
+// IsAffectedZoneGeo reports Class=geo, Subtype=affected_zone.
+func (f *HorizonFragment) IsAffectedZoneGeo() bool {
 	if f == nil {
 		return false
 	}
-	return f.Class == ah.FragmentClassGeo && strings.EqualFold(f.Subtype, "affected_zone")
+	return ClassSubtypeAffectedZone.MatchesFragment(f)
 }
 
-// IsLegacyDomain reports whether the fragment is a legacy DOMAIN document
-// that should have been folded into attributes by migrate-cli. Returns true
-// only on transitional/un-migrated docs. Canonical AH has no Domain class;
-// callers seeing this should treat the doc as something to migrate away.
-//
-// Detection rule: any fragment whose canonical path begins with `/dom/` AND
-// whose Class is not yet a recognized AH class (i.e. legacy ingest before
-// fold). Precise migration-time identification lives in migrate-cli; this
-// predicate is the runtime "did anything slip through?" check.
-func (f *HorizonFragment) IsLegacyDomain() bool {
+// IsDomainScopeFragment reports domain workbench paths (/domain/… or historic /dom/…).
+func (f *HorizonFragment) IsDomainScopeFragment() bool {
 	if f == nil {
 		return false
 	}
-	return strings.HasPrefix(f.CanonicalPath, "/dom/")
+	cp := strings.TrimSpace(f.CanonicalPath)
+	return strings.HasPrefix(cp, "/domain/") || strings.HasPrefix(cp, "/dom/")
 }
 
-// IsLegacySphere — same shape as IsLegacyDomain but for SPHERE folds.
-func (f *HorizonFragment) IsLegacySphere() bool {
+// IsSphereScopeFragment reports sphere overlay paths (/sphere/… or historic /sph/…).
+func (f *HorizonFragment) IsSphereScopeFragment() bool {
 	if f == nil {
 		return false
 	}
-	return strings.HasPrefix(f.CanonicalPath, "/sph/")
+	cp := strings.TrimSpace(f.CanonicalPath)
+	return strings.HasPrefix(cp, "/sphere/") || strings.HasPrefix(cp, "/sph/")
 }
 
 // FragmentMetadata метаданные жизненного цикла
@@ -404,7 +325,7 @@ func (f *HorizonFragment) Validate() error {
 	}
 
 	// Supply-link fragments use Class=site, Subtype=supply_link (tenant-scoped).
-	if f.IsLegacySupplyLink() {
+	if f.IsSupplyLinkFragment() {
 		if f.TenantID == "" {
 			return fmt.Errorf("tenantId must be set for SUPPLY_LINK fragments")
 		}

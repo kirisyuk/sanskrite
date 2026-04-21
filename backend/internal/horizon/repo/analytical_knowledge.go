@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	"cloud.google.com/go/firestore"
 
@@ -269,10 +268,3 @@ func minAnalytical(left, right int) int {
 	return right
 }
 
-func analyticalStaleAt(from time.Time, ttl time.Duration) *time.Time {
-	if from.IsZero() || ttl <= 0 {
-		return nil
-	}
-	value := from.UTC().Add(ttl)
-	return &value
-}

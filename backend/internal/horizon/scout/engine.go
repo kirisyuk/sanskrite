@@ -39,13 +39,13 @@ import (
 	redis "github.com/redis/go-redis/v9"
 )
 
-func isLegacyOrgPath(cp string) bool {
+// isTwoSegmentOrgPath is true for /org/{slug} paths that omit the country segment.
+func isTwoSegmentOrgPath(cp string) bool {
 	cp = strings.TrimSpace(cp)
 	if !strings.HasPrefix(cp, "/org/") {
 		return false
 	}
 	parts := strings.Split(strings.Trim(cp, "/"), "/")
-	// Legacy: /org/{slug} (2 segments total)
 	return len(parts) == 2 && parts[0] == "org" && strings.TrimSpace(parts[1]) != ""
 }
 
@@ -686,7 +686,7 @@ func shouldRequestOrgCanonicalization(frag *models.HorizonFragment) bool {
 	}
 	// If jurisdiction is unknown (/org/na/...) or path is legacy (/org/{slug}),
 	// we should ask missingInfo to resolve country/jurisdiction.
-	return strings.HasPrefix(cp, "/org/na/") || isLegacyOrgPath(cp)
+	return strings.HasPrefix(cp, "/org/na/") || isTwoSegmentOrgPath(cp)
 }
 
 func buildOrgCanonicalizationMissingInfo(fragment *models.HorizonFragment, job *models.ScoutingJob, relations []agents.DiscoveredRelation) string {
@@ -707,7 +707,7 @@ func buildOrgCanonicalizationMissingInfo(fragment *models.HorizonFragment, job *
 	relContext := relationContextSnippet(relations, 6)
 
 	var sb strings.Builder
-	if strings.HasPrefix(cp, "/org/na/") || isLegacyOrgPath(cp) {
+	if strings.HasPrefix(cp, "/org/na/") || isTwoSegmentOrgPath(cp) {
 		sb.WriteString("Resolve the country of origin / primary jurisdiction (ISO2) for this organization and update its canonicalPath.")
 		sb.WriteString(" Current canonicalPath is jurisdiction-unknown (/org/na/...) or legacy (/org/{slug}), which causes cross-country collisions.")
 		sb.WriteString(" Target format: /org/{iso2}/{slug} (base name only, do NOT include legal form like Inc/Ltd/LLC in slug).")
@@ -843,7 +843,7 @@ func relationNeedsOrgCanonicalization(path string) bool {
 	if !strings.HasPrefix(path, "/org/") {
 		return false
 	}
-	if strings.HasPrefix(path, "/org/na/") || isLegacyOrgPath(path) {
+	if strings.HasPrefix(path, "/org/na/") || isTwoSegmentOrgPath(path) {
 		return true
 	}
 	parts := strings.Split(strings.Trim(path, "/"), "/")
@@ -1240,23 +1240,11 @@ func buildSeedSupplyChain(frag *models.HorizonFragment) *agents.SupplyChain {
 	if name == "" {
 		name = deriveNameFromPath(cp)
 	}
-	// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml +
-	// AGENTS.md):
-	// agents.SupplyChainNode.Type is part of the LLM-facing supply-chain
-	// agent contract; pre-migration prompts pinned on the UPPER_SNAKE
-	// wire form ("ORGANIZATION", "FACILITY", …). Surface the legacy
-	// inverse via models.LegacyTypeForClass so the scaffold the agent
-	// receives is stable across the migration window. Falls back to
-	// the UPPER_SNAKE class string for AH classes that have no legacy
-	// alias (e.g. /vessel-class/) and finally to "ORGANIZATION" for
-	// Empty inputs.
-	nodeType := models.LegacyTypeForClass(frag.Class, strings.TrimSpace(frag.Subtype))
-	if nodeType == "" {
-		if frag.Class != "" {
-			nodeType = strings.ToUpper(string(frag.Class))
-		} else {
-			nodeType = "ORGANIZATION"
-		}
+	// agents.SupplyChainNode.Type carries an AH-native class/subtype label
+	// for the scaffold the agent receives (FormatClassSubtype / uppercase class).
+	nodeType := models.FormatClassSubtype(frag.Class, strings.TrimSpace(frag.Subtype))
+	if nodeType == "" && frag.Class != "" {
+		nodeType = string(frag.Class)
 	}
 	return &agents.SupplyChain{
 		Nodes: []agents.SupplyChainNode{{
@@ -1819,7 +1807,7 @@ func filterMissingInfoByFragmentRelevance(fragment *models.HorizonFragment, in [
 	isPerson := fragment.Class == ah.FragmentClassPerson || strings.HasPrefix(cp, "/person/")
 	isMarket := fragment.Class == ah.FragmentClassMarket || strings.HasPrefix(cp, "/market/")
 	isFacility := fragment.Class == ah.FragmentClassSite || strings.HasPrefix(cp, "/fac/")
-	isDeposit := fragment.IsLegacyDeposit() || strings.HasPrefix(cp, "/deposit/")
+	isDeposit := fragment.IsDepositSite() || strings.HasPrefix(cp, "/deposit/")
 	isCommunity := fragment.Class == ah.FragmentClassCommunity || strings.HasPrefix(cp, "/community/")
 
 	personOnlyTokens := []string{
@@ -2018,7 +2006,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 		// MIGRATION NOTE (AH taxonomy): legacy FragmentTypes that fold onto a
 		// shared parent class (PROGRAM/MEDIA → org, DEPOSIT/SUPPLY_LINK → site,
 		// AFFECTED_ZONE → geo, DOMAIN/SPHERE → evidence) need to carry a
-		// Subtype on the fragment for downstream IsLegacy* predicates to work.
+		// Subtype on the fragment for downstream class/subtype predicates (e.g. deposit, supply_link).
 		// Derive subtype from the canonical path prefix.
 		csHint := InferClassSubtypeFromCanonicalPath(canonicalPath)
 		frag := &models.HorizonFragment{
@@ -4729,7 +4717,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				fmt.Sprintf("Which country/jurisdiction does %s belong to? Replace /gov/na/... with /gov/{iso2}/... based on evidence.", job.TargetCanonicalPath),
 			)
 		}
-		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/org/na/") || isLegacyOrgPath(strings.TrimSpace(job.TargetCanonicalPath)) {
+		if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/org/na/") || isTwoSegmentOrgPath(strings.TrimSpace(job.TargetCanonicalPath)) {
 			validationResult.MissingInfo = append(validationResult.MissingInfo,
 				fmt.Sprintf("What is the country of origin / primary jurisdiction for %s? Prefer /org/{iso2}/{slug} canonical path. Use /org/na/... ONLY as an exceptional last-resort when neither context nor the organization name provides a defensible ISO2/jurisdiction clue.", job.TargetCanonicalPath),
 			)

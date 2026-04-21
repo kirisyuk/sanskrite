@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"testing"
 	"time"
 
@@ -334,10 +335,10 @@ func TestDependencyEdge_IsTransmissionSensitive(t *testing.T) {
 			want: true,
 		},
 		{
-			name: "regulates relation with transmission alias qualifier - sensitive",
+			name: "regulates relation with throughput_share qualifier - sensitive",
 			edge: &DependencyEdge{
 				Relation:   ah.RelationNameRegulates,
-				Qualifiers: map[string]interface{}{QualifierAliasFlowShare: 0.5},
+				Qualifiers: map[string]interface{}{QualifierThroughputShare: 0.5},
 			},
 			want: true,
 		},
@@ -349,5 +350,16 @@ func TestDependencyEdge_IsTransmissionSensitive(t *testing.T) {
 				t.Fatalf("IsTransmissionSensitive()=%v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDependencyEdge_UnmarshalJSON_RelationField(t *testing.T) {
+	raw := []byte(`{"id":"e1","tenantId":"t","sourceFragmentId":"a","targetFragmentId":"b","relation":"supplies","properties":{"criticality":0.5,"amplification":1,"latencyHours":0},"provenance":{"sourceType":"x"},"metadata":{"sourceFrameId":"","createdAt":"2026-01-01T00:00:00Z","lastUpdatedAt":"2026-01-01T00:00:00Z"}}`)
+	var e DependencyEdge
+	if err := json.Unmarshal(raw, &e); err != nil {
+		t.Fatal(err)
+	}
+	if e.Relation != ah.RelationNameSupplies {
+		t.Fatalf("Relation=%q, want supplies", e.Relation)
 	}
 }

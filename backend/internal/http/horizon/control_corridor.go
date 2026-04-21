@@ -730,9 +730,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		for _, role := range []string{roleAuthority, roleExecution} {
 			for _, e := range outByRole[role][cur.id] {
 				enqueueForward(e.To, cur.hop+1)
-				if e.Type == string(ah.RelationNameImposes) ||
-					e.Type == string(ah.RelationNameImposes) ||
-					e.Type == string(ah.RelationNameImposes) {
+				if e.Type == string(ah.RelationNameImposes) {
 					impactRoots[e.To] = struct{}{}
 				}
 			}

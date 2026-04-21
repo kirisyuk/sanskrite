@@ -411,15 +411,15 @@ func normalizeWireRelations(values []string) []ah.RelationName {
 	out := make([]ah.RelationName, 0, len(values))
 	seen := make(map[ah.RelationName]struct{}, len(values))
 	for _, v := range values {
-		rel, ok := models.NormalizeWireRelationStrict(v)
-		if !ok {
+		dec, ok := models.NormalizeRelationName(v)
+		if !ok || dec.Dropped || dec.Relation == "" {
 			continue
 		}
-		if _, dup := seen[rel]; dup {
+		if _, dup := seen[dec.Relation]; dup {
 			continue
 		}
-		seen[rel] = struct{}{}
-		out = append(out, rel)
+		seen[dec.Relation] = struct{}{}
+		out = append(out, dec.Relation)
 	}
 	return out
 }
@@ -432,8 +432,8 @@ func normalizeRelation(rel ah.RelationName) ah.RelationName {
 	if normalized, ok := ah.NormalizeRelation(trimmed); ok {
 		return normalized
 	}
-	if normalized, ok := models.NormalizeWireRelationStrict(trimmed); ok {
-		return normalized
+	if dec, ok := models.NormalizeRelationName(trimmed); ok && !dec.Dropped && dec.Relation != "" {
+		return dec.Relation
 	}
 	return ah.RelationName(trimmed)
 }

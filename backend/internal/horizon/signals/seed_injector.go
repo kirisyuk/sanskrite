@@ -1224,7 +1224,7 @@ func seedFragmentTypeAllowed(signal *horizonmodels.SignalDescriptor, frag *horiz
 		case FragmentTypePerson, FragmentTypeEvent:
 			return false
 		}
-		if frag.IsLegacySupplyLink() {
+		if frag.IsSupplyLinkFragment() {
 			return false
 		}
 		if strings.TrimSpace(frag.Subtype) == "media_channel" {
@@ -1245,7 +1245,7 @@ func semanticSeedFragmentAllowed(signal *horizonmodels.SignalDescriptor, frag *h
 	if path == "" {
 		return false
 	}
-	if frag.IsLegacySupplyLink() || strings.HasPrefix(path, "/supply-link/") {
+	if frag.IsSupplyLinkFragment() || strings.HasPrefix(path, "/supply-link/") {
 		return false
 	}
 	if semanticSeedGenericLocPath(path) {

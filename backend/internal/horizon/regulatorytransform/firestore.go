@@ -55,8 +55,8 @@ func LoadRegistryFromFirestore(ctx context.Context, db *firestore.Client) (*Regi
 		}
 		p := Pair{FromPath: from, ToPath: to, RelationKind: strings.TrimSpace(row.RelationKind)}
 		if ct := strings.TrimSpace(row.CanonicalEdgeType); ct != "" {
-			if rel, ok := models.NormalizeWireRelationStrict(ct); ok {
-				p.CanonicalType = rel
+			if dec, ok := models.NormalizeRelationName(ct); ok && !dec.Dropped && dec.Relation != "" {
+				p.CanonicalType = dec.Relation
 			} else {
 				p.CanonicalType = ah.RelationName(strings.ToLower(ct))
 			}

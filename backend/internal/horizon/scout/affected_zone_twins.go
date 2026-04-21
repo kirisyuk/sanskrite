@@ -100,7 +100,7 @@ func FindAffectedZoneTwinCandidates(
 	out := make([]*models.HorizonFragment, 0, len(items))
 	selfID = strings.TrimSpace(selfID)
 	for _, frag := range items {
-		if frag == nil || !frag.IsLegacyAffectedZone() {
+		if frag == nil || !frag.IsAffectedZoneGeo() {
 			continue
 		}
 		if selfID != "" && strings.TrimSpace(frag.ID) == selfID {
@@ -127,7 +127,7 @@ func FindAffectedZoneTwinCandidates(
 }
 
 func SelectAffectedZoneTwinReplacement(incoming *models.HorizonFragment, candidates []*models.HorizonFragment) (*models.HorizonFragment, string) {
-	if incoming == nil || !incoming.IsLegacyAffectedZone() {
+	if incoming == nil || !incoming.IsAffectedZoneGeo() {
 		return nil, ""
 	}
 	incomingIdentity, ok := ParseAffectedZoneIdentity(incoming.CanonicalPath)
@@ -142,7 +142,7 @@ func SelectAffectedZoneTwinReplacement(incoming *models.HorizonFragment, candida
 	var best *models.HorizonFragment
 	bestScore := 0.0
 	for _, cand := range candidates {
-		if cand == nil || !cand.IsLegacyAffectedZone() {
+		if cand == nil || !cand.IsAffectedZoneGeo() {
 			continue
 		}
 		if strings.TrimSpace(cand.ID) == strings.TrimSpace(incoming.ID) {
@@ -202,7 +202,7 @@ func ShouldAutoMergeAffectedZoneTwin(primary, duplicate *models.HorizonFragment)
 }
 
 func AffectedZoneEvidenceScore(fragment *models.HorizonFragment) float64 {
-	if fragment == nil || !fragment.IsLegacyAffectedZone() {
+	if fragment == nil || !fragment.IsAffectedZoneGeo() {
 		return 0
 	}
 	score := 0.0

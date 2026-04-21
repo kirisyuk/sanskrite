@@ -62,11 +62,11 @@ func AllowlistContainsLegacy(allow RelationAllowlist, wire string) bool {
 	if allow == nil {
 		return true
 	}
-	rel, ok := models.NormalizeWireRelationStrict(wire)
-	if !ok {
+	dec, ok := models.NormalizeRelationName(wire)
+	if !ok || dec.Dropped || dec.Relation == "" {
 		return false
 	}
-	return AllowlistContains(allow, rel)
+	return AllowlistContains(allow, dec.Relation)
 }
 
 // domainScaffoldRelations are the small-set of structural relations used
@@ -142,12 +142,12 @@ func allowlistFromTaxonomyWire(wire []string) RelationAllowlist {
 	seen := make(map[ah.RelationName]struct{}, len(wire))
 	out := make(RelationAllowlist, 0, len(wire))
 	for _, w := range wire {
-		if rel, ok := models.NormalizeWireRelationStrict(w); ok {
-			if _, dup := seen[rel]; dup {
+		if dec, ok := models.NormalizeRelationName(w); ok && !dec.Dropped && dec.Relation != "" {
+			if _, dup := seen[dec.Relation]; dup {
 				continue
 			}
-			seen[rel] = struct{}{}
-			out = append(out, rel)
+			seen[dec.Relation] = struct{}{}
+			out = append(out, dec.Relation)
 		}
 	}
 	return out

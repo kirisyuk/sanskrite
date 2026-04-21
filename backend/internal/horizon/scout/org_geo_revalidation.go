@@ -198,7 +198,7 @@ func RevalidateOrgGeo(
 		return result, nil
 	}
 	oldPath := strings.TrimSpace(fragment.CanonicalPath)
-	if (strings.HasPrefix(oldPath, "/org/na/") || strings.HasPrefix(oldPath, "/gov/na/") || isLegacyOrgPath(oldPath)) &&
+	if (strings.HasPrefix(oldPath, "/org/na/") || strings.HasPrefix(oldPath, "/gov/na/") || isTwoSegmentOrgPath(oldPath)) &&
 		strings.TrimSpace(inferOrgCanonicalPathFromHints(fragment)) != "" {
 		heuristicPath := strings.TrimSpace(inferOrgCanonicalPathFromHints(fragment))
 		if heuristicPath == oldPath {

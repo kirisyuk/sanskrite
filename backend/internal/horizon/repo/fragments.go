@@ -211,7 +211,7 @@ func (r *HorizonFragmentsRepository) recordUnknownProductCandidatesAsync(fragmen
 				FragmentID:   strings.TrimSpace(f.ID),
 			})
 		}
-		if f.IsLegacySupplyLink() && f.ProductRef != nil {
+		if f.IsSupplyLinkFragment() && f.ProductRef != nil {
 			_ = r.productDictionary.RecordUnknownProductCandidate(ctx, productdict.ProductObservation{
 				TenantID:     firstNonEmptyFragmentTenant(f.TenantID),
 				ObservedPath: strings.TrimSpace(*f.ProductRef),
@@ -383,7 +383,7 @@ func ensurePersistInvariants(fragment *models.HorizonFragment) {
 			}
 		}
 	}
-	if !fragment.IsLegacySupplyLink() && strings.TrimSpace(fragment.TenantID) == "" {
+	if !fragment.IsSupplyLinkFragment() && strings.TrimSpace(fragment.TenantID) == "" {
 		fragment.TenantID = "global"
 	}
 	owner := strings.TrimSpace(fragment.Governance.Owner)
@@ -1176,7 +1176,7 @@ func (r *HorizonFragmentsRepository) createWithOptions(ctx context.Context, frag
 	doc := r.col.NewDoc()
 	if cp != "" {
 		tenantKey := strings.TrimSpace(fragment.TenantID)
-		if !fragment.IsLegacySupplyLink() {
+		if !fragment.IsSupplyLinkFragment() {
 			tenantKey = "global"
 		}
 		if tenantKey == "" {
@@ -1525,7 +1525,7 @@ func (r *HorizonFragmentsRepository) BatchGetSupplyLinksByCanonicalPaths(ctx con
 		return nil, err
 	}
 	for cp, fragment := range fragments {
-		if fragment == nil || !fragment.IsLegacySupplyLink() {
+		if fragment == nil || !fragment.IsSupplyLinkFragment() {
 			delete(fragments, cp)
 		}
 	}
@@ -1749,7 +1749,7 @@ func (r *HorizonFragmentsRepository) FindByIdentifierAndType(ctx context.Context
 	fieldPath := fmt.Sprintf("identifiers.%s", key)
 	q := r.col.Where("tenantId", "==", "global").Where(fieldPath, "==", value)
 	if fragType != "" {
-		q = q.Where("type", "==", string(fragType))
+		q = q.Where("class", "==", string(fragType))
 	}
 	q = q.Limit(10)
 	docs, err := q.Documents(ctx).GetAll()
@@ -1779,7 +1779,7 @@ func (r *HorizonFragmentsRepository) FindByLabel(ctx context.Context, lang, valu
 	fieldPath := fmt.Sprintf("labels.%s", lang)
 	q := r.col.Where("tenantId", "==", "global").Where(fieldPath, "==", value)
 	if fragType != "" {
-		q = q.Where("type", "==", string(fragType))
+		q = q.Where("class", "==", string(fragType))
 	}
 	q = q.Limit(10)
 	docs, err := q.Documents(ctx).GetAll()
@@ -1823,7 +1823,7 @@ func (r *HorizonFragmentsRepository) findByLabelForSingleTenant(ctx context.Cont
 	fieldPath := fmt.Sprintf("labels.%s", lang)
 	q := r.col.Where("tenantId", "==", tenantID).Where(fieldPath, "==", value)
 	if fragType != "" {
-		q = q.Where("type", "==", string(fragType))
+		q = q.Where("class", "==", string(fragType))
 	}
 	docs, err := q.Limit(10).Documents(ctx).GetAll()
 	if err != nil {
@@ -1859,7 +1859,7 @@ func (r *HorizonFragmentsRepository) FindByNormalizedLegalName(ctx context.Conte
 	}
 
 	// Query orgs (limit to reasonable number for client-side filtering)
-	q := r.col.Where("tenantId", "==", "global").Where("type", "==", "ORGANIZATION").Limit(500)
+	q := r.col.Where("tenantId", "==", "global").Where("class", "==", string(ah.FragmentClassOrg)).Limit(500)
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
 		return nil, err
@@ -2267,7 +2267,7 @@ func (r *HorizonFragmentsRepository) ListGeoBound(
 		if err != nil {
 			return nil, err
 		}
-		// Also fetch /zone/ (AFFECTED_ZONE) — they may be pushed out by more frequently updated orgs/facilities
+		// Also fetch /zone/ (geo subtype affected_zone) — they may be pushed out by more frequently updated orgs/facilities
 		zoneQ := r.col.
 			Where("tenantId", "==", "global").
 			Where("canonicalPath", ">=", "/zone/").
@@ -2587,11 +2587,7 @@ func (r *HorizonFragmentsRepository) SearchByVectorText(ctx context.Context, que
 // For finer-grained selection within a class (e.g. "site/deposit" vs "site/refinery"),
 // use ListByClassSubtypeAndTenant instead.
 //
-// NOTE on transitional data: documents written before the AH-taxonomy migration
-// landed have a legacy `type` field with values like "FACILITY"/"DEPOSIT"/"AFFECTED_ZONE".
-// Such documents will NOT match this query — migrate-cli (cmd/taxonomy_migrate)
-// rewrites them to the new shape during the transition window. Use
-// ListByLegacyTypeAndTenant for explicit legacy-format reads.
+// NOTE: documents must use the canonical `class` (+ optional `subtype`) fields.
 func (r *HorizonFragmentsRepository) ListByTypeAndTenant(
 	ctx context.Context,
 	tenantID string,
@@ -2627,7 +2623,7 @@ func (r *HorizonFragmentsRepository) ListByTypeAndTenant(
 // ListByClassSubtypeAndTenant lists fragments by class+subtype and tenant ID.
 //
 // Required for callers that previously used legacy fragment-type sentinels
-// (PROGRAM, MEDIA_CHANNEL, DEPOSIT, SUPPLY_LINK, AFFECTED_ZONE) which under
+// (org/program, org/media_channel, site/deposit, site/supply_link, geo/affected_zone) which under
 // the AH taxonomy collapse to (Class, Subtype) tuples. Empty subtype matches
 // only documents with no subtype set; for "any subtype within class" use
 // ListByTypeAndTenant.
@@ -2649,49 +2645,6 @@ func (r *HorizonFragmentsRepository) ListByClassSubtypeAndTenant(
 		Where("tenantId", "==", tenantID).
 		Where("class", "==", string(class)).
 		Where("subtype", "==", subtype).
-		Limit(limit)
-	docs, err := q.Documents(ctx).GetAll()
-	if err != nil {
-		return nil, err
-	}
-
-	fragments := make([]*models.HorizonFragment, 0, len(docs))
-	for _, doc := range docs {
-		var fragment models.HorizonFragment
-		if err := doc.DataTo(&fragment); err != nil {
-			continue
-		}
-		assignLoadedFragmentID(&fragment, doc)
-		fragments = append(fragments, &fragment)
-	}
-
-	return fragments, nil
-}
-
-// ListByLegacyTypeAndTenant lists fragments by the legacy UPPER_SNAKE
-// `type` field for the transition window before migrate-cli has rewritten
-// every document to the AH (`class` + `subtype`) shape. Pass values like
-// "AFFECTED_ZONE", "SUPPLY_LINK", "DEPOSIT" — case is preserved as-is.
-//
-// Once migrate-cli completes a tenant rewrite, callers should switch to
-// ListByClassSubtypeAndTenant; this helper will be removed at the
-// docs-actualize / cleanup-code milestone.
-func (r *HorizonFragmentsRepository) ListByLegacyTypeAndTenant(
-	ctx context.Context,
-	tenantID string,
-	legacyType string,
-	limit int,
-) ([]*models.HorizonFragment, error) {
-	if limit <= 0 {
-		limit = 100
-	}
-	if limit > 1000 {
-		limit = 1000
-	}
-
-	q := r.col.
-		Where("tenantId", "==", tenantID).
-		Where("type", "==", legacyType).
 		Limit(limit)
 	docs, err := q.Documents(ctx).GetAll()
 	if err != nil {
@@ -2902,7 +2855,8 @@ func (r *HorizonFragmentsRepository) FindSupplyLinksByTransportVia(
 	}
 	docs, err := r.col.
 		Where("tenantId", "==", queryTenant).
-		Where("type", "==", "SUPPLY_LINK").
+		Where("class", "==", string(ah.FragmentClassSite)).
+		Where("subtype", "==", "supply_link").
 		Where("transportViaRefs", "array-contains", transportRef).
 		Limit(limit).
 		Documents(ctx).
@@ -2963,7 +2917,7 @@ func (r *HorizonFragmentsRepository) FindSupplyLinksByTransportViaAnyTenant(
 			continue
 		}
 		assignLoadedFragmentID(&fragment, doc)
-		if !fragment.IsLegacySupplyLink() {
+		if !fragment.IsSupplyLinkFragment() {
 			continue
 		}
 		if _, ok := seen[fragment.ID]; ok {
@@ -3012,7 +2966,8 @@ func (r *HorizonFragmentsRepository) findSupplyLinksByRefFields(
 		for _, ref := range refs {
 			docs, err := r.col.
 				Where("tenantId", "==", tenantID).
-				Where("type", "==", "SUPPLY_LINK").
+				Where("class", "==", string(ah.FragmentClassSite)).
+				Where("subtype", "==", "supply_link").
 				Where(field, "==", ref).
 				Limit(limit).
 				Documents(ctx).
@@ -3091,7 +3046,7 @@ func (r *HorizonFragmentsRepository) findSupplyLinksByRefFieldsAnyTenant(
 					continue
 				}
 				assignLoadedFragmentID(&fragment, doc)
-				if !fragment.IsLegacySupplyLink() {
+				if !fragment.IsSupplyLinkFragment() {
 					continue
 				}
 				if _, ok := seen[fragment.ID]; ok {

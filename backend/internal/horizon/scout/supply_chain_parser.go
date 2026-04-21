@@ -627,7 +627,7 @@ func (p *SupplyChainParser) inferFragmentType(nodeType string, canonicalPath str
 		return ah.FragmentClassMarket
 	case "GEO_REGION":
 		return ah.FragmentClassGeo
-	case "DEPOSIT":
+	case strings.ToUpper("deposit"):
 		return ah.FragmentClassSite
 	case "COMMUNITY":
 		return ah.FragmentClassCommunity
@@ -835,7 +835,7 @@ func (p *SupplyChainParser) isOrganizationType(nodeType string, canonicalPath st
 // isActorType checks if the node represents an actor (org, facility, or deposit for extraction).
 func (p *SupplyChainParser) isActorType(nodeType string, canonicalPath string) bool {
 	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
-	if nodeType == "ORGANIZATION" || nodeType == "FACILITY" || nodeType == "DEPOSIT" {
+	if nodeType == "ORGANIZATION" || nodeType == "FACILITY" || nodeType == strings.ToUpper("deposit") {
 		return true
 	}
 	return strings.HasPrefix(canonicalPath, "/org/") || strings.HasPrefix(canonicalPath, "/gov/") || strings.HasPrefix(canonicalPath, "/fac/") || strings.HasPrefix(canonicalPath, "/deposit/")
@@ -851,7 +851,7 @@ func (p *SupplyChainParser) isFacilityType(nodeType string, canonicalPath string
 
 func (p *SupplyChainParser) isDepositType(nodeType string, canonicalPath string) bool {
 	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
-	if nodeType == "DEPOSIT" {
+	if nodeType == strings.ToUpper("deposit") {
 		return true
 	}
 	return strings.HasPrefix(strings.TrimSpace(canonicalPath), "/deposit/")

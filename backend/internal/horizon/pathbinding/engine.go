@@ -503,7 +503,7 @@ func (e *Engine) zoneRefsForPath(ctx context.Context, canonicalPath string) []st
 			if err != nil || sourceFrag == nil {
 				continue
 			}
-			if sourceFrag.IsLegacyAffectedZone() || strings.HasPrefix(strings.TrimSpace(sourceFrag.CanonicalPath), "/zone/") {
+			if sourceFrag.IsAffectedZoneGeo() || strings.HasPrefix(strings.TrimSpace(sourceFrag.CanonicalPath), "/zone/") {
 				refs = append(refs, strings.TrimSpace(sourceFrag.CanonicalPath))
 			}
 		}

@@ -90,7 +90,7 @@ var strategicPromptEdges = map[ah.RelationName]struct{}{
 // AH folded/dropped them per docs/taxonomy/migration_map.yaml) but
 // must remain in the LLM-facing extraction prompt vocabulary during
 // the migration window. The graph_intent decoder
-// (legacyRelationAliases) folds the LLM's answers back to canonical
+// (horizon models relation normalization) folds the LLM's answers back to canonical
 // AH at parse time.
 //
 // This is the prompt-rendering analogue of the scout-level
@@ -149,7 +149,7 @@ var legacyPromptOnlyDirectionPolicies = map[ah.RelationName]edgesemantics.EdgeDi
 // docs/taxonomy/migration_map.yaml dispositions
 // Dropped/fold_to_attributes) but which the intent-decomposer prompt
 // still surfaces during the migration window. The graph_intent
-// decoder (legacyRelationAliases) folds them back to canonical AH at
+// decoder (horizon models relation normalization) folds them back to canonical AH at
 // parse time.
 var supplyChainLegacyDecomposerEdges = []ah.RelationName{
 	ah.RelationName("transforms_into"),
@@ -497,7 +497,7 @@ func renderEdgePromptEntry(dt ah.RelationName, indent string) string {
 		// scout extraction prompt vocabulary; without this fallback the
 		// LLM stops emitting the legacy wire labels mid-migration even
 		// though the graph_intent decoder still folds them through
-		// legacyRelationAliases at parse time.
+		// relation normalization at parse time.
 		legacyRule, legacyOK := legacyPromptOnlyDirectionPolicies[dt]
 		if !legacyOK {
 			return ""
@@ -510,7 +510,7 @@ func renderEdgePromptEntry(dt ah.RelationName, indent string) string {
 	// RENAMED_TO, …). Render via wireLabelForDependencyType so AH
 	// RelationName values like "beneficially_owns" surface as "OWNS"
 	// in the prompt body; the graph_intent decoder folds the LLM's
-	// answers back through legacyRelationAliases at parse time.
+	// answers back through relation normalization at parse time.
 	wireLabel := wireLabelForDependencyType(dt)
 	var b strings.Builder
 	// Emit "WIRE_LABEL (canonical_ah_name)" so prompts pin on the
@@ -673,7 +673,7 @@ func generatedIntentDecomposerRelationRulesBlock(domainModes []string) string {
 	// them in here from a hardcoded table so the decomposer prompt
 	// (and the test pinning the contract) keeps surfacing them; the
 	// graph_intent decoder folds the LLM's answers back to canonical
-	// AH at parse time via legacyRelationAliases.
+	// AH at parse time via relation normalization.
 	if isSupplyChain {
 		for _, legacy := range supplyChainLegacyDecomposerEdges {
 			if _, ok := seenFiltered[legacy]; ok {
