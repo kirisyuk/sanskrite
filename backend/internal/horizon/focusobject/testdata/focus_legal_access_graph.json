@@ -25,7 +25,7 @@
       "id": "frag-european-commission",
       "tenantId": "global",
       "canonicalPath": "/gov/eu/european-commission",
-      "type": "ORGANIZATION",
+      "class": "org",
       "entityPath": "/Government/Commission",
       "status": "active",
       "govType": "commission",
@@ -37,7 +37,7 @@
       "id": "frag-passport-approval",
       "tenantId": "global",
       "canonicalPath": "/mech/eu/battery-passport-export-approval",
-      "type": "MECHANISM",
+      "class": "mechanism",
       "entityPath": "/Mechanism/Control",
       "status": "active",
       "labels": {
@@ -48,7 +48,7 @@
       "id": "frag-sino-cathodes",
       "tenantId": "global",
       "canonicalPath": "/org/cn/sino-cathodes",
-      "type": "ORGANIZATION",
+      "class": "org",
       "entityPath": "/Organization/Corporation",
       "status": "active",
       "labels": {
@@ -59,7 +59,7 @@
       "id": "frag-baltic-cathodes",
       "tenantId": "global",
       "canonicalPath": "/org/pl/baltic-cathodes",
-      "type": "ORGANIZATION",
+      "class": "org",
       "entityPath": "/Organization/Corporation",
       "status": "active",
       "labels": {
@@ -70,7 +70,7 @@
       "id": "frag-euro-mobility",
       "tenantId": "global",
       "canonicalPath": "/org/de/euro-mobility",
-      "type": "ORGANIZATION",
+      "class": "org",
       "entityPath": "/Organization/Corporation",
       "status": "active",
       "labels": {
@@ -81,7 +81,7 @@
       "id": "frag-citybus-fleet",
       "tenantId": "global",
       "canonicalPath": "/org/fr/citybus-fleet",
-      "type": "ORGANIZATION",
+      "class": "org",
       "entityPath": "/Organization/Corporation",
       "status": "active",
       "labels": {

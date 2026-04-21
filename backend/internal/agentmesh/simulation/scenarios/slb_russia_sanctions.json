@@ -35,12 +35,11 @@
       "/product/raw/chemical/distribution/bulk-drilling-chemicals"
     ],
     "requiredEdgeTypes": [
-      "supply_link",
-      "DEPENDS_ON",
-      "SUPPLIES_TO",
-      "PRODUCES",
-      "REGULATES",
-      "INFLUENCES"
+      "supplies",
+      "depends_on",
+      "produces",
+      "regulates",
+      "influences"
     ],
     "requiredBindings": [
       {

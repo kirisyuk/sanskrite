@@ -32,11 +32,11 @@
       "/fac/cn/wenchang-port"
     ],
     "requiredEdgeTypes": [
-      "supply_link",
-      "DEPENDS_ON",
-      "REGULATES",
-      "INFLUENCES",
-      "USED_IN"
+      "supplies",
+      "depends_on",
+      "regulates",
+      "influences",
+      "produces"
     ],
     "requiredBindings": [
       {

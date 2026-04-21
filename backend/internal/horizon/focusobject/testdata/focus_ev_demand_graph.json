@@ -23,7 +23,7 @@
       "id": "frag-andes-lithium",
       "tenantId": "global",
       "canonicalPath": "/org/cl/andes-lithium",
-      "type": "ORGANIZATION",
+      "class": "org",
       "entityPath": "/Organization/Corporation",
       "status": "active",
       "labels": {
@@ -34,7 +34,7 @@
       "id": "frag-baltic-cathodes",
       "tenantId": "global",
       "canonicalPath": "/org/pl/baltic-cathodes",
-      "type": "ORGANIZATION",
+      "class": "org",
       "entityPath": "/Organization/Corporation",
       "status": "active",
       "labels": {
@@ -45,7 +45,8 @@
       "id": "frag-baltic-cell-plant",
       "tenantId": "global",
       "canonicalPath": "/fac/pl/baltic-cell-plant",
-      "type": "FACILITY",
+      "class": "site",
+      "subtype": "factory",
       "entityPath": "/Facility/Industrial",
       "status": "active",
       "labels": {
@@ -56,7 +57,7 @@
       "id": "frag-euro-mobility",
       "tenantId": "global",
       "canonicalPath": "/org/de/euro-mobility",
-      "type": "ORGANIZATION",
+      "class": "org",
       "entityPath": "/Organization/Corporation",
       "status": "active",
       "labels": {
@@ -67,7 +68,7 @@
       "id": "frag-eu-ev-market",
       "tenantId": "global",
       "canonicalPath": "/market/eu/transport/electric-vehicles",
-      "type": "MARKET",
+      "class": "market",
       "entityPath": "/Market/Transport",
       "status": "active",
       "marketDomain": "transport",

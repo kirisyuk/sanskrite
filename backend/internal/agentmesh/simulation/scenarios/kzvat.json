@@ -26,9 +26,9 @@
       "/loc/kz"
     ],
     "requiredEdgeTypes": [
-      "REGULATES",
-      "INFLUENCES",
-      "DEPENDS_ON"
+      "regulates",
+      "influences",
+      "depends_on"
     ],
     "requiredBindings": [
       {"agentClass": "regulator", "requiredOrigins": ["/gov/kz/ministry-of-finance"], "minOriginRefs": 1},

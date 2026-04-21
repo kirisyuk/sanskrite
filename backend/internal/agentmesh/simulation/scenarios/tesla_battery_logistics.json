@@ -37,12 +37,12 @@
       "/market/us/capital/industrial-investor-confidence"
     ],
     "requiredEdgeTypes": [
-      "DEPENDS_ON",
-      "supply_link",
-      "REGULATES",
-      "INFLUENCES",
-      "OPERATES_IN",
-      "USED_IN"
+      "depends_on",
+      "supplies",
+      "regulates",
+      "influences",
+      "operates_in",
+      "produces"
     ],
     "requiredBindings": [
       {"agentClass": "trade_official", "requiredOrigins": ["/gov/us/department-of-commerce"], "minOriginRefs": 1},
