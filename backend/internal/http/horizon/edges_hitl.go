@@ -11,6 +11,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/google/uuid"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // HumanInTheLoopEdge handles admin-only curation actions for a dependency edge.
@@ -81,7 +82,7 @@ func (h *HorizonHandlers) HumanInTheLoopEdge(w http.ResponseWriter, r *http.Requ
 		if rel, ok := models.NormalizeWireRelationStrict(raw); ok {
 			newType = rel
 		} else {
-			newType = DependencyType(strings.ToLower(raw))
+			newType = ah.RelationName(strings.ToLower(raw))
 		}
 	}
 	newSource := strings.TrimSpace(edge.SourceFragmentID)

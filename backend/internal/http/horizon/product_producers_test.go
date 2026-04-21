@@ -11,13 +11,13 @@ func TestMergeProductProducerCandidatePrefersTenantScope(t *testing.T) {
 
 	global := &horizonmodels.HorizonFragment{
 		ID:            "global-fac",
-		Class:         FragmentTypeFacility,
+		Class:         ah.FragmentClassSite,
 		CanonicalPath: "/fac/global/test-plant",
 		Labels:        map[string]string{"en": "Test Plant"},
 	}
 	tenant := &horizonmodels.HorizonFragment{
 		ID:            "tenant-fac",
-		Class:         FragmentTypeFacility,
+		Class:         ah.FragmentClassSite,
 		CanonicalPath: "/fac/global/test-plant",
 		Labels:        map[string]string{"en": "Test Plant"},
 	}
@@ -39,9 +39,9 @@ func TestMergeProductProducerCandidatePrefersTenantScope(t *testing.T) {
 
 func TestSortProductProducersFacilityBeforeOrganization(t *testing.T) {
 	producers := []productProducerResponse{
-		{Label: "Zeta Org", FragmentType: string(FragmentTypeOrganization), EdgeCount: 1},
-		{Label: "Alpha Facility", FragmentType: string(FragmentTypeFacility), EdgeCount: 1},
-		{Label: "Beta Facility", FragmentType: string(FragmentTypeFacility), EdgeCount: 3},
+		{Label: "Zeta Org", FragmentType: string(ah.FragmentClassOrg), EdgeCount: 1},
+		{Label: "Alpha Facility", FragmentType: string(ah.FragmentClassSite), EdgeCount: 1},
+		{Label: "Beta Facility", FragmentType: string(ah.FragmentClassSite), EdgeCount: 3},
 	}
 
 	sortProductProducers(producers)

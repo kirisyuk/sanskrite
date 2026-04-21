@@ -26,6 +26,7 @@ import (
 	horizonagents "github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 const (
@@ -876,7 +877,7 @@ func (h *HorizonHandlers) repairGraphIntentPlanWithResolvers(ctx context.Context
 		if tempID := strings.TrimSpace(spec.TempID); tempID != "" {
 			nodeRefsByID[tempID] = refInfo
 		}
-		if strings.EqualFold(strings.TrimSpace(spec.Type), string(FragmentTypeProduct)) {
+		if strings.EqualFold(strings.TrimSpace(spec.Type), string(ah.FragmentClassProduct)) {
 			ref := strings.TrimSpace(firstNonEmptyGraphIntent(spec.TempID, spec.CanonicalPathHint))
 			if ref != "" && strings.HasPrefix(strings.TrimSpace(spec.CanonicalPathHint), "/product/") {
 				productPathsByRef[ref] = strings.TrimSpace(spec.CanonicalPathHint)
@@ -999,10 +1000,10 @@ func graphIntentNormalizeUnsupportedRelation(relationType string, sourceRef grap
 	targetClass, _, _ := horizonmodels.MapGraphIntentNodeTypeToClass(targetRef.Type, "")
 	switch relationType {
 	case "USED_IN":
-		if sourceClass == FragmentTypeProduct && (targetClass == FragmentTypeOrganization || targetClass == FragmentTypeFacility) {
+		if sourceClass == ah.FragmentClassProduct && (targetClass == ah.FragmentClassOrg || targetClass == ah.FragmentClassSite) {
 			return "SUPPLIES_TO", "mapped USED_IN to SUPPLIES_TO for product -> actor graph-intent edge"
 		}
-		if sourceClass == FragmentTypeProduct && targetClass == FragmentTypeProduct {
+		if sourceClass == ah.FragmentClassProduct && targetClass == ah.FragmentClassProduct {
 			return "ASSEMBLES_INTO", "mapped USED_IN to ASSEMBLES_INTO for product -> product graph-intent edge"
 		}
 	}
@@ -1047,7 +1048,7 @@ func (h *HorizonHandlers) resolveGraphIntentNodeCanonicalPathHint(ctx context.Co
 	hint = strings.TrimSpace(hint)
 	fragmentClass, fragmentSubtype, _ := horizonmodels.MapGraphIntentNodeTypeToClass(nodeType, hint)
 
-	if strings.EqualFold(nodeType, string(FragmentTypeProduct)) || fragmentClass == FragmentTypeProduct {
+	if strings.EqualFold(nodeType, string(ah.FragmentClassProduct)) || fragmentClass == ah.FragmentClassProduct {
 		return h.resolveGraphIntentProductPathHint(ctx, lens, label, hint)
 	}
 	// Legacy DOMAIN class folded onto canonical_path overlay (see migration_map);
@@ -1055,7 +1056,7 @@ func (h *HorizonHandlers) resolveGraphIntentNodeCanonicalPathHint(ctx context.Co
 	// MapGraphIntentNodeTypeToClass (org/<empty> with `/domain/` hint surfaces
 	// here via fragmentSubtype unset; we therefore also fall back to the raw
 	// nodeType keyword check for back-compat with pre-AH wire payloads).
-	if strings.EqualFold(nodeType, "DOMAIN") || (fragmentClass == FragmentTypeOrganization && fragmentSubtype == "domain") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(hint)), "/domain/") {
+	if strings.EqualFold(nodeType, "DOMAIN") || (fragmentClass == ah.FragmentClassOrg && fragmentSubtype == "domain") || strings.HasPrefix(strings.ToLower(strings.TrimSpace(hint)), "/domain/") {
 		return h.resolveGraphIntentDomainPathHint(ctx, lens, rawQuery, label, hint)
 	}
 	if key := graphIntentLookupKey(nodeType, label); key != "" {
@@ -1270,7 +1271,7 @@ func productLeafSlugFromCanonicalPath(path string) string {
 	return strings.TrimSpace(parts[len(parts)-1])
 }
 
-func graphIntentPickMatchingFragmentPath(fragments []*horizonmodels.HorizonFragment, fragmentType FragmentType) string {
+func graphIntentPickMatchingFragmentPath(fragments []*horizonmodels.HorizonFragment, fragmentType ah.FragmentClass) string {
 	for _, frag := range fragments {
 		if frag == nil {
 			continue
@@ -2371,13 +2372,13 @@ func (e *graphIntentApplyExecutor) normalizeCanonicalPathHint(spec horizonmodels
 	switch typ {
 	case "GOVERNMENT_AGENCY":
 		return taxonomy.GovCanonicalPath(firstNonEmptyGraphIntent(geoHint, "na"), label)
-	case string(FragmentTypeOrganization):
+	case string(ah.FragmentClassOrg):
 		return taxonomy.OrgCanonicalPath(firstNonEmptyGraphIntent(geoHint, "na"), label)
-	case string(FragmentTypeFacility):
+	case string(ah.FragmentClassSite):
 		return taxonomy.FacilityCanonicalPath(firstNonEmptyGraphIntent(geoHint, "na"), label)
-	case string(FragmentTypeGeoRegion):
+	case string(ah.FragmentClassGeo):
 		return taxonomy.GeoCanonicalPath("global", slug, "")
-	case string(FragmentTypeProduct):
+	case string(ah.FragmentClassProduct):
 		return taxonomy.ProductCanonicalPath("", label)
 	// Legacy UPPER_SNAKE wire tokens with no first-class AH FragmentClass
 	// equivalent (their AH home is a (Class, Subtype) tuple). Match the raw
@@ -2385,9 +2386,9 @@ func (e *graphIntentApplyExecutor) normalizeCanonicalPathHint(spec horizonmodels
 	// during the migration window.
 	case "PROGRAM":
 		return taxonomy.ProgramCanonicalPath("", label)
-	case string(FragmentTypeMarket):
+	case string(ah.FragmentClassMarket):
 		return taxonomy.MarketCanonicalPath("global", label)
-	case string(FragmentTypePerson):
+	case string(ah.FragmentClassPerson):
 		return taxonomy.PersonCanonicalPath(label)
 	case "MEDIA_CHANNEL":
 		return taxonomy.JoinPath("media", "channel", slug)
@@ -2395,19 +2396,19 @@ func (e *graphIntentApplyExecutor) normalizeCanonicalPathHint(spec horizonmodels
 		return taxonomy.JoinPath("domain", "v1", "other", slug)
 	case "SPHERE":
 		return taxonomy.JoinPath("sphere", slug)
-	case string(FragmentTypeEvent):
+	case string(ah.FragmentClassEvidence):
 		return taxonomy.JoinPath("event", slug)
-	case string(FragmentTypeDecisionPoint):
+	case string(ah.FragmentClassDecision):
 		return taxonomy.JoinPath("decision", "general", slug)
-	case string(FragmentTypeMechanism):
+	case string(ah.FragmentClassMechanism):
 		return taxonomy.JoinPath("mechanism", "general", slug)
 	case "DEPOSIT":
 		return taxonomy.JoinPath("deposit", "resource", slug)
-	case string(FragmentTypeTrack):
+	case string(ah.FragmentClassMobileAsset):
 		return taxonomy.JoinPath("track", "ground", "global", slug)
 	case "SUPPLY_LINK":
 		return taxonomy.JoinPath("supply-link", "global", "na", slug)
-	case string(FragmentTypeCommunity), "COMMUNITY_DYNASTY", "COMMUNITY_TRIBE":
+	case string(ah.FragmentClassCommunity), "COMMUNITY_DYNASTY", "COMMUNITY_TRIBE":
 		communityType := "interest"
 		if typ == "COMMUNITY_DYNASTY" {
 			communityType = "dynasty"

@@ -10,6 +10,7 @@ import (
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	horizonproductdict "github.com/igorkirisyuk/sanskrite/internal/horizon/productdict"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type productStreamRequest struct {
@@ -176,12 +177,12 @@ func (h *HorizonHandlers) resolveProductStreamSeed(r *http.Request, tenantID str
 			return nil, err
 		}
 		frag, err := h.service.Fragments().GetByCanonicalPathForTenant(ctx, tenantID, canonicalPath)
-		if err == nil && frag != nil && frag.Class == FragmentTypeProduct {
+		if err == nil && frag != nil && frag.Class == ah.FragmentClassProduct {
 			return frag, nil
 		}
 	}
 
-	exact, _ := h.service.Fragments().FindByLabelForTenant(ctx, tenantID, "en", query, FragmentTypeProduct)
+	exact, _ := h.service.Fragments().FindByLabelForTenant(ctx, tenantID, "en", query, ah.FragmentClassProduct)
 	if seed := bestProductSeedCandidate(ctx, tenantID, query, exact, h.productDictionary); seed != nil {
 		return seed, nil
 	}
@@ -203,7 +204,7 @@ func bestProductSeedCandidate(ctx context.Context, tenantID string, query string
 	var best *horizonmodels.HorizonFragment
 	bestScore := -1
 	for _, frag := range fragments {
-		if frag == nil || frag.Class != FragmentTypeProduct {
+		if frag == nil || frag.Class != ah.FragmentClassProduct {
 			continue
 		}
 		score := 0
@@ -241,7 +242,7 @@ func filterProductFragments(in []*horizonmodels.HorizonFragment) []*horizonmodel
 	out := make([]*horizonmodels.HorizonFragment, 0, len(in))
 	seen := map[string]struct{}{}
 	for _, frag := range in {
-		if frag == nil || frag.Class != FragmentTypeProduct {
+		if frag == nil || frag.Class != ah.FragmentClassProduct {
 			continue
 		}
 		key := strings.TrimSpace(frag.CanonicalPath)

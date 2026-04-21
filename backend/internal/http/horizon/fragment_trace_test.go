@@ -92,12 +92,12 @@ func TestHydrateSupplyChainTraceEndpoints_ResolvesCounterpartNames(t *testing.T)
 	hydrateSupplyChainTraceEndpoints(artifact, "/fac/de/ludwigshafen-pharma-ingredients", map[string]*horizonmodels.HorizonFragment{
 		"/fac/de/ludwigshafen-pharma-ingredients": {
 			CanonicalPath: "/fac/de/ludwigshafen-pharma-ingredients",
-			Class:         FragmentTypeFacility,
+			Class:         ah.FragmentClassSite,
 			Labels:        map[string]string{"en": "Ludwigshafen Pharma Ingredients"},
 		},
 		"/org/de/basf-pharma-distribution": {
 			CanonicalPath: "/org/de/basf-pharma-distribution",
-			Class:         FragmentTypeOrganization,
+			Class:         ah.FragmentClassOrg,
 			Labels:        map[string]string{"en": "BASF Pharma Distribution"},
 		},
 	})

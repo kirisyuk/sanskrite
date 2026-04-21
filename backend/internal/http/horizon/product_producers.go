@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type productProducersRequest struct {
@@ -106,7 +107,7 @@ func (h *HorizonHandlers) GetProductProducers(w http.ResponseWriter, r *http.Req
 func (h *HorizonHandlers) lookupProductProducers(r *http.Request, tenantID string, canonicalPath string, limit int) ([]productProducerResponse, error) {
 	ctx := r.Context()
 	targets := h.collectProducerTargets(ctx, tenantID, canonicalPath)
-	edgeType := DependencyTypeProduces
+	edgeType := ah.RelationNameProduces
 	candidates := map[string]*productProducerCandidate{}
 
 	for _, target := range targets {
@@ -187,13 +188,13 @@ func (h *HorizonHandlers) collectProducerTargets(ctx context.Context, tenantID s
 	return targets
 }
 
-func isProducerFragmentType(fragmentType FragmentType) bool {
+func isProducerFragmentType(fragmentType ah.FragmentClass) bool {
 	// Org covers legacy ORGANIZATION and PROGRAM (which folds to org/program);
 	// Site covers legacy FACILITY and DEPOSIT (which folds to site/deposit).
 	// Subtype-level filtering is intentionally not applied here — historical
 	// callers accept any org/site as a candidate producer.
 	switch fragmentType {
-	case FragmentTypeOrganization, FragmentTypeFacility:
+	case ah.FragmentClassOrg, ah.FragmentClassSite:
 		return true
 	default:
 		return false
@@ -243,13 +244,13 @@ func producerTypeRank(fragmentType string) int {
 	// org/program subtypes ahead of their bare-class peers.
 	trim := strings.TrimSpace(fragmentType)
 	switch trim {
-	case string(FragmentTypeFacility):
+	case string(ah.FragmentClassSite):
 		return 0
-	case string(FragmentTypeOrganization):
+	case string(ah.FragmentClassOrg):
 		return 1
-	case string(FragmentTypeFacility) + "/deposit":
+	case string(ah.FragmentClassSite) + "/deposit":
 		return 2
-	case string(FragmentTypeOrganization) + "/program":
+	case string(ah.FragmentClassOrg) + "/program":
 		return 3
 	default:
 		return 4

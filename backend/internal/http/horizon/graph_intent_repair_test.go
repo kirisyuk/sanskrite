@@ -20,7 +20,7 @@ func TestRepairGraphIntentPlanWithResolvers_RewritesProductPathFromLabel(t *test
 				{
 					TempID:            "n1",
 					Label:             "Battery Cell",
-					Type:              string(FragmentTypeProduct),
+					Type:              string(ah.FragmentClassProduct),
 					CanonicalPathHint: "/product/component/energy/storage/battery-cell",
 				},
 			},
@@ -45,7 +45,7 @@ func TestRepairGraphIntentPlanWithResolvers_ReusesSnapshotObjectPath(t *testing.
 				NodeID:        "cp_mercedes",
 				CanonicalPath: "/org/de/mercedes-benz-group",
 				Label:         "Mercedes Benz Group",
-				Type:          string(FragmentTypeOrganization),
+				Type:          string(ah.FragmentClassOrg),
 			},
 		},
 	}
@@ -59,7 +59,7 @@ func TestRepairGraphIntentPlanWithResolvers_ReusesSnapshotObjectPath(t *testing.
 				{
 					TempID:            "n1",
 					Label:             "Mercedes Benz Group",
-					Type:              string(FragmentTypeOrganization),
+					Type:              string(ah.FragmentClassOrg),
 					CanonicalPathHint: "/org/de/mercedes-benz",
 				},
 			},

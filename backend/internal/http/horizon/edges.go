@@ -19,6 +19,7 @@ import (
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func getLensIDFromRequest(r *http.Request) string {
@@ -134,7 +135,7 @@ func (h *HorizonHandlers) normalizeEdgeForCreate(ctx context.Context, edge *mode
 	if rel, ok := models.NormalizeWireRelationStrict(normType); ok {
 		edge.Relation = rel
 	} else {
-		edge.Relation = DependencyType(normType)
+		edge.Relation = ah.RelationName(normType)
 	}
 
 	if edge.Qualifiers == nil {
@@ -146,8 +147,8 @@ func (h *HorizonHandlers) normalizeEdgeForCreate(ctx context.Context, edge *mode
 	}
 
 	// Canonical representation: SUBSIDIARY_OF is normalized into OWNS (parent -> subsidiary).
-	if edge.Relation == DependencyTypeSubsidiaryOf {
-		edge.Relation = DependencyTypeOwns
+	if edge.Relation == ah.RelationNameSubsidiaryOf {
+		edge.Relation = ah.RelationNameBeneficiallyOwns
 		edge.SourceFragmentID, edge.TargetFragmentID = edge.TargetFragmentID, edge.SourceFragmentID
 		edge.Qualifiers["normalizedDirection"] = true
 		edge.Qualifiers["normalizedEdgeType"] = string(edge.Relation)
@@ -542,9 +543,9 @@ func (h *HorizonHandlers) GetFragmentDependencies(w http.ResponseWriter, r *http
 	includeUnindexed := includeUnindexedStr == "1" || strings.EqualFold(includeUnindexedStr, "true")
 	edgeTypeStr := r.URL.Query().Get("type")
 
-	var edgeType *DependencyType
+	var edgeType *ah.RelationName
 	if edgeTypeStr != "" {
-		dt := DependencyType(edgeTypeStr)
+		dt := ah.RelationName(edgeTypeStr)
 		edgeType = &dt
 	}
 

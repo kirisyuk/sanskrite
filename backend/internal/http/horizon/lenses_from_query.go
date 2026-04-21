@@ -20,6 +20,7 @@ import (
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 func sanitizeIntentForLensCreation(in *agents.IntentResolution) *agents.IntentResolution {
@@ -178,30 +179,30 @@ func dedupStrings(in []string) []string {
 	return out
 }
 
-func inferFragmentTypeFromPath(cp string) FragmentType {
+func inferFragmentTypeFromPath(cp string) ah.FragmentClass {
 	switch {
 	case strings.HasPrefix(cp, "/product/"):
-		return FragmentTypeProduct
+		return ah.FragmentClassProduct
 	case strings.HasPrefix(cp, "/program/"):
-		return FragmentTypeProgram
+		return ah.FragmentClassOrg
 	case strings.HasPrefix(cp, "/market/"):
-		return FragmentTypeMarket
+		return ah.FragmentClassMarket
 	case strings.HasPrefix(cp, "/fac/"):
-		return FragmentTypeFacility
+		return ah.FragmentClassSite
 	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/region/"):
-		return FragmentTypeGeoRegion
+		return ah.FragmentClassGeo
 	case strings.HasPrefix(cp, "/event/"):
-		return FragmentTypeEvent
+		return ah.FragmentClassEvidence
 	case strings.HasPrefix(cp, "/person/"):
-		return FragmentTypePerson
+		return ah.FragmentClassPerson
 	case strings.HasPrefix(cp, "/media/"):
-		return FragmentTypeMediaChannel
+		return ah.FragmentClassOrg
 	case strings.HasPrefix(cp, "/org/"), strings.HasPrefix(cp, "/gov/"):
-		return FragmentTypeOrganization
+		return ah.FragmentClassOrg
 	case strings.HasPrefix(cp, "/domain/"):
-		return FragmentTypeDomain
+		return ah.FragmentClassGeo
 	default:
-		return FragmentTypeOrganization
+		return ah.FragmentClassOrg
 	}
 }
 
@@ -215,7 +216,7 @@ func canonicalizeScopeWithFirestore(
 	}
 
 	var resolver interface {
-		Resolve(ctx context.Context, canonicalPath string, fragmentType FragmentType) (*scout.ResolveResult, error)
+		Resolve(ctx context.Context, canonicalPath string, fragmentType scout.FragmentType) (*scout.ResolveResult, error)
 	}
 	if eng := h.service.Scout(); eng != nil && eng.CanonicalPathResolver() != nil {
 		resolver = eng.CanonicalPathResolver()

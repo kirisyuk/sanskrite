@@ -39,8 +39,8 @@ func TestBuildGraphIntentSharedPromptBlocks_UsesSharedPipelineContracts(t *testi
 func TestGraphIntentNormalizeUnsupportedRelation_MapsUsedInToSuppliesToForActorTarget(t *testing.T) {
 	got, _ := graphIntentNormalizeUnsupportedRelation(
 		"USED_IN",
-		graphIntentNodeRef{Type: string(FragmentTypeProduct)},
-		graphIntentNodeRef{Type: string(FragmentTypeOrganization)},
+		graphIntentNodeRef{Type: string(ah.FragmentClassProduct)},
+		graphIntentNodeRef{Type: string(ah.FragmentClassOrg)},
 	)
 	if got != "SUPPLIES_TO" {
 		t.Fatalf("expected SUPPLIES_TO, got %q", got)

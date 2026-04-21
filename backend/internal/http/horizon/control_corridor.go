@@ -288,64 +288,48 @@ func (h *HorizonHandlers) buildControlCorridor(
 	}
 
 	authorityEdgeSet := map[string]struct{}{
-		string(DependencyTypeOwns):         {},
-		string(DependencyTypeSubsidiaryOf): {},
-		"PARENT_OF": {},
-		string(DependencyTypeControls):      {},
-		string(DependencyTypeManages):       {},
-		string(DependencyTypeInvestsIn):     {},
-		string(DependencyTypeBoardMemberOf): {},
-		"EXECUTIVE_OF": {},
-		string(DependencyTypeEmployedBy):  {},
-		string(DependencyTypeFounded):     {},
-		string(DependencyTypeAdministers): {},
-		string(DependencyTypeAssures):     {},
-		string(DependencyTypeAuditedBy):   {},
+		string(ah.RelationNameBeneficiallyOwns): {},
+		string(ah.RelationNameSubsidiaryOf):     {},
+		"PARENT_OF":                             {},
+		string(ah.RelationNameControlsVia):      {},
+		string(ah.RelationNameManagedBy):        {},
+		string(ah.RelationNameInvestedIn):       {},
+		string(ah.RelationNameHoldsBoardSeat):   {},
+		"EXECUTIVE_OF":                          {},
+		string(ah.RelationNameMemberOf):         {},
+		string(ah.RelationNameInfluences):       {},
+		string(ah.RelationNameOperates):         {},
+		string(ah.RelationNameAssures):          {},
 	}
 	executionEdgeSet := map[string]struct{}{
-		string(DependencyTypeGatekeepsDecision): {},
-		string(DependencyTypeUsesMechanism):     {},
-		string(DependencyTypeAppliesTo):         {},
-		string(DependencyTypeControlsAccess):    {},
-		string(DependencyTypeImposesCondition):  {},
+		string(ah.RelationNameGatekeeps): {},
+		string(ah.RelationNameWields):    {},
+		string(ah.RelationNameImposes):   {},
 	}
 	propagationEdgeSet := map[string]struct{}{
-		string(DependencyTypeInfluences): {},
-		string(DependencyTypeAffects):    {},
-		"IMPACTS": {},
-		string(DependencyTypeRegulates): {},
-		string(DependencyTypeDependsOn): {},
-		"REQUIRES": {},
-		"NEEDS":    {},
-		"USES":     {},
-		string(DependencyTypeSuppliesTo):       {},
-		string(DependencyTypeProduces):         {},
-		string(DependencyTypeTransformsInto):   {},
-		string(DependencyTypeAssemblesInto):    {},
-		string(DependencyTypeUsedIn):           {},
-		string(DependencyTypeExtractsFrom):     {},
-		string(DependencyTypeParticipatesIn):   {},
-		string(DependencyTypeDominates):        {},
-		string(DependencyTypeHasMarketSegment): {},
-		string(DependencyTypeHasSubgroup):      {},
-		string(DependencyTypeOperatesVia):      {},
-		string(DependencyTypeAffiliatedWith):   {},
-		string(DependencyTypeMemberOf):         {},
-		string(DependencyTypePartnersWith):     {},
-		"COOPERATES_WITH": {},
-		string(DependencyTypeRelatedTo):  {},
-		string(DependencyTypeRelativeOf): {},
+		string(ah.RelationNameInfluences):       {},
+		string(ah.RelationNameDisrupts):         {},
+		"IMPACTS":                               {},
+		string(ah.RelationNameRegulates):        {},
+		string(ah.RelationNameSupplies):         {},
+		"REQUIRES":                              {},
+		"NEEDS":                                 {},
+		"USES":                                  {},
+		string(ah.RelationNameProduces):         {},
+		string(ah.RelationNameMemberOf):         {},
+		string(ah.RelationNameWields):           {},
+		string(ah.RelationNameJointVentureWith): {},
+		"COOPERATES_WITH":                       {},
 	}
 	programGovBridgeEdgeSet := map[string]struct{}{
-		string(DependencyTypeAdministers): {},
-		string(DependencyTypeRegulates):   {},
-		string(DependencyTypeInfluences):  {},
-		string(DependencyTypeAffects):     {},
-		"IMPACTS": {},
-		string(DependencyTypeControls):         {},
-		string(DependencyTypeManages):          {},
-		string(DependencyTypeControlsAccess):   {},
-		string(DependencyTypeImposesCondition): {},
+		string(ah.RelationNameOperates):    {},
+		string(ah.RelationNameRegulates):   {},
+		string(ah.RelationNameInfluences):  {},
+		string(ah.RelationNameDisrupts):    {},
+		"IMPACTS":                          {},
+		string(ah.RelationNameControlsVia): {},
+		string(ah.RelationNameManagedBy):   {},
+		string(ah.RelationNameImposes):     {},
 	}
 
 	// AH relation names are canonical lowercase snake_case; preserve case
@@ -379,7 +363,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		case roleAuthority:
 			return "authority"
 		case roleExecution:
-			if et == string(DependencyTypeGatekeepsDecision) || et == string(DependencyTypeUsesMechanism) {
+			if et == string(ah.RelationNameGatekeeps) || et == string(ah.RelationNameWields) {
 				return "decision"
 			}
 			return "mechanism"
@@ -451,7 +435,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		if f == nil {
 			return false
 		}
-		if f.Class != FragmentTypeOrganization {
+		if f.Class != ah.FragmentClassOrg {
 			return false
 		}
 		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
@@ -697,8 +681,8 @@ func (h *HorizonHandlers) buildControlCorridor(
 			return false
 		}
 		switch f.Class {
-		case FragmentTypeOrganization, FragmentTypePerson,
-			FragmentTypeDecisionPoint, FragmentTypeMechanism:
+		case ah.FragmentClassOrg, ah.FragmentClassPerson,
+			ah.FragmentClassDecision, ah.FragmentClassMechanism:
 			return true
 		}
 		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
@@ -746,9 +730,9 @@ func (h *HorizonHandlers) buildControlCorridor(
 		for _, role := range []string{roleAuthority, roleExecution} {
 			for _, e := range outByRole[role][cur.id] {
 				enqueueForward(e.To, cur.hop+1)
-				if e.Type == string(DependencyTypeAppliesTo) ||
-					e.Type == string(DependencyTypeControlsAccess) ||
-					e.Type == string(DependencyTypeImposesCondition) {
+				if e.Type == string(ah.RelationNameImposes) ||
+					e.Type == string(ah.RelationNameImposes) ||
+					e.Type == string(ah.RelationNameImposes) {
 					impactRoots[e.To] = struct{}{}
 				}
 			}
@@ -765,7 +749,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		if f != nil {
 			fc = f.Class
 		}
-		if fc == FragmentTypeDecisionPoint || fc == FragmentTypeMechanism || len(outByRole[roleExecution][id]) > 0 {
+		if fc == ah.FragmentClassDecision || fc == ah.FragmentClassMechanism || len(outByRole[roleExecution][id]) > 0 {
 			propStart[id] = struct{}{}
 		}
 	}
@@ -803,13 +787,13 @@ func (h *HorizonHandlers) buildControlCorridor(
 			return false
 		}
 		switch f.Class {
-		case FragmentTypeMarket, FragmentTypeOrganization,
-			FragmentTypeProduct, FragmentTypeFacility,
-			FragmentTypeCommunity:
+		case ah.FragmentClassMarket, ah.FragmentClassOrg,
+			ah.FragmentClassProduct, ah.FragmentClassSite,
+			ah.FragmentClassCommunity:
 			return true
 		}
 		// Legacy DOMAIN folded to canonical-path /domain/* (no FragmentClass);
-		// Legacy PROGRAM folded into FragmentTypeOrganization above (subtype=program).
+		// Legacy PROGRAM folded into ah.FragmentClassOrg above (subtype=program).
 		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
 		return strings.HasPrefix(cp, "/market/") || strings.HasPrefix(cp, "/domain/") || strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/program/")
 	}
@@ -897,9 +881,9 @@ func (h *HorizonHandlers) buildControlCorridor(
 			continue
 		}
 		switch f.Class {
-		case FragmentTypeDecisionPoint:
+		case ah.FragmentClassDecision:
 			decisions[id] = struct{}{}
-		case FragmentTypeMechanism:
+		case ah.FragmentClassMechanism:
 			mechanisms[id] = struct{}{}
 		}
 	}
@@ -909,9 +893,9 @@ func (h *HorizonHandlers) buildControlCorridor(
 			continue
 		}
 		switch f.Class {
-		case FragmentTypeDecisionPoint:
+		case ah.FragmentClassDecision:
 			decisions[id] = struct{}{}
-		case FragmentTypeMechanism:
+		case ah.FragmentClassMechanism:
 			mechanisms[id] = struct{}{}
 		}
 	}

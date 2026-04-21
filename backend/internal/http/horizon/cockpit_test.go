@@ -7,7 +7,7 @@ import (
 )
 
 func TestShouldSkipDomainIncomingEdgeForCockpit(t *testing.T) {
-	org := &models.HorizonFragment{Class: FragmentTypeOrganization, CanonicalPath: "/org/kz/ministry-of-agriculture"}
+	org := &models.HorizonFragment{Class: ah.FragmentClassOrg, CanonicalPath: "/org/kz/ministry-of-agriculture"}
 	// Legacy DOMAIN class was removed post-AH; the fragment is recognised by
 	// canonical-path prefix only (see isDomainFragment).
 	domain := &models.HorizonFragment{CanonicalPath: "/domain/v1/market-opportunity/geo/kz/industry/agro-food"}

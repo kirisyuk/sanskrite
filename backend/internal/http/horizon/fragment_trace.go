@@ -14,6 +14,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathquery"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	httputil "github.com/igorkirisyuk/sanskrite/internal/http"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 type fragmentTraceGraphEdge struct {
@@ -531,7 +532,7 @@ func fragmentTraceDisplayName(fragment *horizonmodels.HorizonFragment) string {
 	return strings.TrimSpace(parts[len(parts)-1])
 }
 
-func relatedFragmentType(fragment *horizonmodels.HorizonFragment) FragmentType {
+func relatedFragmentType(fragment *horizonmodels.HorizonFragment) ah.FragmentClass {
 	if fragment == nil {
 		return ""
 	}
