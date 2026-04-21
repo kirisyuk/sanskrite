@@ -9,7 +9,7 @@ import (
 // applyBestEffortEdgeEnrichment centralizes deterministic edge enrichment in graphenrich.
 // Optional endpointPaths can provide sourcePath,targetPath for better transport/facet inference.
 //
-// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 // scout still emits a handful of legacy snake_case relation literals
 // during the AH migration window (e.g. depends_on, employed_by) that
 // have no AH RelationName equivalent and therefore are invisible to the
@@ -19,7 +19,7 @@ import (
 // so downstream consumers (Firestore writers, scaffold preservers)
 // keep seeing the legacy token they expect.
 //
-// Mappings honour migration_map.yaml:
+// Mappings honour docs/archive/taxonomy-migration-2026/migration_map.yaml:
 //   - depends_on  -> supplies   (site->site rewrite branch is the
 //     dominant transmission case; AH supplies is what triggers the
 //     transmission contract metadata heuristics).

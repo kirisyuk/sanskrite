@@ -378,7 +378,7 @@ func AllObjectQualifierStrings() []string {
 // "OWNS" / "PARTNERS_WITH" / "ADMINISTERS", breaking back-compat with
 // historical agent prompts and downstream scout tests.
 //
-// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml +
+// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml +
 // AGENTS.md): the prompt is an LLM contract; per the AGENTS.md
 // "agent emits human-readable names" rule we keep the legacy
 // UPPER_SNAKE wire labels in the relation enumeration and rely on the

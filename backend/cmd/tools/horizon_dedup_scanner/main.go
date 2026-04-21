@@ -22,7 +22,7 @@ import (
 )
 
 // Category C — operational dedup scanner (exempt from the P13 legacy-token grep
-// oracle in docs/taxonomy/REMAINING_WORK_SPEC.md §9.4): this tool mutates live
+// oracle in docs/archive/taxonomy-migration-2026/MIGRATION_SPEC_P0_P14.md §9.4): this tool mutates live
 // Firestore fragments; keep relation/class handling aligned with ah.FragmentClass
 // and ah.RelationName, not ad hoc string literals outside this package.
 //

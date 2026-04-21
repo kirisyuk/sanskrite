@@ -122,7 +122,7 @@ func sanitizeDomainResearchRelations(domainCanonicalPath, contractType string, r
 		if targetPath == "" {
 			continue
 		}
-		// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+		// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 		// taxonomy.NormalizeRelationType returns the legacy UPPER_SNAKE
 		// wire form (e.g. legacy supplies edge token). For non-domain-anchored
 		// edges the allowlist + downstream materializers expect the

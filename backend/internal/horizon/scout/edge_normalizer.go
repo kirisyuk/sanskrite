@@ -75,7 +75,7 @@ func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType F
 // overlaid with legacy entries that scout still surfaces during the
 // AH "Big Bang" migration window.
 //
-// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 // The AH SoT (edgesemantics.EdgeDirectionPolicies) is keyed by canonical
 // AH RelationName and intentionally has NO entry for the read-side
 // legacy literals scout still emits during the migration window
@@ -283,7 +283,7 @@ func buildScoutEdgeDirectionPolicies() map[ah.RelationName]edgesemantics.EdgeDir
 // - shouldReverse: true if reversing would make it valid
 // - rule: the applicable rule (nil if no rule defined)
 //
-// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 // scout maintains its own EdgeDirectionPolicies overlay (see
 // buildScoutEdgeDirectionPolicies above) that augments the AH SoT with
 // legacy back-compat rows (org->site for OWNS, site->product for

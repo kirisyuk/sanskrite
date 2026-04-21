@@ -63,7 +63,7 @@ func FilterDomainRelations(ctx context.Context, mode string, rels []DiscoveredRe
 	}
 
 	profile := contractsemantics.ProfileForDomainMode(mode)
-	// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+	// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 	// profile.AllowedEdges is the AH-canonical (snake_case) projection;
 	// taxonomy.AllowedEdgeTypesForDomainMode is the SoT wire-form
 	// allowlist and contains tokens that are folded/dropped at the AH
@@ -90,7 +90,7 @@ func FilterDomainRelations(ctx context.Context, mode string, rels []DiscoveredRe
 	for _, rel := range rels {
 		// 1. Check Edge Type
 		if len(allowedEdges) > 0 {
-			// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+			// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 			// `allowedEdges` is sourced from contractsemantics.ProfileForDomainMode,
 			// which returns canonical lowercase ah.RelationName entries (the
 			// AH taxonomy's snake_case form). Legacy callers still pass
@@ -99,7 +99,7 @@ func FilterDomainRelations(ctx context.Context, mode string, rels []DiscoveredRe
 			// models.NormalizeRelationName before comparing.
 			// Falls back to the upper-case wire form for the strict equality
 			// path so legacy tokens that have NO AH home (relations dropped
-			// in migration_map.yaml) still get a single equality check.
+			// in docs/archive/taxonomy-migration-2026/migration_map.yaml) still get a single equality check.
 			normalizedWire := taxonomy.NormalizeRelationType(rel.RelationType)
 			matched := false
 			if normalizedWire != "" && filterContains(allowedEdges, normalizedWire) {

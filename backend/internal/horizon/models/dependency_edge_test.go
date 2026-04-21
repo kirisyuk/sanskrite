@@ -196,7 +196,7 @@ func TestDependencyEdge_GetEdgeModality(t *testing.T) {
 }
 
 // TestDependencyEdge_Validate_Produces_Extraction is the AH replacement
-// for the legacy EXTRACTS_FROM test: per migration_map.yaml, EXTRACTS_FROM
+// for the legacy EXTRACTS_FROM test: per docs/archive/taxonomy-migration-2026/migration_map.yaml, EXTRACTS_FROM
 // now lands as `produces` with attributes.production_kind="extraction".
 func TestDependencyEdge_Validate_Produces_Extraction(t *testing.T) {
 	edge := &DependencyEdge{
@@ -219,7 +219,7 @@ func TestDependencyEdge_Validate_Produces_Extraction(t *testing.T) {
 }
 
 // TestDependencyEdge_Validate_BeneficiallyOwns_WithMetrics is the AH
-// replacement for OWNS+ownership_percent: per migration_map.yaml, OWNS
+// replacement for OWNS+ownership_percent: per docs/archive/taxonomy-migration-2026/migration_map.yaml, OWNS
 // folds into beneficially_owns; the share moves to attributes.beneficial_share_pct
 // (modelled here on Metrics for back-compat coverage).
 func TestDependencyEdge_Validate_BeneficiallyOwns_WithMetrics(t *testing.T) {

@@ -61,7 +61,7 @@ func deriveSupplyLinkSegmentsFromEdges(edges []*ChainEdge) []*SupplyLinkSegment 
 		}
 		src := strings.TrimSpace(norm.SourceCanonicalPath)
 		dst := strings.TrimSpace(norm.TargetCanonicalPath)
-		// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+		// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 		// ChainEdge.RelationType is a stringly-typed wire field that
 		// can carry either an AH RelationName (e.g. produces) or a
 		// pre-migration legacy wire token (uppercase PRODUCES / supplies family).

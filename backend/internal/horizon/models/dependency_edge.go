@@ -19,7 +19,7 @@ import (
 //     attribute spec yet, plus runtime stamps such as policyStatus).
 //
 // Anything previously expressed as a dedicated DependencyType / DependencyFacet
-// has been removed from this file. See migration_map.yaml + field_inventory.yaml.
+// has been removed from this file. See docs/archive/taxonomy-migration-2026/migration_map.yaml + docs/archive/taxonomy-migration-2026/field_inventory.yaml.
 type DependencyEdge struct {
 	ID               string                 `json:"id" firestore:"id"`
 	TenantID         string                 `json:"tenantId" firestore:"tenantId"`

@@ -21,7 +21,7 @@ func TestScoreSnapshot_PrefersStrongBusinessEdgesOverWeakContextDegree(t *testin
 	fac := &horizonmodels.HorizonFragment{ID: "fac", Class: FragmentTypeFacility, CanonicalPath: "/fac/us/export-terminal"}
 	product := &horizonmodels.HorizonFragment{ID: "prod", Class: FragmentTypeProduct, CanonicalPath: "/product/raw/hydrocarbon/extraction/crude-oil"}
 	market := &horizonmodels.HorizonFragment{ID: "mkt", Class: FragmentTypeMarket, CanonicalPath: "/market/us/energy"}
-	// Sphere/Domain folds (per migration_map.yaml) are detected by canonical
+	// Sphere/Domain folds (per docs/archive/taxonomy-migration-2026/migration_map.yaml) are detected by canonical
 	// path prefix /sph/ and /dom/; Class falls back to ah.FragmentClassGeo
 	// for compile-time class typing.
 	sphereA := &horizonmodels.HorizonFragment{ID: "s1", Class: ah.FragmentClassGeo, CanonicalPath: "/sph/energy"}

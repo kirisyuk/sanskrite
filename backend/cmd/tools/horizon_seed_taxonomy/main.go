@@ -17,7 +17,7 @@ import (
 // Seeds Horizon taxonomy into Firestore as a single source of truth.
 //
 // Category C — taxonomy seed tooling (exempt from the P13 legacy-token grep
-// oracle in docs/taxonomy/REMAINING_WORK_SPEC.md §9.4): this binary writes
+// oracle in docs/archive/taxonomy-migration-2026/MIGRATION_SPEC_P0_P14.md §9.4): this binary writes
 // Firestore dictionaries that may still list historical relation spellings
 // alongside AH snake_case keys; runtime enforcement lives in
 // internal/taxonomy/runtime.go and internal/taxonomy/ah.

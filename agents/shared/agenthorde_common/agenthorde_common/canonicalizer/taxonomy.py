@@ -290,7 +290,7 @@ DECISION_LAYER_FRAGMENT_CLASSES: FrozenSet[str] = frozenset(("decision", "mechan
 # specific vessel, aircraft, locomotive, drilling rig) — distinct from
 # /vessel_class which is a *class* (LR2, VLCC, etc.). The split avoids
 # collapsing fleet-wide capability statements with per-asset positions and
-# ownership. See docs/taxonomy/migration_map.yaml (TRACK -> mobile_asset).
+# ownership. See docs/archive/taxonomy-migration-2026/migration_map.yaml (TRACK -> mobile_asset).
 MOBILE_ASSET_KINDS: FrozenSet[str] = frozenset(
     (
         "vessel",        # individual ship (IMO-identified)

@@ -33,7 +33,7 @@ var canonicalPrefixToClass = []struct {
 	{"/vessel_class/", ah.FragmentClassVesselClass, ""},
 	{"/project/", ah.FragmentClassProject, ""},
 
-	// Legacy prefixes — collapsed via migration_map.yaml.
+	// Legacy prefixes — collapsed via docs/archive/taxonomy-migration-2026/migration_map.yaml.
 	{"/gov/", ah.FragmentClassOrg, "gov"},
 	{"/program/", ah.FragmentClassOrg, "program"},
 	{"/media/", ah.FragmentClassOrg, "media_channel"},

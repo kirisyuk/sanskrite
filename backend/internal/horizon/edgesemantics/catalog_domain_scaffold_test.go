@@ -10,7 +10,7 @@ import (
 // TestDomainScaffoldRelations_AreBackedByDirectionPolicy ensures every
 // declared domain-scaffold relation has a direction-policy entry. Under
 // the AH taxonomy /domain/ paths are folded into evidence (see
-// migration_map.yaml: DOMAIN→evidence/domain_legacy), so we no longer
+// docs/archive/taxonomy-migration-2026/migration_map.yaml: DOMAIN→evidence/domain_legacy), so we no longer
 // require a literal "DOMAIN" source class — instead we only assert the
 // rule exists. The legacy DOMAIN→/scaffold relationships will be
 // rewritten by migrate-cli during the data migration phase.

@@ -87,7 +87,7 @@ var strategicPromptEdges = map[ah.RelationName]struct{}{
 
 // legacyPromptOnlyDirectionPolicies enumerates ah.RelationName values (including prompt-only legacy literals)
 // that have NO entry in edgesemantics.EdgeDirectionPolicies (because
-// AH folded/dropped them per docs/taxonomy/migration_map.yaml) but
+// AH folded/dropped them per docs/archive/taxonomy-migration-2026/migration_map.yaml) but
 // must remain in the LLM-facing extraction prompt vocabulary during
 // the migration window. The graph_intent decoder
 // (horizon models relation normalization) folds the LLM's answers back to canonical
@@ -146,7 +146,7 @@ var legacyPromptOnlyDirectionPolicies = map[ah.RelationName]edgesemantics.EdgeDi
 
 // supplyChainLegacyDecomposerEdges enumerates legacy supply-chain
 // relation literals that the AH allowlist drops (per
-// docs/taxonomy/migration_map.yaml dispositions
+// docs/archive/taxonomy-migration-2026/migration_map.yaml dispositions
 // Dropped/fold_to_attributes) but which the intent-decomposer prompt
 // still surfaces during the migration window. The graph_intent
 // decoder (horizon models relation normalization) folds them back to canonical AH at
@@ -457,7 +457,7 @@ func orderedPromptEdgeTypes(includeDomain bool) []ah.RelationName {
 	for _, dt := range preferredPromptEdgeOrder {
 		appendType(dt)
 	}
-	// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+	// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 	// edgesemantics.EdgeDirectionPolicies is keyed by AH RelationName
 	// (snake_case). The legacy AllEdgeTypesList() helper returns
 	// UPPER_SNAKE wire labels, which would never resolve through
@@ -490,7 +490,7 @@ func orderedPromptEdgeTypes(includeDomain bool) []ah.RelationName {
 func renderEdgePromptEntry(dt ah.RelationName, indent string) string {
 	rule, ok := edgesemantics.EdgeDirectionPolicies[dt]
 	if !ok {
-		// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+		// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 		// fall back to the prompt-only legacy overlay so RelationName
 		// values whose AH disposition is Dropped/fold_to_attributes
 		// (RELATIVE_OF, RENAMED_TO, EMPLOYED_BY, …) still surface in the
@@ -504,7 +504,7 @@ func renderEdgePromptEntry(dt ah.RelationName, indent string) string {
 		}
 		rule = legacyRule
 	}
-	// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml +
+	// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml +
 	// AGENTS.md): the LLM-facing scout extraction prompts pin on the
 	// pre-migration UPPER_SNAKE wire labels (OWNS, RELATIVE_OF,
 	// RENAMED_TO, …). Render via wireLabelForDependencyType so AH
@@ -663,7 +663,7 @@ func generatedIntentDecomposerRelationRulesBlock(domainModes []string) string {
 		seenFiltered[dt] = struct{}{}
 		filtered = append(filtered, dt)
 	}
-	// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+	// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 	// edgesemantics.EdgeAllowlistByDomainModes is the AH-canonical
 	// projection (snake_case AH RelationName). It silently drops
 	// legacy supply-chain literals whose disposition is `Dropped: true`

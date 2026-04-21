@@ -14,7 +14,7 @@ import (
 // literals (transforms_into, assembles_into, used_in, extracts_from, …) that
 // contractsemantics drops because they have no AH RelationName equivalent.
 //
-// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 // taxonomy.AllowedEdgeTypesForDomainMode returns the SoT wire tokens (including
 // legacy-only ones such as "transforms_into" that the migration map folds into
 // site siteTransforms[]). contractsemantics.normalizeWireRelations strips the
@@ -82,10 +82,10 @@ func EdgeAllowlistByDomainModes(modes []string) []DependencyType {
 // allowed edges for `mode`, plus the matching scout snake_case literal
 // when the wire token has no AH home (so legacy reads still match).
 //
-// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 // We can't rely solely on contractsemantics.ProfileForDomainMode here:
 //
-//  1. Tokens marked `Dropped: true` in migration_map.yaml (e.g.
+//  1. Tokens marked `Dropped: true` in docs/archive/taxonomy-migration-2026/migration_map.yaml (e.g.
 //     transforms_into, HAS_SUBGROUP, AFFILIATED_WITH) are stripped from
 //     the AH allowedEdges set but are still listed by the SoT taxonomy
 //     for the corresponding mode and must remain in scout's runtime
@@ -130,7 +130,7 @@ func scoutLegacyAllowlistFor(mode string) []DependencyType {
 // scout's runtime overlay rules treat the two as semantically distinct
 // during the migration window).
 //
-// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 // keep this set in sync with the former legacy_aliases const block (AH
 // RelationName plus prompt-only snake_case literals).
 var scoutKnownDependencyTypes = map[DependencyType]struct{}{
@@ -201,7 +201,7 @@ var scoutKnownDependencyTypes = map[DependencyType]struct{}{
 // scout-package DependencyType form used by the supply-chain overlay
 // switch in engine.go and by AllowlistContains.
 //
-// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 //   - When the lowercased input is already a known scout DependencyType
 //     literal we keep it as-is. This preserves the legacy semantics for
 //     tokens like OPERATES_VIA / MANAGES / ACQUIRED_BY whose AH targets
@@ -232,7 +232,7 @@ func normalizeToScoutRelation(s string) DependencyType {
 
 // AllowlistContains reports whether the allowlist contains the relation t.
 //
-// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 // `allowlist` is sourced from contractsemantics.ProfileForDomainMode, which
 // returns canonical lowercase ah.RelationName entries. Legacy callers
 // (scout tests, persisted Firestore data, prompts emitted by the older
@@ -240,7 +240,7 @@ func normalizeToScoutRelation(s string) DependencyType {
 // or "OWNS". Normalize the probe through the wire→AH alias map so a
 // strict equality check can match either form. We never weaken the
 // allowlist: a wire token that has no AH home (Dropped relations in
-// migration_map.yaml, e.g. AUDITED_BY) still falls through to the
+// docs/archive/taxonomy-migration-2026/migration_map.yaml, e.g. AUDITED_BY) still falls through to the
 // strict edgesemantics equality check and is rejected.
 func AllowlistContains(allowlist []DependencyType, t DependencyType) bool {
 	if edgesemantics.AllowlistContains(allowlist, t) {

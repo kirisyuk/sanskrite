@@ -23,7 +23,7 @@ import (
 // Relation gating
 // ---------------
 // IsTransmissionSensitive used to key on the legacy DependencyType
-// enum + DependencyFacet. Both are retired (see migration_map.yaml).
+// enum + DependencyFacet. Both are retired (see docs/archive/taxonomy-migration-2026/migration_map.yaml).
 // The new gate is the AH RelationName: a fixed set of canonical
 // supply-chain relations (`supplies`, `leg_connects`, `passes_through`,
 // `transships_at`) is always treated as transmission-sensitive; any
@@ -166,7 +166,7 @@ func (e *DependencyEdge) HasAnyTransmissionQualifier() bool {
 //     metric (preserves the legacy "if data is there, model it" intent).
 //
 // The legacy DEPENDS_ON+facet gate is retired with the DependencyFacet
-// enum (see migration_map.yaml — facets dropped entirely).
+// enum (see docs/archive/taxonomy-migration-2026/migration_map.yaml — facets dropped entirely).
 func (e *DependencyEdge) IsTransmissionSensitive() bool {
 	if e == nil {
 		return false

@@ -23,7 +23,7 @@ import (
 
 // Legacy product-to-product edge labels that this dictionary operates on.
 // These are NOT canonical AH relations (in AH they are folded onto
-// siteTransforms attributes per migration_map.yaml). They are retained
+// siteTransforms attributes per docs/archive/taxonomy-migration-2026/migration_map.yaml). They are retained
 // here as ah.RelationName-typed string constants so the supervisor /
 // LLM wire layer can continue to record candidate observations until
 // the materialized-payload-rewrite phase swaps them out for siteTransforms.

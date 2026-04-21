@@ -1,7 +1,7 @@
 # Pathquery layer — design document (P8)
 
 **Status:** draft for approval  
-**Spec:** `docs/taxonomy/REMAINING_WORK_SPEC.md` §4 (Phase P8)  
+**Spec (archived):** [`docs/archive/taxonomy-migration-2026/MIGRATION_SPEC_P0_P14.md`](../archive/taxonomy-migration-2026/MIGRATION_SPEC_P0_P14.md) §4 (Phase P8)  
 **Escalation:** per §1.5 — **no implementation in `backend/internal/horizon/pathquery` until this document is explicitly approved** in chat.
 
 ---
@@ -76,7 +76,7 @@ Tenant and project live on `Query`, not here — `SearchContext` never overrides
 
 ### 3.3. Query
 
-Aligned with REMAINING_WORK_SPEC §4.3. Two deliberate deviations from the literal spec, called out explicitly:
+Aligned with archived MIGRATION_SPEC_P0_P14 §4.3. Two deliberate deviations from the literal spec, called out explicitly:
 
 - `To` is `*Endpoint` (pointer), not `Endpoint` — spec text says `nil means "any downstream"`, which is impossible on a struct value in Go. Pointer is the canonical encoding.
 - Cache control is split into `CacheTTL` + `CacheMode` to resolve the self-contradictory "zero = default" / "0 = disable" language in the spec (see §9.5).
@@ -264,4 +264,4 @@ Counters in `metriccore` (names from spec):
 
 ## 10. Approval
 
-Reply in the chat with **Approved** (and any deltas to §9), or requested changes. After approval, implementation follows commits in REMAINING_WORK_SPEC §4.6.
+Reply in the chat with **Approved** (and any deltas to §9), or requested changes. After approval, implementation follows commits in archived MIGRATION_SPEC_P0_P14 §4.6.

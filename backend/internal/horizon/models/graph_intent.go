@@ -729,7 +729,7 @@ type graphIntentRelationDecode struct {
 	ExtraAttributes map[string]interface{}
 	// Note is a human-readable trace of the rewrite chain — surfaced in
 	// graph-intent warnings so authors can see "OWNS -> beneficially_owns
-	// (per migration_map.yaml)".
+	// (per docs/archive/taxonomy-migration-2026/migration_map.yaml)".
 	Note string
 	// Dropped is true when the wire alias intentionally has no
 	// successor (drop_after_migration / fold_to_*). Callers should

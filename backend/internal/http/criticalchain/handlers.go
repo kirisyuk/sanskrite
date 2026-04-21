@@ -238,7 +238,7 @@ func (h *Handlers) handlePipelineRun(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusGone)
 	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":  "gone",
-		"message": "CriticalChain pipeline ingestion was removed; use backend/cmd/taxonomy_migrate (see docs/taxonomy/REMAINING_WORK_SPEC.md §6).",
+		"message": "CriticalChain pipeline ingestion was removed; use backend/cmd/taxonomy_migrate (see docs/archive/taxonomy-migration-2026/MIGRATION_SPEC_P0_P14.md §6).",
 	})
 }
 

@@ -44,7 +44,7 @@ func TestGovSkeletonContext_DecisionEdgesFieldExists(t *testing.T) {
 	}
 	s := string(b)
 
-	// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml +
+	// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml +
 	// AGENTS.md): DependencyType*Decision-layer constants now resolve to
 	// AH RelationName values (snake_case), so the skeleton context JSON
 	// surfaces canonical AH tokens — gatekeeps / controls_access /

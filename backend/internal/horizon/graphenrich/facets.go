@@ -19,7 +19,7 @@ import (
 //
 // The graphenrich package is the only writer/reader of the facet
 // today; until (and if) facet is promoted into the AH attribute_spec
-// the canonical strings live here. See migration_map.yaml ->
+// the canonical strings live here. See docs/archive/taxonomy-migration-2026/migration_map.yaml ->
 // dependency_facet for the rationale (facets folded into qualifiers).
 //
 // Same applies to the transmission-contract metadata qualifiers and
@@ -112,7 +112,7 @@ func isSupplyFlowRelation(rel ah.RelationName) bool {
 
 // employmentRelations is the AH relation set covering historic
 // EMPLOYED_BY / BOARD_MEMBER_OF / MANAGES (now consolidated under
-// member_of with role qualifier per migration_map.yaml).
+// member_of with role qualifier per docs/archive/taxonomy-migration-2026/migration_map.yaml).
 var employmentRelations = map[ah.RelationName]struct{}{
 	ah.RelationNameMemberOf: {},
 }

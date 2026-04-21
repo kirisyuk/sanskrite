@@ -596,7 +596,7 @@ func ownershipThinNodePaths(
 		hasSupport := len(support) > 0
 		hasEvidence := evidenceCoverage[nodeID]
 		needsResearch := false
-		// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+		// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 		// supportCoverage stores raw scout DependencyType values which
 		// under AH are snake_case (RelationName slugs like "member_of"
 		// or legacy literals like "has_subgroup"). The pre-migration

@@ -47,7 +47,7 @@ func (c *canonCache) set(key, canonicalPath string) {
 }
 
 func canonCacheKey(name string, fragType FragmentType) string {
-	// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+	// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 	// Callers may pass legacy wire tokens ("ORGANIZATION") or the AH
 	// canonical class ("org") for fragType. Normalize both sides through
 	// normalizeFragmentTypeHardcoded so a `set` from one form is found
@@ -296,14 +296,14 @@ func (e *ScoutEngine) normalizeFragmentType(ctx context.Context, s string) Fragm
 // edgesemantics.NormalizeFragmentTypeToken, we delegate to the canonical
 // models.NormalizeFragmentClassName helper.
 //
-// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 // A handful of legacy wire tokens are dispositioned as `fold_to_attributes`
 // or `rewrite_edge` in the migration map and therefore have NO direct
 // AH FragmentClass mapping via models.NormalizeFragmentClassName. Without
 // the explicit short-circuits below they would silently default to
 // ah.FragmentClassOrg, which loses the parent-class hint scout needs to
 // route them onto the correct canonical-path namespace and to satisfy the
-// /docs/taxonomy/migration_map.yaml semantics that DOMAIN/SPHERE were
+// /docs/archive/taxonomy-migration-2026/migration_map.yaml semantics that DOMAIN/SPHERE were
 // "evidence-shaped overlays" and supply-link / network tokens collapsed onto
 // site/community parents.
 func normalizeFragmentTypeHardcoded(s string) FragmentType {

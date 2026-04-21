@@ -16,7 +16,7 @@ import (
 //
 // Where a legacy concept has a direct AH RelationName/FragmentClass, we
 // alias to it. Where the legacy concept has been dropped/folded per
-// docs/taxonomy/migration_map.yaml, we keep a typed string with the
+// docs/archive/taxonomy-migration-2026/migration_map.yaml, we keep a typed string with the
 // historical lower_snake wire spelling so the policy can still match the
 // legacy payload at the wire boundary (and route it to the appropriate
 // fold/drop disposition).

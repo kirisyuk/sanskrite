@@ -72,7 +72,7 @@ func TestSanitizeDomainResearchRelations_PolicyImpactAllowlist(t *testing.T) {
 	if len(out) != 1 {
 		t.Fatalf("SUPPLIES_TO must be dropped for policy_impact mode, got %d relations", len(out))
 	}
-	// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+	// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 	// sanitizeDomainResearchRelations now emits scout DependencyType
 	// values (snake_case AH RelationName) for non-domain-anchored
 	// edges so downstream materializers / allowlists can pin on the

@@ -990,7 +990,7 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 		if normalized == "" {
 			continue
 		}
-		// MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
+		// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
 		// `normalized` is the UPPER_SNAKE wire form preserved on the
 		// outgoing relation (downstream consumers + tests pin on the
 		// legacy wire token). For every contract decision we route

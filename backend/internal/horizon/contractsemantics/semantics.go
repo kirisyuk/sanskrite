@@ -404,7 +404,7 @@ func normalizeMode(mode string) string {
 // normalizeWireRelations translates legacy UPPER_SNAKE wire strings
 // from the taxonomy SoT into canonical AH relation names. Wire
 // strings that have no AH edge home (folded into attributes,
-// canonical_path, or dropped per migration_map.yaml) are silently
+// canonical_path, or dropped per docs/archive/taxonomy-migration-2026/migration_map.yaml) are silently
 // skipped — those vocabulary items remain on the wire for prompt
 // continuity but no longer correspond to a real edge.
 func normalizeWireRelations(values []string) []ah.RelationName {

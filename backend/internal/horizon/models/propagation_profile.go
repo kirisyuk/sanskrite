@@ -37,7 +37,7 @@ type TransformationRule struct {
 // DefaultPropagationProfiles returns the AH-canonical propagation
 // profiles for all 12 axes.
 //
-// Translation provenance (legacy -> AH, per docs/taxonomy/migration_map.yaml):
+// Translation provenance (legacy -> AH, per docs/archive/taxonomy-migration-2026/migration_map.yaml):
 //
 //	OWNS                -> beneficially_owns
 //	CONTROLS            -> controls_via
@@ -164,7 +164,7 @@ func DefaultPropagationProfiles() map[string]PropagationProfile {
 				// PRODUCES + EXTRACTS_FROM both collapse to `produces`; the legacy
 				// EXTRACTS_FROM(target_to_source) signal direction (deposit -> site) is
 				// the same source_to_target after migration because the deposit becomes
-				// the source of the produces edge per migration_map.yaml.
+				// the source of the produces edge per docs/archive/taxonomy-migration-2026/migration_map.yaml.
 				{Type: string(ah.RelationNameProduces), Direction: "source_to_target", Weight: 0.85},
 				// DEPENDS_ON(product->site) collapses to requires_capability (product -> site);
 				// signal at the site flows back to the product (target_to_source).
