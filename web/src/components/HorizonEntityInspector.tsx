@@ -8,6 +8,8 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { humanizeCanonicalPath, preferDisplayLabel } from '../lib/uiUtils';
 import { describeRouteOverlay, readLegRouteOverlays, selectPrimaryLegRouteOverlay } from '../lib/supplyRouteOverlays';
+import { normalizeEdgeType as normalizeWireRelation, tryParseFragmentClass } from '../lib/taxonomy';
+import { FRAGMENT_CLASS, RELATION } from '../lib/taxonomy.generated';
 import { HorizonOnDemandDependencyResolverModal, type HorizonOnDemandContext } from './HorizonOnDemandDependencyResolverModal';
 import { RISK_SEGMENTS, RiskSegmentIcon, segmentForMetricBaseKey } from '../lib/riskShield';
 
@@ -3498,18 +3500,23 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
 
                         const selectedNodeId = String(nodeId);
                         const selectedPath = String((nodeData as any)?.canonicalPath || (fragment as any)?.canonicalPath || '');
-                        const normalizeEdgeType = (t: any) => String(t || '').trim().toUpperCase();
 
-                        // Filter only SUPPLIES_TO and DEPENDS_ON edges between orgs
-                        const supplyChainEdgeTypes = new Set(['SUPPLIES_TO', 'DEPENDS_ON']);
+                        const orgLike = (t: unknown) => {
+                          const u = String(t || '').trim().toUpperCase();
+                          if (['ORGANIZATION', 'FACILITY', 'ORG', 'SITE'].includes(u)) return true;
+                          const cls = tryParseFragmentClass(String(t || ''));
+                          return cls === FRAGMENT_CLASS.Org || cls === FRAGMENT_CLASS.Site;
+                        };
+
+                        // Supply-like edges (AH `supplies` covers legacy SUPPLIES_TO / DEPENDS_ON)
+                        const supplyChainNorm = new Set([
+                          normalizeWireRelation('SUPPLIES_TO'),
+                          normalizeWireRelation('DEPENDS_ON'),
+                        ]);
                         const incidentEdges = incidentEdgesAll.filter((e: any) => {
-                          const et = normalizeEdgeType(e?.edgeType);
-                          if (!supplyChainEdgeTypes.has(et)) return false;
-                          // Both source and target should be ORG or FAC
-                          const srcType = String(e?.sourceType || '').toUpperCase();
-                          const tgtType = String(e?.targetType || '').toUpperCase();
-                          const validTypes = ['ORGANIZATION', 'FACILITY'];
-                          return validTypes.includes(srcType) && validTypes.includes(tgtType);
+                          const et = normalizeWireRelation(e?.edgeType);
+                          if (!supplyChainNorm.has(et)) return false;
+                          return orgLike(e?.sourceType) && orgLike(e?.targetType);
                         });
 
                         // Build node lookup including selected node
@@ -3568,17 +3575,22 @@ export const HorizonEntityInspector: React.FC<HorizonEntityInspectorProps> = ({
                         }
                         // Scan all edges to find PRODUCES edges from neighbors
                         for (const e of incidentEdgesAll) {
-                          const et = normalizeEdgeType(e?.edgeType);
+                          const etNorm = normalizeWireRelation(e?.edgeType);
+                          const etLegacy = String(e?.edgeType || '')
+                            .trim()
+                            .toUpperCase()
+                            .replace(/-/g, '_');
                           const srcPath = String(e?.sourceCanonicalPath || '');
                           const tgtPath = String(e?.targetCanonicalPath || '');
-                          if (et === 'PRODUCES' && neighborContext[srcPath] && tgtPath.startsWith('/product/')) {
+                          if (etNorm === RELATION.Produces && neighborContext[srcPath] && tgtPath.startsWith('/product/')) {
                             neighborContext[srcPath].produces?.push(tgtPath);
                           }
-                          if (et === 'SUPPLIES_TO' && neighborContext[srcPath]) {
-                            neighborContext[srcPath].suppliesTo?.push(tgtPath);
-                          }
-                          if (et === 'DEPENDS_ON' && neighborContext[srcPath]) {
-                            neighborContext[srcPath].dependsOn?.push(tgtPath);
+                          if (etNorm === RELATION.Supplies && neighborContext[srcPath]) {
+                            if (etLegacy === 'DEPENDS_ON') {
+                              neighborContext[srcPath].dependsOn?.push(tgtPath);
+                            } else {
+                              neighborContext[srcPath].suppliesTo?.push(tgtPath);
+                            }
                           }
                         }
 

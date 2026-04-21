@@ -76,12 +76,22 @@ export interface MaterializedArtifact {
   };
   payload?: {
     v?: number;
-    nodes?: Array<{ type: string; ref: string }>;
+    /** Path nodes: AH `class` / `subtype`; legacy `type` still accepted on the wire. */
+    nodes?: Array<{
+      class?: string;
+      subtype?: string;
+      type?: string;
+      ref: string;
+      siteTransforms?: unknown[];
+    }>;
     productNodes?: Array<{
-      type: string;
+      class?: string;
+      subtype?: string;
+      type?: string;
       ref: string;
       name?: string;
       role?: string;
+      siteTransforms?: unknown[];
     }>;
     legs?: Array<{
       index: number;

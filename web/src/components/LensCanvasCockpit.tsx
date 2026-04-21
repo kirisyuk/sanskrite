@@ -27,8 +27,8 @@ import {
   getHorizonNodeVisualType,
 } from './HorizonGraphNodeTypes';
 import { api, type DirectedSupplyChainExplorationRequest } from '../lib/api';
-import { normalizeEdgeType } from '../lib/taxonomy';
 import { RELATION } from '../lib/taxonomy.generated';
+import { pathPayloadEdgeRelation } from '../lib/materializedPayload';
 import { useIsAdmin } from '../hooks/useIsAdmin';
 import { useUIStore } from '../stores/uiStore';
 import ReactMarkdown from 'react-markdown';
@@ -4882,15 +4882,7 @@ export const LensCanvasCockpit: React.FC<LensCanvasCockpitProps> = ({
         legByIndex.set(resolved, leg);
       }
       const existingEdgeIds = new Set((edges || []).map((e) => String((e as any)?.id || '').trim()));
-      const resolvePathEdgeType = (edge: any): string => {
-        const relRaw = String(edge?.relation || '').trim();
-        if (relRaw) return normalizeEdgeType(relRaw);
-        if (String(edge?.role || '').trim() === 'logistics_leg' || edge?.type === 'LOGISTICS') {
-          return normalizeEdgeType('OPERATES_VIA');
-        }
-        if (edge?.type === 'SUPPLY_LINK') return RELATION.Supplies;
-        return normalizeEdgeType('DEPENDS_ON');
-      };
+      const resolvePathEdgeType = (edge: any): string => pathPayloadEdgeRelation(edge);
       const addEdge = (
         id: string,
         sourceId: string,

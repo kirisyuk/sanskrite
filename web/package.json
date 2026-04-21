@@ -18,7 +18,7 @@
     "deploy:only": "firebase deploy --only hosting",
     "lint": "eslint .",
     "preview": "vite preview",
-    "test:graph-views": "tsx --test src/lib/graphViews/**/*.test.ts"
+    "test:graph-views": "tsx --test src/lib/graphViews/**/*.test.ts src/lib/materializedPayload.test.ts"
   },
   "dependencies": {
     "@deck.gl/core": "^9.2.11",
