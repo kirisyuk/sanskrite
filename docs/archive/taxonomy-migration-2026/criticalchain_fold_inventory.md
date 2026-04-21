@@ -1,6 +1,6 @@
 # CriticalChain fold inventory (Phase P7)
 
-Authoritative spec: `docs/taxonomy/REMAINING_WORK_SPEC.md` §3.
+Authoritative spec: [`MIGRATION_SPEC_P0_P14.md`](./MIGRATION_SPEC_P0_P14.md) §3.
 
 ## Symbols / helpers the general graph needed for the fold
 
@@ -23,7 +23,7 @@ No new taxonomy.py relations or migration_map fragment entries were required for
 | `criticalchain_conflict_zones` | **No** | `horizon_fragments` (`geo` / `affected_zone`) + `disrupts` edges |
 | `criticalchain_sanctions` | **No** | `horizon_fragments` (`evidence` / `sanction`) + issuer-specific relations |
 
-`collections_map` for these four names is committed in `docs/taxonomy/migration_map.yaml` for `cmd/taxonomy_migrate` (Phase P10).
+`collections_map` for these four names is committed in `docs/archive/taxonomy-migration-2026/migration_map.yaml` for `cmd/taxonomy_migrate` (Phase P10).
 
 ## Frontend call sites (`web/src`)
 

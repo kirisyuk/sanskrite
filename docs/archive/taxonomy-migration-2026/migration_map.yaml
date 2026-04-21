@@ -586,7 +586,7 @@ collections_map:
   criticalchain_nodes:
     disposition: project_then_delete
     target_collections: [horizon_fragments]
-    notes: "NodeDocument (material|facility) becomes AH fragments per REMAINING_WORK_SPEC §3.3; originals deleted after successful migrate."
+    notes: "NodeDocument (material|facility) becomes AH fragments per archived MIGRATION_SPEC_P0_P14 §3.3; originals deleted after successful migrate."
   criticalchain_edges:
     disposition: project_then_delete
     target_collections: [dependency_edges]

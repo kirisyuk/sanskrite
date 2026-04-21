@@ -1,3 +1,12 @@
+# Historical archive — AgentHorde taxonomy migration (P0–P14)
+
+> **Archived (P14, 2026-04-21).** This file was moved from `docs/taxonomy/REMAINING_WORK_SPEC.md`.
+> It is **not** authoritative for the running system. For current taxonomy workflows see
+> [`docs/taxonomy/CODEGEN.md`](../../taxonomy/CODEGEN.md) and related living docs listed in
+> [`README.md`](./README.md) in this directory.
+
+---
+
 # AgentHorde Taxonomy Migration — Remaining Work Specification (P7–P14)
 
 > **Purpose.** This is the single authoritative task list for finishing the AgentHorde (AH)
@@ -53,13 +62,13 @@ otherwise invisible. Do not ask the user to re-state them.
 5. `backend/internal/taxonomy/ah/doc.go` — the `go:generate` directive.
 6. `web/src/lib/taxonomy.generated.ts` — generated TS mirror.
 7. `docs/taxonomy/CODEGEN.md` — three-stage pipeline (py → json → go+ts) and how to regenerate.
-8. `docs/taxonomy/field_inventory.yaml` — every backend field’s disposition (keep / lift-to-
+8. `docs/archive/taxonomy-migration-2026/field_inventory.yaml` — every backend field’s disposition (keep / lift-to-
    attributes / drop / rename).
-9. `docs/taxonomy/migration_map.yaml` — legacy→AH enum dispositions. **Now an archival
+9. `docs/archive/taxonomy-migration-2026/migration_map.yaml` — legacy→AH enum dispositions. **Now an archival
    vocabulary reference** (migrate-cli was skipped per preamble); P14 moves it to
    `docs/archive/taxonomy-migration-2026/`. Still consulted during P9 and P13 when deciding
    how to rewrite stray legacy values found in code.
-10. `docs/taxonomy/cli_tools_inventory.yaml` — which `cmd/tools/*` packages survived the cleanup
+10. `docs/archive/taxonomy-migration-2026/cli_tools_inventory.yaml` — which `cmd/tools/*` packages survived the cleanup
     and why.
 
 ### 0.3. Model layer (the data shape to respect)
@@ -243,7 +252,7 @@ over generic AH queries.
 ### 3.2. Current state (as of P6 closeout)
 
 - Package tree: `backend/internal/criticalchain/{,adapters,config,datasource,models,pipeline,repo,scoring,signal}`
-  (~1600 LoC total; per-file LoC in `docs/taxonomy/cli_tools_inventory.yaml` comments).
+  (~1600 LoC total; per-file LoC in `docs/archive/taxonomy-migration-2026/cli_tools_inventory.yaml` comments).
 - HTTP: `backend/internal/http/criticalchain/handlers.go` (225 LoC, 11 endpoints).
 - Firestore collections used: `criticalchain_nodes`, `criticalchain_edges`, `criticalchain_conflict_zones`,
   `criticalchain_sanctions`. Kinds inside: `material`, `facility`, `processing_step`, `route`.
@@ -274,7 +283,7 @@ a siteTransform for transport.
 
 ### 3.4. Approach (step-by-step)
 
-**P7.01 — Inventory** (`docs/taxonomy/criticalchain_fold_inventory.md`; committed):
+**P7.01 — Inventory** (`docs/archive/taxonomy-migration-2026/criticalchain_fold_inventory.md`; committed):
 - List every symbol the general graph is missing for the fold to work (e.g., if `siteTransforms`
   helper is missing, note it).
 - List every `criticalchain_*` Firestore collection that must be migrated. Wire these into
@@ -860,7 +869,7 @@ callers. No `ah.RelationName("located_in")`-style literals remain after this pha
   decode path it verified. Zero UPPER_SNAKE relation strings remain in any test fixture.
 
 **Archival tracking** (not removed — moved in P14):
-- `docs/taxonomy/migration_map.yaml`, `field_inventory.yaml`, and the YAML `collections_map`
+- `docs/archive/taxonomy-migration-2026/migration_map.yaml`, `field_inventory.yaml`, and the YAML `collections_map`
   stay intact as documentation of the legacy→AH vocabulary. P14 moves them to
   `docs/archive/taxonomy-migration-2026/` with an archival `README.md`.
 
@@ -932,7 +941,7 @@ Reorganize `docs/` into a predictable shape, rewrite the roadmap, archive obsole
 ```
 docs/
   architecture/        # system-wide overviews (supply-chain, horizon, agentmesh, lens)
-  taxonomy/            # LIVE SoT: taxonomy.json, CODEGEN.md, materialized_payload.md, pathquery_design.md, cli_tools_inventory.yaml, REMAINING_WORK_SPEC.md (this file)
+  taxonomy/            # LIVE: CODEGEN.md, materialized_payload.md, pathquery_design.md (+ generated bindings from shared/taxonomy/taxonomy.json)
   agents/              # AgentHorde runtimes (vertex, azure), decision agent, benchmarking
   backend/             # per-package READMEs, API references
   frontend/            # component catalog, routing, state
@@ -951,9 +960,9 @@ docs/
   to `docs/_inventory.md` with columns: path, last-edit, referenced-from, category. Commit.
 **P14.02** — Sort every file into the target structure. Moves happen via `git mv` (never
   `rm` + `add`). Explicit moves to `docs/archive/taxonomy-migration-2026/`:
-  - `docs/taxonomy/migration_map.yaml`
-  - `docs/taxonomy/field_inventory.yaml`
-  - `docs/taxonomy/criticalchain_fold_inventory.md`
+  - `docs/archive/taxonomy-migration-2026/migration_map.yaml`
+  - `docs/archive/taxonomy-migration-2026/field_inventory.yaml`
+  - `docs/archive/taxonomy-migration-2026/criticalchain_fold_inventory.md`
   - The former §6 and §7 of this spec (migrate-cli + migrate-run plans) extracted from git
     history and saved as `migrate_cli_plan.md` and `migrate_run_plan.md` for posterity.
   - Add a `README.md` in that folder explaining: "These documents describe the in-place
