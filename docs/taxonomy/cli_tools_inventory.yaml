@@ -13,12 +13,11 @@
 #                          recent-but-tactical scaffolding, anything older than cutoff
 #                          regardless of category.
 #
-# Total: 198 cmd/tools/* packages → ~27 KEEP, ~171 DROP.
+# Total: 198 cmd/tools/* packages → ~24 KEEP, ~174 DROP. (P13 dropped worldmonitor / supply_repair / smart_dedup.)
 
 keep:
   core_dedup:
     - horizon_deduplicate_fragments    # main dedup tool
-    - horizon_smart_dedup              # newer smart-dedup pipeline
     - horizon_dedup_scanner            # offline dedup scanner / report
     - horizon_merge_discovered         # merges discovered duplicates with edge re-pointing
     - horizon_merge_org_aliases        # merges org aliases (with edges)
@@ -45,13 +44,11 @@ keep:
 
   docs_actual:
     - horizon_seed_taxonomy           # 4 refs in taxonomy.md / industry-taxonomy.md
-    - horizon_import_worldmonitor     # critical import path (recent, refs in archive)
-    - horizon_supply_repair           # 2 refs in implementation/sanctions-simulation
-    - horizon_lens_path_bootstrap     # 2 refs in implementation/sanctions-simulation
+    - horizon_lens_path_bootstrap     # lens scope / artifact bootstrap
 
 # DROP list materialized at apply time (everything in cmd/tools/* not in keep above
 # AND not in cmd/* root). Verified counts:
-#   198 cmd/tools/*  - 27 KEEP = 171 DROP packages.
+#   198 cmd/tools/*  - 24 KEEP = 174 DROP packages (post-P13 adjustment; re-verify if adding tools).
 #
 # Out of scope for tools-cleanup (NOT under cmd/tools/):
 #   server, agentmesh, run_worker, run_poller, agentmesh_scout_eval,

@@ -54,89 +54,6 @@ go run ./cmd/tools/horizon_deduplicate_fragments \
 
 ---
 
-### `horizon_smart_dedup`
-
-**Назначение:** Умная дедупликация фрагментов по множественным сигналам с использованием различных стратегий сопоставления.
-
-**Как работает:**
-1. **Построение индексов** по различным сигналам:
-   - **Wikidata ID** (высший приоритет) - точное совпадение
-   - **shortName** - короткое имя организации/продукта
-   - **legalName** - юридическое название
-   - **label[en]** - английская метка
-   - **Нормализованные имена** - удаление суффиксов (JSC, LLC, Inc и т.д.)
-   - **Географические города** - с фильтрацией по стране
-   - **Продукты** - по slug и алиасам (label/short/legal)
-   - **Фонетические совпадения** - для персон (Tahnoon/Tahnoun)
-   - **Facility normalized names** - нормализованные имена объектов
-   - **Canonical path aliases** - через merged_paths, legacy_org_canonical_path
-
-2. **Построение кластеров** дубликатов с учетом приоритетов:
-   - Priority 0: Организации как страны (ORG → GEO_REGION)
-   - Priority 0.5: Неканонические GEO пути → канонические
-   - Priority 0.75: Алиасы canonical paths
-   - Priority 0.8: Нормализация путей организаций (- vs _)
-   - Priority 1: Wikidata ID
-   - Priority 2-8: Остальные сигналы
-
-3. **Выбор канонического фрагмента** по скору:
-   - Wikidata ID (+100)
-   - IndustryPaths (+60)
-   - Правильный формат пути (для GEO: /loc/{cc}/{admin1}/{city})
-   - Verified статус (+30)
-   - Количество идентификаторов и KBRefs
-
-4. **Слияние данных** (fill-only):
-   - Labels, Identifiers, KBRefs, Description, Tags
-   - Отслеживание merged_paths
-
-5. **Исправление рёбер:**
-   - Переназначение edges с дубликатов на канонический
-   - Исправление направлений (SUBSIDIARY_OF → OWNS, HAS_KEY_PERSON → KEY_PERSON)
-   - Нормализация симметричных рёбер
-   - Глобальная дедупликация рёбер
-
-6. **Удаление дубликатов** из Firestore, GCS и синхронизация с Vertex AI Search
-
-**Использование:**
-```bash
-# Дедупликация всех типов
-go run ./cmd/tools/horizon_smart_dedup \
-  --project=nv-horizon \
-  --apply \
-  --verbose
-
-# Только организации
-go run ./cmd/tools/horizon_smart_dedup \
-  --project=nv-horizon \
-  --type=ORGANIZATION \
-  --apply \
-  --enable-org-name-only \
-  --enable-org-fuzzy-name
-
-# Только исправление рёбер (без дедупликации фрагментов)
-go run ./cmd/tools/horizon_smart_dedup \
-  --project=nv-horizon \
-  --fix-edges-only \
-  --apply
-```
-
-**Флаги:**
-- `--project` (required) - GCP project ID
-- `--apply` - применить изменения (по умолчанию dry-run)
-- `--dry-run` - принудительный dry-run
-- `--tenant` (default: "global") - Tenant ID
-- `--type` - фильтр по типу фрагмента (GEO_REGION, ORGANIZATION, FACILITY и т.д.)
-- `--union-clusters` - построение транзитивных кластеров через union-find
-- `--skip-vertex-sync` - пропустить синхронизацию с Vertex AI Search
-- `--enable-product-alias` - включить дедупликацию продуктов по алиасам
-- `--enable-org-name-only` - включить дедупликацию ORG только по имени (риск false positives)
-- `--enable-org-fuzzy-name` - включить fuzzy дедупликацию ORG (нормализованные имена)
-- `--fix-edges-only` - только исправить/нормализовать рёбра, пропустить дедупликацию фрагментов
-- `--verbose` - подробное логирование
-
----
-
 ## Очистка orphaned данных
 
 ### `testenv_janitor`
@@ -1145,7 +1062,7 @@ go run ./cmd/tools/horizon_backfill_supply_link_routes \
 3. **Сохраняйте курсоры** для длительных операций через `--cursor-file`
 4. **Мониторьте логи** на наличие ошибок и warnings
 5. **Запускайте инструменты в правильном порядке:**
-   - Сначала дедупликация (`horizon_smart_dedup`)
+   - Сначала дедупликация (`horizon_deduplicate_fragments` или специализированные merge-* tools)
    - Затем нормализация (`horizon_normalize_loc_geonames`)
    - Потом заполнение индексов (`horizon_backfill_index_paths`)
    - В конце проверка консистентности (`horizon_check_signals`)
