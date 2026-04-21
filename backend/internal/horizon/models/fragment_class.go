@@ -173,7 +173,7 @@ func IsOrgSubtype(subtype string) bool {
 // in policy tables, edge-direction allowlists, and test fixtures.
 //
 // This is the canonical replacement for the legacy single-string FragmentType
-// enum (FACILITY, DEPOSIT, AFFECTED_ZONE, …). Callers MUST NOT introduce
+// enum (FACILITY, deposit, AFFECTED_ZONE, …). Callers MUST NOT introduce
 // parallel string sentinels (e.g. "__legacy_deposit") — those break identity
 // matching against actual persisted documents whose Class+Subtype follow
 // the AH taxonomy.

@@ -7030,7 +7030,7 @@ func normalizeRelationEdge(sourceFrag *models.HorizonFragment, sourceID, targetI
 		}
 
 	case ah.RelationNameOperates:
-		// ADMINISTERS: source MUST be ORGANIZATION/GEO_REGION. FACILITY and DEPOSIT cannot administer.
+		// ADMINISTERS: source MUST be ORGANIZATION/GEO_REGION. FACILITY and deposit cannot administer.
 		// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassSite folds onto
 		// (site, deposit) and ah.FragmentClassOrg onto (org, program). The
 		// class-only check now treats deposit just like any other site
@@ -9162,7 +9162,7 @@ func (e *ScoutEngine) processSupplyChains(
 			continue
 		}
 
-		// IMPORTANT: Horizon fragments are global-scoped (except SUPPLY_LINK).
+		// IMPORTANT: Horizon fragments are global-scoped (except supply_link).
 		// If tenantId != global/empty, fragment.Validate() will fail and nothing will be created.
 		frag.TenantID = "global"
 		frag.Status = "active"
@@ -9666,7 +9666,7 @@ func (e *ScoutEngine) processSupplyChains(
 		srcTypeActual := resolveTypeByCanonical(srcPath)
 		dstTypeActual := resolveTypeByCanonical(dstPath)
 
-		// Canonicalization policy (stage-rank direction fix for TRANSFORMS_INTO, type rewrites, gov/market rules).
+		// Canonicalization policy (stage-rank direction fix for transforms_into, type rewrites, gov/market rules).
 		// Must run before validation policy so that edge type and direction are corrected first.
 		// SupplyChainMode: true — this path is always supply-chain edge materialization.
 		canon := policy.ApplyEdgeCanonicalizationPolicy(policy.EdgeCanonicalizationInput{

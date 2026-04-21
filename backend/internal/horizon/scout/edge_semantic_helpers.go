@@ -571,9 +571,9 @@ func IsMarketRelationType(t DependencyType) bool {
 }
 
 // ProductToProductEdgeTypeFromPaths selects the canonical product->product
-// edge type. ASSEMBLES_INTO is reserved for nearest-step component /
+// edge type. assembles_into is reserved for nearest-step component /
 // subassembly -> assembled product links; everything else stays
-// TRANSFORMS_INTO. Mirror of the legacy models helper.
+// transforms_into. Mirror of the legacy models helper.
 func ProductToProductEdgeTypeFromPaths(sourcePath, targetPath string) DependencyType {
 	if shouldPreferAssemblesIntoByProductPaths(sourcePath, targetPath) {
 		return DependencyType("assembles_into")
@@ -641,7 +641,7 @@ func ProductStageRankFromCanonicalPath(path string) (int, bool) {
 }
 
 // IsProductTransitionEdgeType reports whether `edgeType` is a
-// product-to-product transition (TRANSFORMS_INTO / ASSEMBLES_INTO /
+// product-to-product transition (transforms_into / assembles_into /
 // USED_IN) used by the supply-chain continuity layer. Mirror of the
 // legacy IsProductTransitionEdgeType helper.
 func IsProductTransitionEdgeType(edgeType DependencyType) bool {

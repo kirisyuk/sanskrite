@@ -242,10 +242,6 @@ func preserveScopeAutoAddCounters(lens, oldLens *models.Lens) {
 	preserveScopeAutoAddCounter(lens, oldLens, models.ScopeAutoAddArtifactCounterKey)
 }
 
-func deferredScopeAddCountFromViewConfig(viewConfig map[string]interface{}) (int, bool) {
-	return scopeAutoAddCountFromViewConfig(viewConfig, models.ScopeAutoAddEntityCounterKey)
-}
-
 func scopeAutoAddCountFromViewConfig(viewConfig map[string]interface{}, key string) (int, bool) {
 	if viewConfig == nil {
 		return 0, false

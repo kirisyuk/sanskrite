@@ -608,7 +608,7 @@ func axisTypeFit(axis string, fragment *horizonmodels.HorizonFragment) (float64,
 			return 1, "geo_conflict_type_fit"
 		}
 	case horizonmodels.AxisLogisticsCapacity, horizonmodels.AxisLogisticsLatency, horizonmodels.AxisPhysicalFlowSupply, horizonmodels.AxisPhysicalFlowDemand:
-		// FragmentTypeFacility (=site) already covers legacy DEPOSIT (site/deposit
+		// FragmentTypeFacility (=site) already covers legacy deposit (site/deposit
 		// subtype) and FragmentTypeOrganization (=org) covers legacy PROGRAM
 		// (org/program) under the AH taxonomy.
 		if ft == FragmentTypeOrganization || ft == FragmentTypeFacility || ft == FragmentTypeProduct || ft == FragmentTypeMarket {

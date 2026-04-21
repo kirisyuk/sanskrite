@@ -223,7 +223,7 @@ func FacilityCanonicalRulesPrompt() string {
 }
 
 // ExtendedCanonicalPathRulesPrompt returns canonical path rules for all entity types used in Research/Critic.
-// Includes FACILITY, PERSON, MARKET, COMMUNITY, DEPOSIT, EVENT, PROGRAM, DECISION_POINT, MECHANISM.
+// Includes FACILITY, PERSON, MARKET, COMMUNITY, deposit, EVENT, PROGRAM, DECISION_POINT, MECHANISM.
 func ExtendedCanonicalPathRulesPrompt() string {
 	var sb strings.Builder
 	sb.WriteString(CanonicalPathRulesPrompt())
@@ -231,7 +231,7 @@ func ExtendedCanonicalPathRulesPrompt() string {
 	sb.WriteString("- PERSON: /person/{slug}. Example: /person/elon-musk\n")
 	sb.WriteString(fmt.Sprintf("- MARKET: L1 /market/{geo}/{domain}, L2 /market/{geo}/{domain}/{vertical}, L3+ parent+one segment. NEVER repeat a segment. geo: %s. Examples: %s. HAS_MARKET_SEGMENT: child = parent + one segment.\n", ISO2GeoDescriptionForPrompts(), MarketExamplePathsString()))
 	sb.WriteString(fmt.Sprintf("- COMMUNITY: /community/{geo}/{type}/{slug}. geo: %s. type: trade|activist|professional|criminal|religious|ethnic|interest|dynasty|tribe|representatives|industry-association|key-community. Example: /community/ae/trade/hawala-dubai-network, /community/sa/dynasty/house-of-saud, /community/af/tribe/pashtun, /community/eu/industry-association/steel-producers\n", ISO2GeoDescriptionForPrompts()))
-	sb.WriteString("- DEPOSIT: /deposit/{resource}/{slug}. resource: oil, natural-gas, iron-ore, lithium-ore, etc. Example: /deposit/oil/permian-basin. Fallback: /deposit/other/{slug}\n")
+	sb.WriteString("- deposit: /deposit/{resource}/{slug}. resource: oil, natural-gas, iron-ore, lithium-ore, etc. Example: /deposit/oil/permian-basin. Fallback: /deposit/other/{slug}\n")
 	sb.WriteString("- EVENT: /event/{slug}. Example: /event/funding-round-series-a\n")
 	sb.WriteString(fmt.Sprintf("- PROGRAM: /program/{jurisdiction}/{slug}. If jurisdiction is unknown, use global. jurisdiction: %s. Example: /program/kazakhstan/alem-ai, /program/global/alem-ai\n", ISO2GeoDescriptionForPrompts()))
 	sb.WriteString("- DECISION_POINT: /decision/{domain}/{slug}. Example: /decision/export/grant-license\n")
@@ -275,7 +275,7 @@ func GraphIntentCanonicalPathRulesPrompt() string {
 	sb.WriteString("- PERSON: /person/{slug}. Example: /person/elon-musk\n\n")
 	sb.WriteString(fmt.Sprintf("- MARKET: L1 /market/{geo}/{domain}, L2 /market/{geo}/{domain}/{vertical}, L3+ parent+one segment. NEVER repeat a segment. geo: %s. Examples: %s. HAS_MARKET_SEGMENT: child = parent + one segment.\n\n", iso2Desc, MarketExamplePathsString()))
 	sb.WriteString("- COMMUNITY: /community/{geo}/{type}/{slug}. type: trade|activist|professional|dynasty|tribe|interest|representatives|industry-association|key-community. Example: /community/ro/interest/investors-association, /community/eu/industry-association/steel-producers\n\n")
-	sb.WriteString("- DEPOSIT: /deposit/{resource}/{slug}. Example: /deposit/oil/permian-basin\n\n")
+	sb.WriteString("- deposit: /deposit/{resource}/{slug}. Example: /deposit/oil/permian-basin\n\n")
 	sb.WriteString("- EVENT: /event/{slug}. Example: /event/funding-round-series-a\n\n")
 	sb.WriteString("- PROGRAM: /program/{jurisdiction}/{slug}. Example: /program/ro/invest-romania-program\n\n")
 	sb.WriteString("- DECISION_POINT: /decision/{domain}/{slug}. Example: /decision/export/grant-license\n")

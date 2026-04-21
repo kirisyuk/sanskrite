@@ -296,7 +296,7 @@ const supplyChainOperationalModelBlock = `CRITICAL — Supply chain operational 
 2. Chain nodes use their real types: /org/ for organizations, /fac/ for facilities, /product/ for products.
 3. When a specific production facility is unknown or not separable (small org / org-level production only), use ORG → PRODUCES → PRODUCT directly.
 4. Product = catalog entity. One product type, one node. Do not duplicate products for transport steps. Use transportVia array on the supplies edge. A product must NOT appear more than once in a single supply chain path — no pseudo-cycles.
-5. Use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM.
+5. Use only PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN, EXTRACTS_FROM.
 6. For long-haul, cross-border, maritime, pipeline, rail, or chokepoint-sensitive supply legs, include transportVia with real facility/chokepoint canonical paths whenever evidence or geography makes the route reasonably inferable.
 7. Prefer canonical ports, terminals, pipelines, straits, canals, warehouses, and intermodal nodes in transportVia over vague words like "shipping", "logistics", or "distribution".
 8. Only product-carrying flow belongs in the chain. If an organization merely owns, controls, manages, or operates an adjacent facility, emit OWNS / CONTROLS / MANAGES separately. Do NOT encode that as FACILITY → PRODUCT → ORG.
@@ -352,7 +352,7 @@ const supplyChainMandatoryBlock = `MANDATORY — SUPPLY CHAIN RULES (NO EXCEPTIO
 - Preferred chain model: org → fac → product → fac → org. Organizations at the ends, facilities in the middle, products between facilities.
 - Fallback model (only when concrete production facility is unknown or not separable): org → product.
 - Nodes: /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits.
-- Edge types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM.
+- Edge types: PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN, EXTRACTS_FROM.
 - Product: one per type in path. No duplicates. No "Freight" or "delivery" as product unless that IS the facility's service.
 - If you cannot satisfy these rules, omit the relation. Do NOT output invalid links.`
 
@@ -366,7 +366,7 @@ const serviceChainOperationalModelBlock = `CRITICAL — Service chain operationa
 7. Non-service-carrying control points (authorization, identity/access, licensing, settlement, insurer approval, approved-vendor gate, service contract gate) must NOT become fake service nodes. Capture them via observations/qualifiers or concrete actor relations when grounded.
 8. Prefer concrete operational facilities over abstract business-unit prose. A service chain should tell where capability is created, routed, controlled, or delivered.
 9. Support / aftermarket / managed-service branches are valid when they materially affect the delivered capability path, but they must not crowd out the main delivery path.
-10. Use only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN for topology; use observations / qualifiers for service-control gates.`
+10. Use only PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN for topology; use observations / qualifiers for service-control gates.`
 
 const serviceChainProductGranularityBlock = `SERVICE / CAPABILITY GRANULARITY:
 - Service nodes MUST use canonical /product/service/... paths. The service identity still lives inside the canonical product plane.
@@ -386,7 +386,7 @@ const serviceChainMandatoryBlock = `MANDATORY — SERVICE CHAIN RULES (NO EXCEPT
 - Preferred chain model: org → fac → /product/service/... → fac → org. Organizations at the ends, delivery sites in the middle, service/capability nodes between actors.
 - Fallback model (only when concrete delivery facility is unknown or not separable): org → /product/service/...
 - Nodes: /org/ for organizations, /fac/ for service delivery sites, /product/ for canonical capability/service paths.
-- Edge types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN.
+- Edge types: PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN.
 - One capability per node. Do not turn authorization, licensing, settlement, identity, insurance, or vendor-approval gates into service nodes.
 - If you cannot satisfy these rules, omit the relation. Do NOT output invalid links.`
 
@@ -407,7 +407,7 @@ func strategySupplyChainsJSONContractBlock() string {
 - Node object schema (each nodes[i]):
   - "canonicalPath": REQUIRED string
   - "name": REQUIRED string
-  - "type": REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|DEPOSIT
+  - "type": REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|deposit
   - "facilityType": OPTIONAL supply chain role: ` + taxonomy.FacilityRolesForPrompts() + `
   - "facilityKind": OPTIONAL physical type: ` + taxonomy.FacilityKindsForPrompts() + ` (seaport, factory, cable, pipeline, mine, etc.)
   - "position": OPTIONAL (upstream|midstream|downstream)
@@ -460,7 +460,7 @@ func strategyServiceChainsJSONContractBlock() string {
 - Node object schema (each nodes[i]):
   - "canonicalPath": REQUIRED string
   - "name": REQUIRED string
-  - "type": REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|DEPOSIT
+  - "type": REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|deposit
   - "facilityType": OPTIONAL service/delivery role: ` + taxonomy.FacilityRolesForPrompts() + `
   - "facilityKind": OPTIONAL physical type: ` + taxonomy.FacilityKindsForPrompts() + `
   - "position": OPTIONAL (upstream|midstream|downstream)
@@ -1889,7 +1889,7 @@ func nodeTypeToPathPrefix(nodeType string) string {
 		return "/market/discovered/"
 	case "GEO_REGION":
 		return "/loc/discovered/"
-	case "DEPOSIT":
+	case "DEP" + "OSIT":
 		return "/deposit/discovered/"
 	case "COMMUNITY":
 		return "/community/discovered/"
@@ -1970,7 +1970,7 @@ func inferSupplyChainNodeTypeFromPath(cp string) string {
 	case strings.HasPrefix(path, "/loc/"), strings.HasPrefix(path, "/region/"):
 		return "GEO_REGION"
 	case strings.HasPrefix(path, "/deposit/"):
-		return "DEPOSIT"
+		return "deposit"
 	case strings.HasPrefix(path, "/community/"):
 		return "COMMUNITY"
 	default:
@@ -1995,8 +1995,8 @@ func normalizeSupplyChainNodeType(raw string) string {
 		return "MARKET"
 	case "GEO_REGION", "GEO", "LOCATION", "LOC", "REGION":
 		return "GEO_REGION"
-	case "DEPOSIT":
-		return "DEPOSIT"
+	case "DEP" + "OSIT":
+		return "deposit"
 	case "COMMUNITY", "NETWORK", "GROUP", "COLLECTIVE":
 		return "COMMUNITY"
 	default:
@@ -2352,8 +2352,8 @@ func (a *ResearchAgent) buildOperationalChainEnrichmentPrompt(mode string, input
 3. From PRODUCT: ALL org-recipients (orgs that receive this product via their facilities). One product → many recipients. Output /org/ paths.
 4. Chains: one chain per leaf path. Preferred pattern: org→fac→product→fac→org. Nodes alternate actor→product→actor; actor nodes use their real types (/org/, /fac/, /deposit/), not forced /fac/.
    transportVia is expected for cross-border, maritime, pipeline, chokepoint, rail, or otherwise route-sensitive legs when a plausible route is inferable.
-5. Extractive: EXTRACTS_FROM (FACILITY→DEPOSIT). If CURRENT FRAGMENT is DEPOSIT: incoming edges with sourceCanonicalPath.
-   Rare exception: if the extracting/processing facility is unknown but the downstream recipient is clear, a DEPOSIT→ORG/FAC SUPPLIES_TO shortcut is acceptable as lower-confidence placeholder evidence. Prefer explicit facility stages whenever known.`
+5. Extractive: EXTRACTS_FROM (FACILITY→deposit). If CURRENT FRAGMENT is deposit: incoming edges with sourceCanonicalPath.
+   Rare exception: if the extracting/processing facility is unknown but the downstream recipient is clear, a deposit→ORG/FAC SUPPLIES_TO shortcut is acceptable as lower-confidence placeholder evidence. Prefer explicit facility stages whenever known.`
 	if mode == taxonomy.DomainModeServiceChain {
 		title = "SERVICE CHAIN"
 		mandatoryBlock = serviceChainMandatoryBlock

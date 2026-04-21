@@ -535,7 +535,7 @@ type ProposedGraphOp struct {
 	Kind        string  `json:"kind"`                 // create_fragment, create_edge, confirm_edge, mark_gap
 	SubjectPath string  `json:"subjectPath"`          // canonical path of the entity/product
 	ObjectPath  string  `json:"objectPath,omitempty"` // for edges: target canonical path
-	EdgeType    string  `json:"edgeType,omitempty"`   // TRANSFORMS_INTO, ASSEMBLES_INTO, SUPPLY_LINK, DEPENDS_ON
+	EdgeType    string  `json:"edgeType,omitempty"`   // transforms_into, assembles_into, supply_link, DEPENDS_ON
 	Rationale   string  `json:"rationale,omitempty"`  // evidence basis for this proposal
 	Confidence  float64 `json:"confidence"`           // computed, not self-assessed
 	Status      string  `json:"status"`               // proposed, accepted_local, accepted, verified_local, verified, landed, rejected
@@ -603,7 +603,7 @@ type BridgeStep struct {
 	NodeKind          string   `json:"nodeKind,omitempty"`     // facility|port|org|product|market|route|contract|intermediary
 	FromRef           string   `json:"fromRef,omitempty"`      // canonical/source ref
 	ToRef             string   `json:"toRef,omitempty"`        // canonical/destination ref
-	RelationType      string   `json:"relationType,omitempty"` // SUPPLY_LINK|TRANSFORMS_INTO|DEPENDS_ON|OPERATES_IN...
+	RelationType      string   `json:"relationType,omitempty"` // supply_link|transforms_into|DEPENDS_ON|OPERATES_IN...
 	ProductRef        string   `json:"productRef,omitempty"`
 	ActorRef          string   `json:"actorRef,omitempty"`
 	GeoRef            string   `json:"geoRef,omitempty"`

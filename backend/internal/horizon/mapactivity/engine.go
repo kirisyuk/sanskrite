@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
@@ -160,7 +159,6 @@ type Engine struct {
 	factsRepo *corerepo.OntologyFactsRepository
 	catalog   *Catalog
 	logger    *log.Logger
-	mu        sync.Mutex
 }
 
 func NewEngine(factsRepo *corerepo.OntologyFactsRepository, logger *log.Logger) *Engine {

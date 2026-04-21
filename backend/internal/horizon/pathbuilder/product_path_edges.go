@@ -21,9 +21,9 @@ func IsProductTransitionEdgeType(edgeType DependencyType) bool {
 }
 
 // ProductToProductEdgeTypeFromPaths selects the canonical product->product
-// edge type. ASSEMBLES_INTO is reserved for nearest-step component /
+// edge type. assembles_into is reserved for nearest-step component /
 // subassembly -> assembled product links; everything else stays
-// TRANSFORMS_INTO.
+// transforms_into.
 func ProductToProductEdgeTypeFromPaths(sourcePath, targetPath string) DependencyType {
 	if shouldPreferAssemblesIntoByProductPaths(sourcePath, targetPath) {
 		return DependencyTypeAssemblesInto

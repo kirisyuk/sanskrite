@@ -17,7 +17,7 @@ type HorizonFragment struct {
 	// BaseOntologyFields (общие с Entity)
 	ID string `json:"id" firestore:"id"`
 	// TenantID is usually "global" for world-graph fragments.
-	// Exception: SUPPLY_LINK fragments can be tenant-scoped or "global" (assumption layer).
+	// Exception: supply_link fragments can be tenant-scoped or "global" (assumption layer).
 	TenantID    string            `json:"tenantId" firestore:"tenantId"`
 	Version     int               `json:"version" firestore:"version"`
 	CreatedAt   time.Time         `json:"createdAt" firestore:"createdAt"`
@@ -211,7 +211,7 @@ type HorizonFragment struct {
 	CustomerFacilityRef *string  `json:"customerFacilityRef,omitempty" firestore:"customerFacilityRef,omitempty"` // /fac/... (optional)
 	TransportViaRefs    []string `json:"transportViaRefs,omitempty" firestore:"transportViaRefs,omitempty"`       // ordered /fac/... paths (ports, terminals, pipelines, warehouses)
 
-	// Lifecycle — real-world lifecycle stage and dates (for FACILITY, DEPOSIT, ORGANIZATION).
+	// Lifecycle — real-world lifecycle stage and dates (for FACILITY, deposit, ORGANIZATION).
 	// LifecycleStage is a canonical value from AllowedLifecycleStages (e.g., "construction", "operational", "closed").
 	LifecycleStage string `json:"lifecycleStage,omitempty" firestore:"lifecycleStage,omitempty"`
 	// ExpectedStartDate — when the entity is planned to become operational (for construction/planning stages).
@@ -327,7 +327,7 @@ func (f *HorizonFragment) Validate() error {
 	// Supply-link fragments use Class=site, Subtype=supply_link (tenant-scoped).
 	if f.IsSupplyLinkFragment() {
 		if f.TenantID == "" {
-			return fmt.Errorf("tenantId must be set for SUPPLY_LINK fragments")
+			return fmt.Errorf("tenantId must be set for supply_link fragments")
 		}
 		// Validate SupplyLink-specific fields using detailed validation
 		if err := ValidateSupplyLinkFields(f); err != nil {
@@ -337,14 +337,14 @@ func (f *HorizonFragment) Validate() error {
 		if f.CanonicalPath == "" {
 			canonicalPath, err := BuildSupplyLinkCanonicalPath(f.TenantID, f.SupplierRef, f.ProductRef, f.CustomerRef)
 			if err != nil {
-				return fmt.Errorf("failed to generate canonicalPath for SUPPLY_LINK: %w", err)
+				return fmt.Errorf("failed to generate canonicalPath for supply_link: %w", err)
 			}
 			f.CanonicalPath = canonicalPath
 		}
 	} else {
 		// Non-SupplyLink fragments must be global
 		if f.TenantID != "global" && f.TenantID != "" {
-			return fmt.Errorf("tenantId must be 'global' or empty for HorizonFragment (except SUPPLY_LINK)")
+			return fmt.Errorf("tenantId must be 'global' or empty for HorizonFragment (except supply_link)")
 		}
 		// Non-SupplyLink fragments require canonicalPath
 		if f.CanonicalPath == "" {

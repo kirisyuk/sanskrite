@@ -908,10 +908,6 @@ func targetInterestQuery(lens *horizonmodels.Lens, label string) string {
 	return strings.TrimSpace(strings.Join(parts, " | "))
 }
 
-func buildSourceIDSeed(displayName, url string) string {
-	return strings.TrimSpace(displayName) + "|" + strings.TrimSpace(url)
-}
-
 func fragmentDisplayName(fragment *horizonmodels.HorizonFragment) string {
 	if fragment == nil {
 		return ""

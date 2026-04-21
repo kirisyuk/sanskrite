@@ -292,7 +292,7 @@ type SupplyChainPathPayload struct {
 	Nodes []SupplyChainPathNode `json:"nodes"`
 
 	// Edges: optional array of edges/transitions between nodes.
-	// Can represent supply links, ontology transitions (TRANSFORMS_INTO / ASSEMBLES_INTO / USED_IN), etc.
+	// Can represent supply links, ontology transitions (transforms_into / assembles_into / USED_IN), etc.
 	Edges []SupplyChainPathEdge `json:"edges,omitempty"`
 
 	// Legs: optional ordered operational legs with route/zone bindings.

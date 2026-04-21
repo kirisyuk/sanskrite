@@ -20,7 +20,7 @@ func TestApplyIntentResolutionQualityRules_SynthesizesSupplyPlan(t *testing.T) {
 			Reason        string  `json:"reason"`
 		}{
 			{CanonicalPath: "/org/qa/qatarenergy", Type: "ORGANIZATION", Confidence: 0.9},
-			{CanonicalPath: "/deposit/qa/north-field", Type: "DEPOSIT", Confidence: 0.8},
+			{CanonicalPath: "/deposit/qa/north-field", Type: "deposit", Confidence: 0.8},
 		},
 	}
 	applyIntentResolutionQualityRules("Map the Qatari LNG supply chain through the Strait of Hormuz to European industrial consumers", &out)
@@ -91,7 +91,7 @@ func TestApplyIntentResolutionQualityRules_SynthesizesServicePlan(t *testing.T) 
 		}{
 			{CanonicalPath: "/org/us/google-cloud", Type: "ORGANIZATION", Confidence: 0.9},
 			{CanonicalPath: "/fac/us/google-cloud-us-central1", Type: "FACILITY", Confidence: 0.8},
-			{CanonicalPath: "/deposit/us/random-fuel-source", Type: "DEPOSIT", Confidence: 0.7},
+			{CanonicalPath: "/deposit/us/random-fuel-source", Type: "deposit", Confidence: 0.7},
 		},
 	}
 	applyIntentResolutionQualityRules("Map the Google Cloud service chain for us-central1 including dependencies and downstream recipients", &out)

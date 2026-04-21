@@ -174,26 +174,6 @@ func attrTime(bag map[string]interface{}, key string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
-func numericFromAny(v interface{}) (float64, bool) {
-	switch x := v.(type) {
-	case float64:
-		return x, true
-	case float32:
-		return float64(x), true
-	case int:
-		return float64(x), true
-	case int32:
-		return float64(x), true
-	case int64:
-		return float64(x), true
-	case string:
-		if f, err := strconv.ParseFloat(x, 64); err == nil {
-			return f, true
-		}
-	}
-	return 0, false
-}
-
 // -----------------------------------------------------------------------------
 // DependencyEdge typed accessors
 // -----------------------------------------------------------------------------

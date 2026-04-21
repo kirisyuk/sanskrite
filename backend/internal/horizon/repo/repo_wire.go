@@ -33,17 +33,3 @@ const (
 	relAssociatedWith ah.RelationName = "associated_with"
 	relOperatesIn     ah.RelationName = "operates_in"
 )
-
-const (
-	classOrganization = ah.FragmentClassOrg
-	classFacility     = ah.FragmentClassSite
-	classGeoRegion    = ah.FragmentClassGeo
-	classMarket       = ah.FragmentClassMarket
-	classProduct      = ah.FragmentClassProduct
-	classCommunity    = ah.FragmentClassCommunity
-	classPerson       = ah.FragmentClassPerson
-	classMechanism    = ah.FragmentClassMechanism
-	classDecision     = ah.FragmentClassDecision
-	classMobileAsset  = ah.FragmentClassMobileAsset
-	classEvidence     = ah.FragmentClassEvidence
-)

@@ -4,11 +4,9 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-	"time"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/workscope"
 	coremodels "github.com/igorkirisyuk/sanskrite/internal/models"
 )
 
@@ -109,242 +107,6 @@ func AssembleMarkdown(sections []coremodels.ArtifactSection) string {
 	return strings.TrimSpace(builder.String())
 }
 
-func buildExecutiveSection(input *Input) string {
-	families := collectFamilySummaries(input)
-	hubs := collectHubCounts(input)
-	suppliers := collectEndpointCounts(input, "supplier")
-	customers := collectEndpointCounts(input, "customer")
-	corridors := collectCorridorSummaries(input)
-	products := collectProductCounts(input)
-
-	lines := []string{
-		fmt.Sprintf("Lens `%s` currently resolves to **%d supply-chain paths** across **%d path families**.", safeLensName(input.Lens), len(input.Chains), len(families)),
-		"",
-		"| Metric | Value |",
-		"| --- | --- |",
-		fmt.Sprintf("| Original workbench scope paths | %d |", len(input.ScopePaths)),
-		fmt.Sprintf("| Map-expanded scope paths | %d |", len(input.Resolved.ScopePaths)),
-		fmt.Sprintf("| Supply-chain paths selected | %d |", len(input.Chains)),
-		fmt.Sprintf("| Pinned / scope-attached paths | %d |", input.ScopedChainCount),
-		fmt.Sprintf("| Context-discovered paths | %d |", input.DiscoveredChainCnt),
-		fmt.Sprintf("| Distinct hubs in selected paths | %d |", len(hubs)),
-		fmt.Sprintf("| Distinct suppliers | %d |", len(suppliers)),
-		fmt.Sprintf("| Distinct customers | %d |", len(customers)),
-		fmt.Sprintf("| Distinct product anchors | %d |", len(products)),
-		"",
-		"### Key takeaways",
-		"",
-	}
-
-	if len(families) > 0 {
-		lines = append(lines, fmt.Sprintf("- The network is organized around `%s` as the leading path family, with %d materialized paths around the same supplier-customer-product axis.", families[0].Title, families[0].PathCount))
-	}
-	if len(hubs) > 0 {
-		lines = append(lines, fmt.Sprintf("- Hub concentration is led by %s.", joinTopCounts(hubs, 3)))
-	}
-	if len(corridors) > 0 {
-		lines = append(lines, fmt.Sprintf("- The most repeated corridor is %s.", corridorSentence(corridors[0])))
-	}
-	if len(products) > 0 {
-		lines = append(lines, fmt.Sprintf("- Product concentration is led by %s.", joinTopCounts(products, 3)))
-	}
-	if len(customers) > 0 && len(suppliers) > 0 {
-		lines = append(lines, fmt.Sprintf("- Demand-side concentration is most visible at %s, while supply-side concentration is most visible at %s.", joinTopCounts(customers, 2), joinTopCounts(suppliers, 2)))
-	}
-	lines = append(lines, "- This version intentionally prioritizes graph semantics: named objects, relation meanings, products, hubs, and corridor recurrence. Timing and stress metrics are suppressed from the narrative layer.")
-
-	return strings.Join(lines, "\n")
-}
-
-func buildCoverageSection(input *Input) string {
-	artifactCounts := map[string]int{}
-	for _, artifact := range input.AllMaterialized {
-		if artifact == nil {
-			continue
-		}
-		artifactCounts[string(artifact.Kind)]++
-	}
-	lines := []string{
-		"| Coverage element | Count |",
-		"| --- | --- |",
-		fmt.Sprintf("| Original workbench scope paths | %d |", len(input.ScopePaths)),
-		fmt.Sprintf("| Map-expanded scope paths | %d |", len(input.Resolved.ScopePaths)),
-		fmt.Sprintf("| Neighbor fragment IDs | %d |", len(input.Resolved.FragmentIDs)),
-		fmt.Sprintf("| Materialized artifacts in resolved work scope | %d |", len(input.AllMaterialized)),
-		fmt.Sprintf("| Supply-chain paths selected for report | %d |", len(input.Chains)),
-		fmt.Sprintf("| Resolved fragment labels | %d |", len(input.FragmentsByPath)),
-		"",
-		"### Scope notes",
-		"",
-		"- Scope expansion uses the same wider-object resolver as the map lens, including one-hop graph neighbors.",
-		fmt.Sprintf("- Work scope digest: `%s`.", workscope.Digest(input.Resolved)),
-	}
-	if len(input.Resolved.ScopePaths) > len(input.ScopePaths) {
-		lines = append(lines, fmt.Sprintf("- Map expansion added **%d** extra canonical paths beyond the original lens scope.", len(input.Resolved.ScopePaths)-len(input.ScopePaths)))
-	}
-	lines = append(lines, "", "### Materialized substrate", "")
-	if len(artifactCounts) == 0 {
-		lines = append(lines, "- No materialized artifacts were returned for the current work scope.")
-	} else {
-		lines = append(lines, "| Kind | Count |", "| --- | --- |")
-		for _, kind := range sortedKeysByCount(artifactCounts) {
-			lines = append(lines, fmt.Sprintf("| `%s` | %d |", kind, artifactCounts[kind]))
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func buildStructureSection(input *Input) string {
-	families := collectFamilySummaries(input)
-	relations := collectRelationSummaries(input)
-	modes := collectModeCounts(input)
-
-	lines := []string{"### Path families", ""}
-	if len(families) == 0 {
-		lines = append(lines, "- No reusable path families were derived from the current chain set.")
-	} else {
-		lines = append(lines, "| Family | Product axis | Supplier anchor | Customer anchor | Paths | Typical hubs |", "| --- | --- | --- | --- | --- | --- |")
-		for _, family := range families[:minInt(len(families), 8)] {
-			lines = append(lines, fmt.Sprintf("| %s | %s | %s | %s | %d | %s |",
-				markdownEscape(family.Title),
-				markdownEscape(firstNonEmpty(family.ProductLabel, family.ProductAxis, "n/a")),
-				markdownEscape(firstNonEmpty(family.SupplierLabel, family.SupplierRef, "n/a")),
-				markdownEscape(firstNonEmpty(family.CustomerLabel, family.CustomerRef, "n/a")),
-				family.PathCount,
-				markdownEscape(firstNonEmpty(strings.Join(family.TypicalVia, " -> "), "direct / not explicit")),
-			))
-		}
-	}
-
-	lines = append(lines, "", "### Relation meanings", "")
-	if len(relations) == 0 {
-		lines = append(lines, "- No reusable edge relation semantics were present beyond path legs.")
-	} else {
-		lines = append(lines, "| Relation / role | Occurrences |", "| --- | --- |")
-		for _, item := range relations[:minInt(len(relations), 8)] {
-			lines = append(lines, fmt.Sprintf("| %s | %d |", markdownEscape(item.Key), item.Count))
-		}
-	}
-
-	lines = append(lines, "", "### Transport semantics", "")
-	if len(modes) == 0 {
-		lines = append(lines, "- No explicit leg mode or spatial semantics were encoded on the selected paths.")
-	} else {
-		lines = append(lines, "| Mode / semantic | Legs |", "| --- | --- |")
-		for _, item := range modes[:minInt(len(modes), 8)] {
-			lines = append(lines, fmt.Sprintf("| %s | %d |", markdownEscape(item.Key), item.Count))
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func buildCorridorsSection(input *Input) string {
-	corridors := collectCorridorSummaries(input)
-	paths := collectRepresentativePaths(input)
-
-	lines := []string{"### Repeated corridors", ""}
-	if len(corridors) == 0 {
-		lines = append(lines, "- No recurring corridor patterns were derived from the selected paths.")
-	} else {
-		lines = append(lines, "| Product | From | Via | To | Paths | Avg legs |", "| --- | --- | --- | --- | --- | --- |")
-		for _, corridor := range corridors[:minInt(len(corridors), 10)] {
-			lines = append(lines, fmt.Sprintf("| %s | %s | %s | %s | %d | %.1f |",
-				markdownEscape(firstNonEmpty(corridor.ProductLabel, corridor.ProductRef, "n/a")),
-				markdownEscape(firstNonEmpty(corridor.SupplierLabel, corridor.SupplierRef, "n/a")),
-				markdownEscape(firstNonEmpty(strings.Join(corridor.ViaLabels, " -> "), "direct / not explicit")),
-				markdownEscape(firstNonEmpty(corridor.CustomerLabel, corridor.CustomerRef, "n/a")),
-				corridor.PathCount,
-				float64(corridor.LegCount)/float64(maxInt(corridor.PathCount, 1)),
-			))
-		}
-	}
-
-	lines = append(lines, "", "### Representative path narratives", "")
-	if len(paths) == 0 {
-		lines = append(lines, "- No representative path narratives were derived.")
-	} else {
-		for _, path := range paths[:minInt(len(paths), 6)] {
-			headline := firstNonEmpty(path.DisplayName, path.ProductLabel, path.ProductRef, "Unnamed path")
-			lines = append(lines, fmt.Sprintf("- `%s`: %s.", headline, pathSentence(path)))
-			if len(path.LegNarratives) > 0 {
-				lines = append(lines, fmt.Sprintf("  Legs: %s.", strings.Join(path.LegNarratives[:minInt(len(path.LegNarratives), 4)], " | ")))
-			}
-			if len(path.RelationKinds) > 0 {
-				lines = append(lines, fmt.Sprintf("  Semantics: %s.", strings.Join(path.RelationKinds[:minInt(len(path.RelationKinds), 4)], ", ")))
-			}
-		}
-	}
-	return strings.Join(lines, "\n")
-}
-
-func buildConcentrationSection(input *Input) string {
-	hubs := collectHubCounts(input)
-	suppliers := collectEndpointCounts(input, "supplier")
-	customers := collectEndpointCounts(input, "customer")
-	products := collectProductCounts(input)
-	zones := collectZoneCounts(input)
-
-	lines := []string{"### Hub concentration", ""}
-	if len(hubs) == 0 {
-		lines = append(lines, "- No reusable hub references were encoded on the selected paths.")
-	} else {
-		lines = append(lines, "| Hub | Paths touching hub |", "| --- | --- |")
-		for _, item := range hubs[:minInt(len(hubs), 8)] {
-			lines = append(lines, fmt.Sprintf("| %s | %d |", markdownEscape(firstNonEmpty(item.Label, item.Ref)), item.Count))
-		}
-	}
-
-	lines = append(lines, "", "### Endpoint concentration", "")
-	lines = append(lines, "| Dimension | Leaders |", "| --- | --- |")
-	lines = append(lines, fmt.Sprintf("| Suppliers | %s |", markdownEscape(joinTopCounts(suppliers, 4))))
-	lines = append(lines, fmt.Sprintf("| Customers | %s |", markdownEscape(joinTopCounts(customers, 4))))
-	lines = append(lines, fmt.Sprintf("| Products | %s |", markdownEscape(joinTopCounts(products, 4))))
-	lines = append(lines, fmt.Sprintf("| Zones / affected zones | %s |", markdownEscape(joinTopCounts(zones, 4))))
-
-	lines = append(lines, "", "### Dependency readout", "")
-	for _, sentence := range buildDependencyReadout(hubs, suppliers, customers, products) {
-		lines = append(lines, "- "+sentence)
-	}
-	return strings.Join(lines, "\n")
-}
-
-func buildAppendixSection(input *Input) string {
-	lines := []string{
-		"| Deterministic basis | Value |",
-		"| --- | --- |",
-		fmt.Sprintf("| Lens ID | `%s` |", input.Lens.ID),
-		fmt.Sprintf("| Project ID | `%s` |", input.Lens.ProjectID),
-		fmt.Sprintf("| Generated at (UTC) | `%s` |", input.CreatedAt.Format(time.RFC3339)),
-		fmt.Sprintf("| Work scope digest | `%s` |", workscope.Digest(input.Resolved)),
-		fmt.Sprintf("| Scope paths | %d |", len(input.Resolved.ScopePaths)),
-		fmt.Sprintf("| Materialized artifact IDs | %d |", len(input.Resolved.MaterializedArtifactIDs)),
-		"",
-		"### Scope paths",
-		"",
-	}
-	if len(input.Resolved.ScopePaths) == 0 {
-		lines = append(lines, "- No canonical scope paths were resolved.")
-	} else {
-		for _, path := range input.Resolved.ScopePaths[:minInt(len(input.Resolved.ScopePaths), 40)] {
-			lines = append(lines, fmt.Sprintf("- `%s`", path))
-		}
-		if len(input.Resolved.ScopePaths) > 40 {
-			lines = append(lines, fmt.Sprintf("- ... and %d more", len(input.Resolved.ScopePaths)-40))
-		}
-	}
-	lines = append(lines, "", "### Materialized artifact IDs", "")
-	if len(input.Resolved.MaterializedArtifactIDs) == 0 {
-		lines = append(lines, "- No materialized artifact IDs were resolved.")
-	} else {
-		for _, id := range input.Resolved.MaterializedArtifactIDs[:minInt(len(input.Resolved.MaterializedArtifactIDs), 30)] {
-			lines = append(lines, fmt.Sprintf("- `%s`", id))
-		}
-		if len(input.Resolved.MaterializedArtifactIDs) > 30 {
-			lines = append(lines, fmt.Sprintf("- ... and %d more", len(input.Resolved.MaterializedArtifactIDs)-30))
-		}
-	}
-	return strings.Join(lines, "\n")
-}
 
 func collectFamilySummaries(input *Input) []familySummary {
 	byKey := map[string]*familySummary{}
@@ -725,6 +487,14 @@ func sortRefCounts(counts map[string]int, fragments map[string]*horizonmodels.Ho
 	return out
 }
 
+func sumCounts(items []refCount) int {
+	total := 0
+	for _, item := range items {
+		total += item.Count
+	}
+	return total
+}
+
 func buildDependencyReadout(hubs, suppliers, customers, products []refCount) []string {
 	out := []string{}
 	if len(hubs) > 0 {
@@ -743,20 +513,6 @@ func buildDependencyReadout(hubs, suppliers, customers, products []refCount) []s
 		out = append(out, "No strong concentration points were explicit in the selected path set.")
 	}
 	return out
-}
-
-func pathSentence(path pathSummary) string {
-	parts := []string{}
-	if path.SupplierLabel != "" && path.CustomerLabel != "" {
-		parts = append(parts, fmt.Sprintf("%s flows from %s to %s", firstNonEmpty(path.ProductLabel, "product"), path.SupplierLabel, path.CustomerLabel))
-	}
-	if len(path.ViaLabels) > 0 {
-		parts = append(parts, "via "+strings.Join(path.ViaLabels, " -> "))
-	}
-	if len(path.ModeKinds) > 0 {
-		parts = append(parts, "using "+strings.Join(path.ModeKinds[:minInt(len(path.ModeKinds), 3)], ", "))
-	}
-	return strings.Join(parts, ", ")
 }
 
 func corridorSentence(c corridorSummary) string {
@@ -856,19 +612,6 @@ func sortedSummaryKeys(counts map[string]int) []string {
 	return out
 }
 
-func sortedKeysByCount(counts map[string]int) []string {
-	keys := make([]string, 0, len(counts))
-	for key := range counts {
-		keys = append(keys, key)
-	}
-	sort.SliceStable(keys, func(i, j int) bool {
-		if counts[keys[i]] == counts[keys[j]] {
-			return keys[i] < keys[j]
-		}
-		return counts[keys[i]] > counts[keys[j]]
-	})
-	return keys
-}
 
 func joinTopCounts(items []refCount, limit int) string {
 	if len(items) == 0 || limit <= 0 {
@@ -888,14 +631,6 @@ func safeLensName(lens *horizonmodels.Lens) string {
 	return firstNonEmpty(strings.TrimSpace(lens.Name), strings.TrimSpace(lens.ID), "Lens")
 }
 
-func markdownEscape(value string) string {
-	value = strings.TrimSpace(value)
-	if value == "" {
-		return ""
-	}
-	replacer := strings.NewReplacer("|", "\\|", "\n", " ")
-	return replacer.Replace(value)
-}
 
 func mergeUniqueStrings(base []string, values []string) []string {
 	seen := map[string]struct{}{}
@@ -935,17 +670,4 @@ func minInt(a, b int) int {
 	return b
 }
 
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
 
-func sumCounts(items []refCount) int {
-	total := 0
-	for _, item := range items {
-		total += item.Count
-	}
-	return total
-}

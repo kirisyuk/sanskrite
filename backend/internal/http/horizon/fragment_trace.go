@@ -714,7 +714,7 @@ func traceEdgePriority(edgeType string) int {
 
 func traceEdgeFamily(edgeType string) string {
 	switch edgeType {
-	case "SUPPLIES_TO", "DEPENDS_ON", "PRODUCES", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "EXTRACTS_FROM", "REQUIRES", "USES", "SUPPORTS":
+	case "SUPPLIES_TO", "DEPENDS_ON", "PRODUCES", "transforms_into", "assembles_into", "USED_IN", "EXTRACTS_FROM", "REQUIRES", "USES", "SUPPORTS":
 		return "supply"
 	case "CONTROLS", "MANAGES", "OWNS", "INVESTS_IN", "BOARD_MEMBER_OF", "EMPLOYED_BY", "FOUNDED":
 		return "control"
@@ -735,7 +735,7 @@ func traceEdgeFamily(edgeType string) string {
 
 func traceBusinessMeaning(edgeType string) string {
 	switch edgeType {
-	case "SUPPLIES_TO", "PRODUCES", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "EXTRACTS_FROM":
+	case "SUPPLIES_TO", "PRODUCES", "transforms_into", "assembles_into", "USED_IN", "EXTRACTS_FROM":
 		return "Operational supply path"
 	case "DEPENDS_ON", "REQUIRES", "USES":
 		return "Dependency exposure"

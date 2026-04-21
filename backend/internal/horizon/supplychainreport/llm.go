@@ -883,9 +883,9 @@ func buildFlowArchetypes(relations []relationSummary) []string {
 		switch strings.TrimSpace(item.Key) {
 		case "logistics_leg", "product_flow":
 			out = append(out, "physical transfer between facilities and service nodes")
-		case "ASSEMBLES_INTO":
+		case "assembles_into":
 			out = append(out, "assembly and integration handoff between product stages")
-		case "TRANSFORMS_INTO":
+		case "transforms_into":
 			out = append(out, "product transformation between stages of production or service delivery")
 		}
 	}
@@ -911,21 +911,6 @@ func buildStructuralSignals(modes []relationSummary) []string {
 	return mergeUniqueStrings(nil, out)
 }
 
-func buildBusinessExecutiveDraft(input *Input, families []familySummary, hubs []refCount, suppliers []refCount, customers []refCount, products []refCount) string {
-	lines := []string{
-		fmt.Sprintf("The visible logistics network for `%s` contains %d documented movements across %d recurring logistics patterns.", safeLensName(input.Lens), len(input.Chains), len(families)),
-	}
-	if len(hubs) > 0 {
-		lines = append(lines, fmt.Sprintf("Transfer activity is concentrated in %s.", joinTopCounts(hubs, 3)))
-	}
-	if len(products) > 0 {
-		lines = append(lines, fmt.Sprintf("The network is organized primarily around %s.", joinTopCounts(products, 3)))
-	}
-	if len(customers) > 0 && len(suppliers) > 0 {
-		lines = append(lines, fmt.Sprintf("Demand is concentrated at %s, while supply-side activity is concentrated at %s.", joinTopCounts(customers, 2), joinTopCounts(suppliers, 2)))
-	}
-	return strings.Join(lines, "\n")
-}
 
 func buildBusinessIdentityDraft(input *Input, families []familySummary, products []refCount, chainFacts []map[string]any, hubs []refCount) string {
 	lines := []string{
@@ -1050,53 +1035,8 @@ func joinProductTitles(items []map[string]any, limit int) string {
 	return strings.Join(parts, ", ")
 }
 
-func buildBusinessNetworkLogicDraft(families []familySummary, flowArchetypes []string, structuralSignals []string) string {
-	lines := []string{
-		"The visible network links production and service sites to downstream assembly, launch, control, and receiving facilities.",
-	}
-	if len(families) > 0 {
-		lines = append(lines, fmt.Sprintf("Dominant flow patterns include %s.", joinFamilyTitles(families, 4)))
-	}
-	if len(flowArchetypes) > 0 {
-		lines = append(lines, "The network combines "+strings.Join(flowArchetypes[:minInt(len(flowArchetypes), 3)], "; ")+".")
-	}
-	if len(structuralSignals) > 0 {
-		lines = append(lines, "Operationally, "+strings.Join(structuralSignals[:minInt(len(structuralSignals), 3)], "; ")+".")
-	}
-	return strings.Join(lines, "\n")
-}
 
-func buildBusinessFootprintDraft(hubs []refCount, suppliers []refCount, customers []refCount, zones []refCount) string {
-	lines := []string{
-		"The visible footprint is shaped by a limited set of transfer hubs, supply locations, receiving facilities, and industrial zones.",
-	}
-	if len(hubs) > 0 {
-		lines = append(lines, fmt.Sprintf("The main transfer system is anchored on %s.", joinTopCounts(hubs, 3)))
-	}
-	if len(suppliers) > 0 {
-		lines = append(lines, fmt.Sprintf("Supply-side activity is led by %s.", joinTopCounts(suppliers, 3)))
-	}
-	if len(customers) > 0 {
-		lines = append(lines, fmt.Sprintf("Receiving activity is led by %s.", joinTopCounts(customers, 3)))
-	}
-	if len(zones) > 0 {
-		lines = append(lines, fmt.Sprintf("Geographic concentration is most visible in %s.", joinTopCounts(zones, 3)))
-	}
-	return strings.Join(lines, "\n")
-}
 
-func buildBusinessCorridorDraft(corridors []corridorSummary, paths []pathSummary) string {
-	lines := []string{
-		"The visible network is best understood through a small set of illustrative corridors rather than through every individual route instance.",
-	}
-	if len(corridors) > 0 {
-		lines = append(lines, fmt.Sprintf("Illustrative corridors include %s.", joinCorridorTitles(corridors, 4)))
-	}
-	if len(paths) > 0 {
-		lines = append(lines, "Representative examples are available for more complex multi-step movements across assembly, launch, and service sites.")
-	}
-	return strings.Join(lines, "\n")
-}
 
 func buildBusinessDependencyDraft(hubs []refCount, suppliers []refCount, customers []refCount, products []refCount, zones []refCount, dependencyReadout []string) string {
 	lines := []string{
@@ -1150,13 +1090,6 @@ func buildBusinessEvidenceDraft(input *Input) string {
 	return strings.Join(lines, "\n")
 }
 
-func joinFamilyTitles(items []familySummary, limit int) string {
-	parts := make([]string, 0, minInt(len(items), limit))
-	for _, item := range items[:minInt(len(items), limit)] {
-		parts = append(parts, "`"+item.Title+"`")
-	}
-	return strings.Join(parts, ", ")
-}
 
 func joinCorridorTitles(items []corridorSummary, limit int) string {
 	parts := make([]string, 0, minInt(len(items), limit))

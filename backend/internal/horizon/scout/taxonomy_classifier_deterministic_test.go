@@ -59,7 +59,7 @@ func TestClassifyTaxonomyDeterministic(t *testing.T) {
 		// --- PERSON ---
 		{"person", "/person/elon-musk", "/Person/Executive", true},
 
-		// --- DEPOSIT ---
+		// --- deposit ---
 		{"deposit", "/deposit/cl/atacama-lithium", "/Resource/RawMaterial/Mineral", true},
 
 		// --- MECHANISM ---

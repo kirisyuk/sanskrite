@@ -257,14 +257,14 @@ func ResolveEdgeDirectionAutoFix(
 			Reason:     "canonicalize: FACILITY ADMINISTERS ORG -> ORG ADMINISTERS FACILITY (swap only)",
 			Confidence: 0.95,
 		}, true
-	// ADMINISTERS: DEPOSIT cannot administer. "Deposit administered by gov/org" → swap.
+	// ADMINISTERS: deposit cannot administer. "Deposit administered by gov/org" → swap.
 	case edgeType == relAdministers &&
 		sourceType == classDeposit &&
 		(targetType == classOrganization || targetType == classProgram || targetType == classGeoRegion):
 		return EdgeDirectionAutoFix{
 			NewType:    relAdministers,
 			ShouldSwap: true,
-			Reason:     "canonicalize: DEPOSIT ADMINISTERS ORG -> ORG ADMINISTERS DEPOSIT (swap only)",
+			Reason:     "canonicalize: deposit ADMINISTERS ORG -> ORG ADMINISTERS deposit (swap only)",
 			Confidence: 0.95,
 		}, true
 	// CONTROLS: source MUST be ORG/PERSON/COMMUNITY. PRODUCT cannot control.

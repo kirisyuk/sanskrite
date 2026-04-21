@@ -34,7 +34,7 @@ type GeoCoordinatesAttribution struct {
 
 // GeoRelevantTypes are fragment classes where coordinates are useful for map rendering.
 // Gov bodies use ORGANIZATION class with /gov/ canonical path.
-// Legacy DEPOSIT/PROGRAM/AFFECTED_ZONE are folded into site/org/geo classes under
+// Legacy deposit/PROGRAM/AFFECTED_ZONE are folded into site/org/geo classes under
 // the AH taxonomy and are therefore already covered by the entries below.
 var GeoRelevantTypes = map[FragmentType]struct{}{
 	FragmentTypeOrganization: {},
@@ -538,7 +538,7 @@ func BuildAddressFromFragmentWithSource(f *hmodels.HorizonFragment) (string, str
 		}
 	}
 
-	// 4. Labels["en"] + country for DEPOSIT (e.g. "Permian Basin, US") — deposit names are place names, not company names.
+	// 4. Labels["en"] + country for deposit (e.g. "Permian Basin, US") — deposit names are place names, not company names.
 	if f.IsDepositSite() {
 		name := ""
 		if f.Labels != nil {

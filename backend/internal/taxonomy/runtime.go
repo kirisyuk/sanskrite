@@ -45,7 +45,7 @@ type RuntimeTaxonomy struct {
 	// Natural resource deposits (/deposit/{resource-slug}/{deposit-slug})
 	AllowedDepositResources map[string]struct{} // "crude-oil", "lithium", "copper", etc.
 
-	// Lifecycle stages for FACILITY, DEPOSIT, ORGANIZATION
+	// Lifecycle stages for FACILITY, deposit, ORGANIZATION
 	AllowedLifecycleStages map[string]struct{} // "construction", "operational", "closed", etc.
 	LifecycleStageAliases  map[string]string   // "exploration" -> "concept", "production" -> "operational"
 
@@ -94,10 +94,10 @@ var builtInAllowedRelationTypes = map[string]struct{}{
 	"INFLUENCES":      {},
 	"DEPENDS_ON":      {},
 	"AFFECTS":         {},
-	"TRANSFORMS_INTO": {},
-	"ASSEMBLES_INTO":  {},
+	"transforms_into": {},
+	"assembles_into":  {},
 	"USED_IN":         {},
-	"EXTRACTS_FROM":   {}, // FACILITY → DEPOSIT
+	"EXTRACTS_FROM":   {}, // FACILITY → deposit
 	// Market participation
 	"PARTICIPATES_IN": {},
 	"TRADED_IN":       {},

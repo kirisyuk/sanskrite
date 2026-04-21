@@ -14,7 +14,7 @@ const (
 	ResearchProfileMarket                ResearchProfile = "MARKET"
 	ResearchProfileProduct               ResearchProfile = "PRODUCT"
 	ResearchProfileFacility              ResearchProfile = "FACILITY"
-	ResearchProfileDeposit               ResearchProfile = "DEPOSIT"
+	ResearchProfileDeposit               ResearchProfile = "deposit"
 	ResearchProfileGov                   ResearchProfile = "GOV"
 	ResearchProfileCommunityDynastyTribe ResearchProfile = "COMMUNITY_DYNASTY_TRIBE"
 	ResearchProfileProgram               ResearchProfile = "PROGRAM"

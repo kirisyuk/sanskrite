@@ -80,7 +80,7 @@ func CanonicalizeEdgeWithPaths(edgeType DependencyType, sourceType, targetType F
 // AH RelationName and intentionally has NO entry for the read-side
 // legacy literals scout still emits during the migration window
 // (extracts_from, located_in, operates_in, associated_with, …). It also
-// lacks the legacy DEPOSIT (ah.FragmentClassSite) endpoint kinds that
+// lacks the legacy deposit (ah.FragmentClassSite) endpoint kinds that
 // pre-migration code relied on for OWNS/PRODUCES/etc. We seed those
 // here so the scout-level direction validator and
 // CanonicalizeEdge wrappers continue to honour the pre-migration
@@ -138,7 +138,7 @@ func buildScoutEdgeDirectionPolicies() map[ah.RelationName]edgesemantics.EdgeDir
 	}
 
 	// LEGACY (read-side only): PRODUCES historically allowed
-	// site (DEPOSIT) -> product (extractive output). The AH catalog now
+	// site (deposit) -> product (extractive output). The AH catalog now
 	// lists only org->product; keep the site->product back-compat row so
 	// scout's deposit-anchored extraction edges still validate.
 	if rule, ok := out[ah.RelationNameProduces]; ok {

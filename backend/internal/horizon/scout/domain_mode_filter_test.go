@@ -11,7 +11,7 @@ import (
 
 func TestEdgeAllowlistByDomainMode_SupplyChainIncludesMarketAnchors(t *testing.T) {
 	allow := EdgeAllowlistByDomainMode(taxonomy.DomainModeSupplyChain)
-	operational := []string{"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "EXTRACTS_FROM"}
+	operational := []string{"PRODUCES", "SUPPLIES_TO", "transforms_into", "assembles_into", "USED_IN", "EXTRACTS_FROM"}
 	for _, ot := range operational {
 		if !AllowlistContains(allow, DependencyType(ot)) {
 			t.Fatalf("supply_chain allowlist must include %s", ot)

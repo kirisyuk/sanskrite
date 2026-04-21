@@ -252,7 +252,7 @@ var relationPromptAnnotations = map[ah.RelationName]relationPromptAnnotation{
 	},
 	ah.RelationNameProduces: {
 		extra: []string{
-			"For PRODUCT -> PRODUCT value-chain steps use TRANSFORMS_INTO, ASSEMBLES_INTO, or USED_IN instead of PRODUCES.",
+			"For PRODUCT -> PRODUCT value-chain steps use transforms_into, assembles_into, or USED_IN instead of PRODUCES.",
 		},
 	},
 	ah.RelationName("transforms_into"): {
@@ -410,14 +410,14 @@ var explicitSourcePromptSpecs = []explicitSourcePromptSpec{
 	{
 		edgeType: ah.RelationNameOperates,
 		lines: []string{
-			"If THIS FRAGMENT is FACILITY or DEPOSIT and evidence says it is administered by X, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.",
+			"If THIS FRAGMENT is FACILITY or deposit and evidence says it is administered by X, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.",
 			"/org/ cannot administer /gov/; do not reverse that hierarchy.",
 		},
 	},
 	{
 		edgeType: ah.RelationName("extracts_from"),
 		lines: []string{
-			"If THIS FRAGMENT is DEPOSIT and evidence says facility X extracts from it, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.",
+			"If THIS FRAGMENT is deposit and evidence says facility X extracts from it, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.",
 		},
 	},
 }

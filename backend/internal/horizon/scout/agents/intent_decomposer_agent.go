@@ -241,7 +241,7 @@ Example: { "relationType": "DEPENDS_ON", "qualifiers": { "facet": "communication
 	if isSupplyChainMode {
 		relationEnum = taxonomy.SupplyChainEdgeTypesForPrompt()
 		validationSuffix = validationSuffixSupplyChain
-		dependsOnBlock = `SUPPLY CHAIN: Do NOT use DEPENDS_ON. Use PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM, PARTICIPATES_IN for supply chain links. Use TRADED_IN only for explicit product↔market trading context, not for operational flow.
+		dependsOnBlock = `SUPPLY CHAIN: Do NOT use DEPENDS_ON. Use PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN, EXTRACTS_FROM, PARTICIPATES_IN for supply chain links. Use TRADED_IN only for explicit product↔market trading context, not for operational flow.
 `
 	}
 
@@ -368,10 +368,10 @@ RULES:
 
 const (
 	validationSuffixGeneral = `  - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
-  - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO for processing/refining, ASSEMBLES_INTO for direct assembly, and USED_IN for strong operational input semantics (not PRODUCES).
+  - For PRODUCT -> PRODUCT steps, use transforms_into for processing/refining, assembles_into for direct assembly, and USED_IN for strong operational input semantics (not PRODUCES).
 `
 
-	validationSuffixSupplyChain = `  - For PRODUCT -> PRODUCT steps, use TRANSFORMS_INTO for processing/refining, ASSEMBLES_INTO for direct assembly, and USED_IN for strong operational input semantics (not PRODUCES).
+	validationSuffixSupplyChain = `  - For PRODUCT -> PRODUCT steps, use transforms_into for processing/refining, assembles_into for direct assembly, and USED_IN for strong operational input semantics (not PRODUCES).
   - In supply_chain mode, MARKET source may emit only PARTICIPATES_IN or HAS_MARKET_SEGMENT. PRODUCT -> MARKET uses TRADED_IN only when explicit trading/pricing context exists.
 `
 )

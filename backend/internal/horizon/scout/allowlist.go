@@ -16,7 +16,7 @@ import (
 //
 // MIGRATION NOTE (AH taxonomy / docs/taxonomy/migration_map.yaml):
 // taxonomy.AllowedEdgeTypesForDomainMode returns the SoT wire tokens (including
-// legacy-only ones such as "TRANSFORMS_INTO" that the migration map folds into
+// legacy-only ones such as "transforms_into" that the migration map folds into
 // site siteTransforms[]). contractsemantics.normalizeWireRelations strips the
 // dropped tokens, but scout still surfaces those edges during the migration
 // window — read-side back-compat with pre-migration Firestore documents and
@@ -86,7 +86,7 @@ func EdgeAllowlistByDomainModes(modes []string) []DependencyType {
 // We can't rely solely on contractsemantics.ProfileForDomainMode here:
 //
 //  1. Tokens marked `Dropped: true` in migration_map.yaml (e.g.
-//     TRANSFORMS_INTO, HAS_SUBGROUP, AFFILIATED_WITH) are stripped from
+//     transforms_into, HAS_SUBGROUP, AFFILIATED_WITH) are stripped from
 //     the AH allowedEdges set but are still listed by the SoT taxonomy
 //     for the corresponding mode and must remain in scout's runtime
 //     allowlist for read-side back-compat.

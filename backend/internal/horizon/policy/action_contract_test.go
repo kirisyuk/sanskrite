@@ -60,10 +60,10 @@ func TestApplyEdgeCanonicalizationPolicyTransformsIntoStageOrderSwap(t *testing.
 		TargetPath: "/product/raw/mineral/extraction/iron-ore",
 	})
 	if !got.Changed {
-		t.Fatalf("expected canonicalization change for reversed TRANSFORMS_INTO stage order")
+		t.Fatalf("expected canonicalization change for reversed transforms_into stage order")
 	}
 	if got.EdgeType != relTransformsInto {
-		t.Fatalf("expected edge type to stay TRANSFORMS_INTO, got %s", got.EdgeType)
+		t.Fatalf("expected edge type to stay transforms_into, got %s", got.EdgeType)
 	}
 	if !got.ShouldSwap {
 		t.Fatalf("expected shouldSwap=true")

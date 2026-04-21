@@ -42,7 +42,7 @@ type HorizonTaxonomy struct {
 	// Natural resource deposits (/deposit/{resource-slug}/{deposit-slug})
 	AllowedDepositResources []string `json:"allowedDepositResources,omitempty" firestore:"allowedDepositResources,omitempty"`
 
-	// Lifecycle stages for FACILITY, DEPOSIT, ORGANIZATION
+	// Lifecycle stages for FACILITY, deposit, ORGANIZATION
 	AllowedLifecycleStages []string          `json:"allowedLifecycleStages,omitempty" firestore:"allowedLifecycleStages,omitempty"`
 	LifecycleStageAliases  map[string]string `json:"lifecycleStageAliases,omitempty" firestore:"lifecycleStageAliases,omitempty"` // industry-specific alias -> canonical
 

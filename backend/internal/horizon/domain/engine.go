@@ -3223,7 +3223,7 @@ func adaptSnapshotToViewDirective(snapshot *models.DomainAnswerSnapshot) *models
 func defaultFilterRelTypes(contractType string) []string {
 	switch steeringProfileForContractType(contractType) {
 	case SteeringProfileSupplyChain:
-		return []string{"SUPPLIES_TO", "PRODUCES", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "EXTRACTS_FROM"}
+		return []string{"SUPPLIES_TO", "PRODUCES", "transforms_into", "assembles_into", "USED_IN", "EXTRACTS_FROM"}
 	case SteeringProfileRegulatoryExposure:
 		return []string{"REGULATES", "CONTROLS_ACCESS", "USES_MECHANISM", "APPLIES_TO"}
 	case SteeringProfilePolicyImpact:
@@ -3423,7 +3423,7 @@ func edgeByID(edges []*models.DependencyEdge, edgeID string) *models.DependencyE
 }
 
 // checkSupplyChainEdgesOperational uses only supply-chain operational edge types:
-// PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM. No CONSUMES or DEPENDS_ON.
+// PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN, EXTRACTS_FROM. No CONSUMES or DEPENDS_ON.
 func checkSupplyChainEdgesOperational(g graphSnapshot, facetNodes map[string][]*models.HorizonFragment) models.DomainGateCheck {
 	needed := map[DependencyType]struct{}{
 		DependencyTypeSuppliesTo:     {},
@@ -3472,7 +3472,7 @@ func checkSupplyChainEdgesOperational(g graphSnapshot, facetNodes map[string][]*
 		Priority:       "P0",
 		GapDescription: fmt.Sprintf("missing_facets=%s", strings.Join(missing, ",")),
 		Affected:       missing,
-		EnrichmentHint: "Add SUPPLIES_TO/PRODUCES/TRANSFORMS_INTO/ASSEMBLES_INTO/USED_IN/EXTRACTS_FROM edges for missing facets",
+		EnrichmentHint: "Add SUPPLIES_TO/PRODUCES/transforms_into/assembles_into/USED_IN/EXTRACTS_FROM edges for missing facets",
 	}
 }
 

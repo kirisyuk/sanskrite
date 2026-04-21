@@ -401,7 +401,7 @@ func (p *ValidationPolicy) validateEdge(ctx context.Context, input PolicyInput) 
 
 		if !isValid {
 			// Exceptional supply shortcut takes precedence over both reverse and quarantine
-			// dispositions: DEPOSIT→ORG/FAC SUPPLIES_TO is preserved with penalty even though
+			// dispositions: deposit→ORG/FAC SUPPLIES_TO is preserved with penalty even though
 			// AH catalog says it should reverse (deposits are structurally upstream).
 			baseReason := fmt.Sprintf("edge direction invalid: %s -> %s (%s). Rule: %s",
 				sourceType, targetType, relationType, rule.Description)

@@ -1081,7 +1081,7 @@ func applySupplyChainDomainQuality(
 		return
 	}
 	d.Projections = dedupStrings(append(d.Projections,
-		"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "GEO_REGION", "DEPOSIT"), 12)
+		"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "GEO_REGION", "deposit"), 12)
 	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
 		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/deposit/", "/market/", "/loc/")...), 16)
 	if d.SupplyChainExecutionPlan == nil || len(d.SupplyChainExecutionPlan.Queries) == 0 {

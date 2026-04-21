@@ -568,38 +568,6 @@ func normalizeParsedSupplyChainPathLegs(legs []SupplyChainPathLeg) []SupplyChain
 	return merged
 }
 
-func rawSupplyChainPathLegMaps(raw interface{}) []map[string]interface{} {
-	switch value := raw.(type) {
-	case []map[string]interface{}:
-		return value
-	case []interface{}:
-		out := make([]map[string]interface{}, 0, len(value))
-		for _, item := range value {
-			legMap, ok := item.(map[string]interface{})
-			if !ok {
-				return nil
-			}
-			out = append(out, legMap)
-		}
-		return out
-	default:
-		return nil
-	}
-}
-
-func rawSupplyChainPathLegHasExplicitRouteOverlays(leg map[string]interface{}) bool {
-	if len(leg) == 0 {
-		return false
-	}
-	if _, ok := leg["routeOverlays"]; ok {
-		return true
-	}
-	if _, ok := leg["RouteOverlays"]; ok {
-		return true
-	}
-	return false
-}
-
 func decodeStringSlice(raw interface{}) ([]string, error) {
 	if raw == nil {
 		return nil, nil

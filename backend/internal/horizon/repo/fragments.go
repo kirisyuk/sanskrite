@@ -12,7 +12,6 @@ import (
 	"runtime/debug"
 	"sort"
 	"strings"
-	"sync"
 	"time"
 
 	"cloud.google.com/go/firestore"
@@ -455,7 +454,6 @@ type HorizonFragmentsRepository struct {
 	bucket        string
 	useGCS        bool
 	uploadLimiter *rate.Limiter // Rate limiter for GCS uploads
-	limiterMu     sync.Mutex
 	onUpsert      func(ctx context.Context, fragment *models.HorizonFragment) // Best-effort hook after create/update
 	// vertexSearchSync triggers Vertex AI Search import for specific GCS URIs.
 	// We pass the exact object URI to avoid Discovery Engine file expansion limits (max 1000 files per import).

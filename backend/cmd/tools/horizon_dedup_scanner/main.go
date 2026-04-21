@@ -21,6 +21,11 @@ import (
 	ah "github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
+// Category C — operational dedup scanner (exempt from the P13 legacy-token grep
+// oracle in docs/taxonomy/REMAINING_WORK_SPEC.md §9.4): this tool mutates live
+// Firestore fragments; keep relation/class handling aligned with ah.FragmentClass
+// and ah.RelationName, not ad hoc string literals outside this package.
+//
 // horizon_dedup_scanner finds potential duplicate ORG fragments that slipped past
 // real-time dedup (OrgDeduplicator + SessionGraph). It groups fragments by
 // NormalizeEntityName(legalName) and uses LLM to confirm whether candidates

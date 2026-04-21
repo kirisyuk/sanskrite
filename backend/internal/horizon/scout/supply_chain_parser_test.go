@@ -635,7 +635,7 @@ func TestParseSupplyChains_ExtractivePatternUsesExtractsFromAndAvoidsDepositSupp
 				},
 				{
 					CanonicalPath: "/deposit/iron-ore/carajas-complex",
-					Type:          "DEPOSIT",
+					Type:          "deposit",
 				},
 				{
 					CanonicalPath: "/product/raw/minerals/iron-ore",
@@ -666,7 +666,7 @@ func TestParseSupplyChains_ExtractivePatternUsesExtractsFromAndAvoidsDepositSupp
 		}
 	}
 	if !hasExtractsFrom {
-		t.Fatalf("expected EXTRACTS_FROM edge for FACILITY -> DEPOSIT")
+		t.Fatalf("expected EXTRACTS_FROM edge for FACILITY -> deposit")
 	}
 	if len(result.SupplyLinkSegments) != 0 {
 		t.Fatalf("extractive pattern should not produce actor->product->actor supply-link segments, got %d", len(result.SupplyLinkSegments))

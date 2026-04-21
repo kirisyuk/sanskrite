@@ -233,15 +233,15 @@ func registerAll() {
 		ExtractionBlock: `ENTITY TYPE: PRODUCT
 - Required execution order:
   1) Resolve canonical product taxonomy and aliases.
-  2) Build upstream/downstream product chain via TRANSFORMS_INTO, ASSEMBLES_INTO, and USED_IN where functional input semantics are explicit.
+  2) Build upstream/downstream product chain via transforms_into, assembles_into, and USED_IN where functional input semantics are explicit.
   3) Connect actors/facilities that PRODUCE/CONSUME this product.
   4) Fill key supply-chain evidence (volumes/capacity/contracts where available).
 - Identify critical infrastructure dependencies: transport chokepoints (straits, canals, pipelines) through which this product's supply chain flows. Create DEPENDS_ON edges to these infrastructure nodes.
 - Taxonomically correct edge types:
-  - Required/primary: TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, PRODUCES, SUPPLIES_TO
+  - Required/primary: transforms_into, assembles_into, USED_IN, PRODUCES, SUPPLIES_TO
   - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, TRADED_IN
   - Avoid: OWNS for actor-product commercial flows.
-  - Avoid: PRODUCT -> PRODUCT with PRODUCES; use TRANSFORMS_INTO for processing/refining, ASSEMBLES_INTO for direct assembly, and USED_IN for strong operational input semantics.
+  - Avoid: PRODUCT -> PRODUCT with PRODUCES; use transforms_into for processing/refining, assembles_into for direct assembly, and USED_IN for strong operational input semantics.
   - Avoid: APPLIES_TO unless source is an explicit /mechanism/... fragment.
 - Missing info priorities:
   - Missing upstream raw inputs.
@@ -250,15 +250,15 @@ func registerAll() {
 		ResearchBlock: `ENTITY TYPE: PRODUCT
 - Required execution order:
   1) Resolve canonical product taxonomy and aliases.
-  2) Build upstream/downstream product chain via TRANSFORMS_INTO, ASSEMBLES_INTO, and USED_IN where functional input semantics are explicit.
+  2) Build upstream/downstream product chain via transforms_into, assembles_into, and USED_IN where functional input semantics are explicit.
   3) Connect actors/facilities that PRODUCE/CONSUME this product.
   4) Fill key supply-chain evidence (volumes/capacity/contracts where available).
 - Identify critical infrastructure dependencies: transport chokepoints through which this product's supply chain flows. Create DEPENDS_ON edges.
 - Taxonomically correct edge types:
-  - Required/primary: TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, PRODUCES, SUPPLIES_TO
+  - Required/primary: transforms_into, assembles_into, USED_IN, PRODUCES, SUPPLIES_TO
   - Allowed when evidence exists: SUPPLIES_TO, DEPENDS_ON, TRADED_IN
   - Avoid: OWNS for actor-product commercial flows.
-  - Avoid: PRODUCT -> PRODUCT with PRODUCES; use TRANSFORMS_INTO for processing/refining, ASSEMBLES_INTO for direct assembly, and USED_IN for strong operational input semantics.
+  - Avoid: PRODUCT -> PRODUCT with PRODUCES; use transforms_into for processing/refining, assembles_into for direct assembly, and USED_IN for strong operational input semantics.
   - Avoid: APPLIES_TO unless source is an explicit /mechanism/... fragment.
 - Missing info priorities:
   - Missing upstream raw inputs.
@@ -266,11 +266,11 @@ func registerAll() {
   - Missing producer/facility nodes and chain continuity gaps.`,
 		MissingInfoRules: []MissingInfoRule{
 			{Trigger: TriggerFieldEmpty, FieldPath: "Labels.en", QuestionTemplate: "entity label/name in English for %s"},
-			{Trigger: TriggerRelationMissing, RelationType: "TRANSFORMS_INTO", QuestionTemplate: "What are the upstream materials and downstream derived, directly assembled, or functionally used-in products for %s (produced from / used to produce / assembled into / used in)? Return TRANSFORMS_INTO for processing/refining, ASSEMBLES_INTO for direct assembly, and USED_IN for strong operational input semantics between products."},
+			{Trigger: TriggerRelationMissing, RelationType: "transforms_into", QuestionTemplate: "What are the upstream materials and downstream derived, directly assembled, or functionally used-in products for %s (produced from / used to produce / assembled into / used in)? Return transforms_into for processing/refining, assembles_into for direct assembly, and USED_IN for strong operational input semantics between products."},
 			{Trigger: TriggerRelationCountBelow, MinCount: 1, QuestionTemplate: "relationships with other entities for %s"},
 			{Trigger: TriggerSeed, QuestionTemplate: "What products and services does %s produce/offer? Provide a canonical list of outputs suitable for /product/... paths."},
 			{Trigger: TriggerSeed, QuestionTemplate: "What key inputs/materials/components does %s consume? Provide a canonical list of inputs suitable for /product/... paths."},
-			{Trigger: TriggerSeed, QuestionTemplate: "What are the upstream materials and downstream derived, directly assembled, or functionally used-in products for %s (produced from / used to produce / assembled into / used in)? Return TRANSFORMS_INTO for processing/refining, ASSEMBLES_INTO for direct assembly, and USED_IN for strong operational input semantics between products."},
+			{Trigger: TriggerSeed, QuestionTemplate: "What are the upstream materials and downstream derived, directly assembled, or functionally used-in products for %s (produced from / used to produce / assembled into / used in)? Return transforms_into for processing/refining, assembles_into for direct assembly, and USED_IN for strong operational input semantics between products."},
 		},
 	}
 
@@ -536,7 +536,7 @@ func registerAll() {
 			{Key: "operators", Title: "Operators", Description: "Facilities extracting (EXTRACTS_FROM)", Required: false, Order: 2},
 			{Key: "reserves", Title: "Reserves & Production", Description: "Reserves, grade, metrics", Required: false, Order: 3},
 		},
-		ExtractionBlock: `ENTITY TYPE: DEPOSIT
+		ExtractionBlock: `ENTITY TYPE: deposit
 - Required execution order:
   1) Resolve resource class + geospatial placement.
   2) Resolve extraction operators/facilities (EXTRACTS_FROM from facility to deposit).
@@ -550,7 +550,7 @@ func registerAll() {
   - Missing operator facilities.
   - Missing reserves/grade/annual output.
   - Missing downstream resource transformation path.`,
-		ResearchBlock: `ENTITY TYPE: DEPOSIT
+		ResearchBlock: `ENTITY TYPE: deposit
 - Required execution order:
   1) Resolve resource class + geospatial placement.
   2) Resolve extraction operators/facilities (EXTRACTS_FROM from facility to deposit).
@@ -733,7 +733,7 @@ func registerAll() {
 			{Key: "route", Title: "Route & Logistics", Description: "Transport mode, route, chokepoints, lead time", Required: false, Order: 3},
 			{Key: "risks", Title: "Risks & Dependencies", Description: "Concentration risk, alternatives, disruption history", Required: false, Order: 4},
 		},
-		ExtractionBlock: `ENTITY TYPE: SUPPLY_LINK
+		ExtractionBlock: `ENTITY TYPE: supply_link
 - Canonical path: /supply-link/{tenant}/{supplier-slug}/{product-slug}/{customer-slug}. Tenant-scoped.
 - Required execution order:
   1) Resolve supplier and customer entities (SUPPLIES_TO direction: supplier → customer).
@@ -749,7 +749,7 @@ func registerAll() {
   - Missing product specification.
   - Missing volume/capacity metrics.
   - Missing route and infrastructure dependencies.`,
-		ResearchBlock: `ENTITY TYPE: SUPPLY_LINK
+		ResearchBlock: `ENTITY TYPE: supply_link
 - Canonical path: /supply-link/{tenant}/{supplier-slug}/{product-slug}/{customer-slug}. Tenant-scoped.
 - Required execution order:
   1) Resolve supplier and customer entities.
@@ -833,7 +833,7 @@ func registerAll() {
 }
 
 // supplyChainExtractionBlockOverrides: when domain mode is supply_chain, use these blocks instead.
-// No DEPENDS_ON; only PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, HAS_MARKET_SEGMENT.
+// No DEPENDS_ON; only PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN, EXTRACTS_FROM, LOCATED_IN, OPERATES_IN, HAS_MARKET_SEGMENT.
 var supplyChainExtractionBlockOverrides = map[EntityTypeKey]string{
 	EntityTypeOrganization: `ENTITY TYPE: ORGANIZATION (supply chain scope)
 - Required aspects: products (PRODUCES), customers/suppliers (SUPPLIES_TO), locations (LOCATED_IN, OPERATES_IN).
@@ -847,9 +847,9 @@ var supplyChainExtractionBlockOverrides = map[EntityTypeKey]string{
 - Taxonomically correct edge types: HAS_MARKET_SEGMENT, PARTICIPATES_IN only.
 - Missing info priorities: market segments, key players.`,
 	EntityTypeProduct: `ENTITY TYPE: PRODUCT (supply chain scope)
-- Required: TRANSFORMS_INTO / ASSEMBLES_INTO / USED_IN (upstream/downstream/product-use), PRODUCES (actor→product), SUPPLIES_TO (flow).
-- Do NOT use DEPENDS_ON. Use TRANSFORMS_INTO for processing/refining steps, ASSEMBLES_INTO for direct assembly steps, USED_IN for strong operational input semantics, and PRODUCES/SUPPLIES_TO for actor links.
-- Taxonomically correct edge types: TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, PRODUCES, SUPPLIES_TO.
+- Required: transforms_into / assembles_into / USED_IN (upstream/downstream/product-use), PRODUCES (actor→product), SUPPLIES_TO (flow).
+- Do NOT use DEPENDS_ON. Use transforms_into for processing/refining steps, assembles_into for direct assembly steps, USED_IN for strong operational input semantics, and PRODUCES/SUPPLIES_TO for actor links.
+- Taxonomically correct edge types: transforms_into, assembles_into, USED_IN, PRODUCES, SUPPLIES_TO.
 - Do NOT use PARTICIPATES_IN for PRODUCT -> MARKET. If market trading context is explicitly needed, use TRADED_IN only outside the operational supply-chain contract.
 - Missing info priorities: upstream inputs, downstream products, producers, consumers.`,
 	EntityTypeFacility: `ENTITY TYPE: FACILITY (supply chain scope)

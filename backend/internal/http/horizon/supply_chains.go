@@ -360,37 +360,6 @@ func artifactsFromSearchResults(results []supplyChainSearchResult) []*horizonmod
 	return out
 }
 
-func artifactContainsAllAnchors(artifact *horizonmodels.MaterializedArtifact, anchors []string) bool {
-	if artifact == nil {
-		return false
-	}
-	horizonmodels.PopulateSupplyChainPathIndexes(artifact)
-	have := make(map[string]struct{}, len(artifact.NodeRefs))
-	for _, ref := range artifact.NodeRefs {
-		have[strings.TrimSpace(ref)] = struct{}{}
-	}
-	parsed, _ := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
-	for _, anchor := range anchors {
-		anchor = strings.TrimSpace(anchor)
-		if anchor == "" {
-			continue
-		}
-		if isSupplyLinkAnchor(anchor) {
-			if !payloadContainsSupplyLinkAnchor(parsed, anchor) {
-				return false
-			}
-			continue
-		}
-		if _, ok := have[anchor]; ok {
-			continue
-		}
-		if !payloadContainsObjectAnchor(parsed, anchor) {
-			return false
-		}
-	}
-	return true
-}
-
 func buildSupplyChainSearchProjection(artifact *horizonmodels.MaterializedArtifact, anchors []string, maxLegs int) (float64, map[string]interface{}, map[string]interface{}) {
 	match := map[string]interface{}{}
 	parsed, err := horizonmodels.ParseSupplyChainPathPayload(artifact.Payload)
@@ -596,45 +565,12 @@ func inferCanonicalPathType(path string) string {
 	}
 }
 
-func isSupplyLinkAnchor(anchor string) bool {
-	return strings.HasPrefix(strings.TrimSpace(anchor), "/supply-link/")
-}
-
 func legMatchesAnchor(leg horizonmodels.SupplyChainPathLeg, anchor string) bool {
 	anchor = strings.TrimSpace(anchor)
 	if anchor == "" {
 		return false
 	}
 	return leg.SupplierRef == anchor || leg.CustomerRef == anchor || leg.ProductRef == anchor || leg.SupplyLinkCanonicalPath == anchor
-}
-
-func payloadContainsObjectAnchor(parsed *horizonmodels.SupplyChainPathPayload, anchor string) bool {
-	if parsed == nil {
-		return false
-	}
-	for _, leg := range parsed.Legs {
-		if leg.SupplierRef == anchor || leg.CustomerRef == anchor || leg.ProductRef == anchor {
-			return true
-		}
-	}
-	return false
-}
-
-func payloadContainsSupplyLinkAnchor(parsed *horizonmodels.SupplyChainPathPayload, anchor string) bool {
-	if parsed == nil {
-		return false
-	}
-	for _, leg := range parsed.Legs {
-		if strings.TrimSpace(leg.SupplyLinkCanonicalPath) == anchor {
-			return true
-		}
-	}
-	for _, edge := range parsed.Edges {
-		if strings.TrimSpace(edge.SupplyLinkCanonicalPath) == anchor {
-			return true
-		}
-	}
-	return false
 }
 
 func displayNameFromCanonicalPath(path string) string {

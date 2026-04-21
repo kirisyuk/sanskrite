@@ -75,11 +75,11 @@ var domainModeSynonyms = map[string]string{
 func EntityTypesForDomainMode(mode string) string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case DomainModeSupplyChain:
-		return "FACILITY (primary actor for supplies/produces), ORGANIZATION (OWNS, LOCATED_IN — supply flow endpoints are FACILITY), PRODUCT, GEO_REGION, DEPOSIT, COMMUNITY (informal trade), PROGRAM (procurement)"
+		return "FACILITY (primary actor for supplies/produces), ORGANIZATION (OWNS, LOCATED_IN — supply flow endpoints are FACILITY), PRODUCT, GEO_REGION, deposit, COMMUNITY (informal trade), PROGRAM (procurement)"
 	case DomainModeServiceChain:
 		return "FACILITY (service delivery site, data center, repair depot, network hub), ORGANIZATION (provider, reseller, managed-service operator), PRODUCT (including /product/service/... capabilities), MARKET, GEO_REGION, COMMUNITY (informal operators), PROGRAM (service contracts, procurement)"
 	case DomainModeGovernance:
-		return "ORGANIZATION (including /gov/ government bodies), FACILITY, DEPOSIT, PERSON, COMMUNITY (dynasty/tribe can OWNS), PROGRAM (ADMINISTERS target), MEDIA_CHANNEL (community control/mobilization channel)"
+		return "ORGANIZATION (including /gov/ government bodies), FACILITY, deposit, PERSON, COMMUNITY (dynasty/tribe can OWNS), PROGRAM (ADMINISTERS target), MEDIA_CHANNEL (community control/mobilization channel)"
 	case DomainModeAssurance:
 		return "ORGANIZATION (audit firms, certifiers, regulators as assurers), FACILITY, PRODUCT, PROGRAM (assurees)"
 	case DomainModeMarket:
@@ -126,7 +126,7 @@ func EntityActorTypesForDomainMode(mode string) string {
 // CONSUMES removed: use SUPPLIES_TO(product→org) for input flow. Single source of truth.
 // Must stay in sync with edgesemantics.domainModeAllowlists[supply_chain].
 var SupplyChainEdgeTypes = []string{
-	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "EXTRACTS_FROM",
+	"PRODUCES", "SUPPLIES_TO", "transforms_into", "assembles_into", "USED_IN", "EXTRACTS_FROM",
 	"LOCATED_IN", "OPERATES_IN", "PARTICIPATES_IN",
 	"HAS_MARKET_SEGMENT", "COMPETES_WITH", "PARTNERS_WITH", "OPERATES_VIA", "MEMBER_OF", "INVESTS_IN",
 	// AH RelationName aliases (lowercase) — admitted alongside the legacy
@@ -142,7 +142,7 @@ var SupplyChainEdgeTypes = []string{
 // Keep this tighter than ecosystem/governance, but broad enough to express
 // concrete service delivery dependencies and access/control gates.
 var ServiceChainEdgeTypes = []string{
-	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN",
+	"PRODUCES", "SUPPLIES_TO", "transforms_into", "assembles_into", "USED_IN",
 	"DEPENDS_ON", "CONTROLS_ACCESS", "OPERATES_VIA",
 	"LOCATED_IN", "OPERATES_IN", "PARTICIPATES_IN",
 	"HAS_MARKET_SEGMENT",
@@ -188,7 +188,7 @@ func IsSupplyChainEdgeType(t string) bool {
 // SupplyChainOperationalEdgeTypes are the only edge types for supply chain structural links (fac→fac, fac→product).
 // Use for "Use ONLY these" in supply chain prompts. Subset of SupplyChainEdgeTypes.
 var SupplyChainOperationalEdgeTypes = []string{
-	"PRODUCES", "SUPPLIES_TO", "TRANSFORMS_INTO", "ASSEMBLES_INTO", "USED_IN", "EXTRACTS_FROM",
+	"PRODUCES", "SUPPLIES_TO", "transforms_into", "assembles_into", "USED_IN", "EXTRACTS_FROM",
 }
 
 // SupplyChainOperationalEdgeTypesString returns comma-separated list for operational-link prompts.
@@ -290,11 +290,11 @@ func PolicyImpactEdgeTypesString() string {
 func AllowedEntityTypesForDomainMode(mode string) []string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case DomainModeSupplyChain:
-		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "GEO_REGION", "DEPOSIT", "COMMUNITY", "PROGRAM"}
+		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "GEO_REGION", "deposit", "COMMUNITY", "PROGRAM"}
 	case DomainModeServiceChain:
 		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "GEO_REGION", "COMMUNITY", "PROGRAM"}
 	case DomainModeGovernance:
-		return []string{"ORGANIZATION", "FACILITY", "DEPOSIT", "PERSON", "COMMUNITY", "PROGRAM", "MEDIA_CHANNEL"}
+		return []string{"ORGANIZATION", "FACILITY", "deposit", "PERSON", "COMMUNITY", "PROGRAM", "MEDIA_CHANNEL"}
 	case DomainModeAssurance:
 		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "PROGRAM"}
 	case DomainModeMarket:

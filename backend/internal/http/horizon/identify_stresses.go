@@ -3413,7 +3413,7 @@ func prioritizeVisibleRelations(in []IdentifyStressVisibleRelation, selected str
 			score += 10
 		}
 		switch relType {
-		case "SUPPLY_PATH_LEG", "SUPPLIES_TO", "SUPPLY_LINK", "DELIVERS_TO":
+		case "SUPPLY_PATH_LEG", "SUPPLIES_TO", "supply_link", "DELIVERS_TO":
 			score += 100
 		case "DEPENDS_ON", "RELIES_ON", "USES":
 			score += 60

@@ -24,7 +24,7 @@ const (
 // (supply_chain, governance, ...). All edge slices use the AH
 // relation name space.
 //
-// Under the AH taxonomy many legacy edges (TRANSFORMS_INTO, USED_IN,
+// Under the AH taxonomy many legacy edges (transforms_into, USED_IN,
 // HAS_MARKET_SEGMENT, OPERATES_IN, PARTICIPATES_IN ...) have been
 // folded into attributes / canonical_path / siteTransforms and are
 // no longer edges. Domain-mode profiles only enumerate AH-existing

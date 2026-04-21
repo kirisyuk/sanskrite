@@ -306,10 +306,10 @@ func ValidateSupplyLinkFields(f *HorizonFragment) error {
 	}
 	// SupplyLink can be tenant-scoped OR global-scoped (global = assumption layer).
 	if f.TenantID == "" {
-		return fmt.Errorf("tenantID must be set for SUPPLY_LINK")
+		return fmt.Errorf("tenantID must be set for supply_link")
 	}
 	if f.ProductRef == nil || strings.TrimSpace(*f.ProductRef) == "" {
-		return fmt.Errorf("productRef is required for SUPPLY_LINK")
+		return fmt.Errorf("productRef is required for supply_link")
 	}
 	// Validate productRef is a valid canonical path
 	if !strings.HasPrefix(*f.ProductRef, "/product/") {
@@ -350,7 +350,7 @@ func ValidateSupplyLinkFields(f *HorizonFragment) error {
 	// At least one of SupplierRef or CustomerRef must be set
 	if (f.SupplierRef == nil || strings.TrimSpace(*f.SupplierRef) == "") &&
 		(f.CustomerRef == nil || strings.TrimSpace(*f.CustomerRef) == "") {
-		return fmt.Errorf("at least one of supplierRef or customerRef must be set for SUPPLY_LINK")
+		return fmt.Errorf("at least one of supplierRef or customerRef must be set for supply_link")
 	}
 	return nil
 }

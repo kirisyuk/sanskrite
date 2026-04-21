@@ -27,23 +27,6 @@ const (
 
 type FacilityKind string
 
-// facilityKindSlugHints maps FacilityKind to slug substrings (lowercase) for heuristic detection.
-// Order matters: more specific hints first (e.g. "lng-terminal" before "terminal").
-var facilityKindSlugHints = map[FacilityKind][]string{
-	FacilityKindPipeline:   {"pipeline", "pipe"},
-	FacilityKindRefinery:   {"refinery", "refining"},
-	FacilityKindTerminal:   {"lng-terminal", "terminal", "storage", "tank"},
-	FacilityKindMine:       {"mine", "mining"},
-	FacilityKindSeaport:    {"port", "seaport", "harbor", "harbour"},
-	FacilityKindAirport:    {"airport"},
-	FacilityKindPowerPlant: {"power-plant", "powerplant", "solar", "wind", "renewable"},
-	FacilityKindDatacenter: {"datacenter", "data-center"},
-	FacilityKindFactory:    {"factory", "fab", "gigafactory", "foundry"},
-	FacilityKindSubstation: {"substation", "grid"},
-	FacilityKindCable:      {"cable", "submarine-cable", "subsea-cable", "fiber", "optic"},
-	FacilityKindWarehouse:  {"warehouse", "depot", "distribution-center"},
-}
-
 func normalizeFacilitySignalText(raw string) string {
 	raw = strings.ToLower(strings.TrimSpace(raw))
 	if raw == "" {

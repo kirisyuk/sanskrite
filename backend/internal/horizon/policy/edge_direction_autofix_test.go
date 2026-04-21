@@ -175,13 +175,13 @@ func TestResolveEdgeDirectionAutoFixDepositAdministersOrg(t *testing.T) {
 		classOrganization,
 	)
 	if !ok {
-		t.Fatalf("expected auto-fix for DEPOSIT ADMINISTERS ORGANIZATION")
+		t.Fatalf("expected auto-fix for deposit ADMINISTERS ORGANIZATION")
 	}
 	if fix.NewType != relAdministers {
 		t.Fatalf("expected newType ADMINISTERS (unchanged), got %s", fix.NewType)
 	}
 	if !fix.ShouldSwap {
-		t.Fatalf("expected shouldSwap=true (ORG ADMINISTERS DEPOSIT)")
+		t.Fatalf("expected shouldSwap=true (ORG ADMINISTERS deposit)")
 	}
 }
 

@@ -1758,7 +1758,7 @@ func (b *SupplyChainPathBuilder) pathToMaterializedPayload(ctx context.Context, 
 		}
 		leg.Stress = stressEval.EvaluateLeg(leg)
 
-		// Create SUPPLY_LINK edge
+		// Create supply_link edge
 		if supplierIdx >= 0 && customerIdx >= 0 && productIdx >= 0 {
 			segmentIdx := i
 			edges = append(edges, models.SupplyChainPathEdge{

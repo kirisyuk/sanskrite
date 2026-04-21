@@ -42,7 +42,7 @@ func buildSpecializationModulesBlock(specialties []string, domainModes []string,
 	if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyProductsAndServices) {
 		b.WriteString("MODULE: products_and_services (outputs + inputs + transformations)\n")
 		b.WriteString("- For ORG/FAC: outputs via PRODUCES, inputs via SUPPLIES_TO(product→org).\n")
-		b.WriteString("- For PRODUCT: upstream/downstream value-chain via TRANSFORMS_INTO, plus direct final assembly via ASSEMBLES_INTO.\n")
+		b.WriteString("- For PRODUCT: upstream/downstream value-chain via transforms_into, plus direct final assembly via assembles_into.\n")
 		b.WriteString("- Use canonical /product/{category}/{type}/{stage}/{slug} paths consistently.\n")
 		b.WriteString("- Product/material names: prefer singular canonical terms; avoid brand prefixes unless officially part of the name.\n\n")
 	}
@@ -181,7 +181,7 @@ func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragm
 			b.WriteString("- For route facilities, prioritize suppliers and logistics companies by business semantics (DEPENDS_ON facet=supply/logistics, SUPPLIES_TO where flow is explicit).\n")
 		}
 	case entity_semantics.EntityTypeProduct:
-		b.WriteString("- Prioritize canonical product taxonomy, then upstream/downstream transformations (TRANSFORMS_INTO), direct assembly steps (ASSEMBLES_INTO), and actor links.\n")
+		b.WriteString("- Prioritize canonical product taxonomy, then upstream/downstream transformations (transforms_into), direct assembly steps (assembles_into), and actor links.\n")
 	case entity_semantics.EntityTypeMarket:
 		b.WriteString("- Prioritize market hierarchy (HAS_MARKET_SEGMENT), key players (PARTICIPATES_IN), and concentration/sizing metrics.\n")
 	case entity_semantics.EntityTypeGeoRegion:

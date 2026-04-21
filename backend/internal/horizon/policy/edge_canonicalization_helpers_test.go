@@ -49,7 +49,7 @@ func TestCanonicalizeEdgeWithPaths_LegacyRewrites(t *testing.T) {
 			wantChange:  false,
 		},
 		{
-			name:        "PRODUCT PRODUCES PRODUCT -> TRANSFORMS_INTO",
+			name:        "PRODUCT PRODUCES PRODUCT -> transforms_into",
 			edgeType:    relProduces,
 			sourceClass: ah.FragmentClassProduct,
 			targetClass: ah.FragmentClassProduct,

@@ -157,7 +157,7 @@ func TestValidationPolicy_ExtractsFromAndKeyPersonRulesPresent(t *testing.T) {
 		classDeposit,
 	)
 	if !okExtracts {
-		t.Fatalf("expected EXTRACTS_FROM FACILITY -> DEPOSIT to be valid")
+		t.Fatalf("expected EXTRACTS_FROM FACILITY -> deposit to be valid")
 	}
 
 	okKeyPerson, _, _ := p.validateEdgeDirection(
@@ -561,7 +561,7 @@ func TestValidationPolicy_DepositToOrgSuppliesToGetsPenaltyInsteadOfQuarantine(t
 		t.Fatalf("Decide() error = %v", err)
 	}
 	if decision.Action != ActionAllowWithPenalty {
-		t.Fatalf("expected %s for DEPOSIT->ORG SUPPLIES_TO shortcut, got %s", ActionAllowWithPenalty, decision.Action)
+		t.Fatalf("expected %s for deposit->ORG SUPPLIES_TO shortcut, got %s", ActionAllowWithPenalty, decision.Action)
 	}
 	if got, _ := decision.Params["edgeModality"].(string); got != "potential" {
 		t.Fatalf("expected edgeModality=potential, got %q", got)

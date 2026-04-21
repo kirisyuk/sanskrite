@@ -10,7 +10,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
-// LeafEvidenceCollector collects physical signals at terminal nodes (FACILITY, DEPOSIT, AFFECTED_ZONE, GEO_REGION).
+// LeafEvidenceCollector collects physical signals at terminal nodes (FACILITY, deposit, AFFECTED_ZONE, GEO_REGION).
 type LeafEvidenceCollector struct {
 	eventFactsResolver horizoninterp.EventFactsResolver
 }
@@ -21,7 +21,7 @@ func NewLeafEvidenceCollector(eventFactsResolver horizoninterp.EventFactsResolve
 }
 
 // Leaf fragment classes that accumulate real-world signals. Under the AH
-// taxonomy the legacy FACILITY/DEPOSIT both fold into class=site and
+// taxonomy the legacy FACILITY/deposit both fold into class=site and
 // GEO_REGION/AFFECTED_ZONE both fold into class=geo, so a class-level
 // allowlist captures the same set without needing subtype awareness.
 var leafFragmentClasses = map[ah.FragmentClass]bool{

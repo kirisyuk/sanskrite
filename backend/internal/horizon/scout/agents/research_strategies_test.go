@@ -19,10 +19,10 @@ func TestSupplyChainEnrichmentPrompt_OnlyCanonicalTypes(t *testing.T) {
 		MissingInfo: []string{"Find suppliers"},
 	}
 	prompt := a.buildSupplyChainEnrichmentPrompt(input)
-	// Operational types only (fractal model): PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM
+	// Operational types only (fractal model): PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN, EXTRACTS_FROM
 	if !strings.Contains(prompt, "PRODUCES") || !strings.Contains(prompt, "SUPPLIES_TO") ||
-		!strings.Contains(prompt, "TRANSFORMS_INTO") || !strings.Contains(prompt, "ASSEMBLES_INTO") || !strings.Contains(prompt, "USED_IN") || !strings.Contains(prompt, "EXTRACTS_FROM") {
-		t.Error("SupplyChain prompt should list operational types: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM")
+		!strings.Contains(prompt, "transforms_into") || !strings.Contains(prompt, "assembles_into") || !strings.Contains(prompt, "USED_IN") || !strings.Contains(prompt, "EXTRACTS_FROM") {
+		t.Error("SupplyChain prompt should list operational types: PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN, EXTRACTS_FROM")
 	}
 	if !strings.Contains(strings.ToUpper(prompt), "USE ONLY") {
 		t.Error("SupplyChain prompt should restrict to canonical types only (Use ONLY ...)")
@@ -599,7 +599,7 @@ func TestSupplyChainEnrichmentPrompt_StrictSupplyChainsContractBlock(t *testing.
 	for _, want := range []string{
 		"SUPPLY CHAINS JSON CONTRACT (STRICT):",
 		"\"nodes\": REQUIRED array of objects (NOT string and NOT shorthand)",
-		"ORGANIZATION|FACILITY|PRODUCT|DEPOSIT",
+		"ORGANIZATION|FACILITY|PRODUCT|deposit",
 		"INVALID shape example: \"nodes\": \"A -> B -> C\"",
 	} {
 		if !strings.Contains(prompt, want) {
@@ -674,7 +674,7 @@ func TestInferCanonicalPathFromNameAndType(t *testing.T) {
 		{"Shanghai Port", "FACILITY", "/fac/discovered/shanghai-port"},
 		{"EU Automotive", "MARKET", "/market/discovered/eu-automotive"},
 		{"East Asia", "GEO_REGION", "/loc/discovered/east-asia"},
-		{"Iron Ore Mine", "DEPOSIT", "/deposit/discovered/iron-ore-mine"},
+		{"Iron Ore Mine", "deposit", "/deposit/discovered/iron-ore-mine"},
 		{"", "ORGANIZATION", ""},
 		{"   ", "ORGANIZATION", ""},
 	}

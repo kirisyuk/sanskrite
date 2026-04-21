@@ -509,7 +509,7 @@ func extractionAllowedRelationTypesByDomainModes(domainModes []string) []string 
 		}
 	}
 	// Supply-chain mode allows OWNS/CONTROLS for supply-relevant ownership/control links
-	// (ORG/GOV -> ORG/FAC/DEPOSIT). We include both in generation guardrails
+	// (ORG/GOV -> ORG/FAC/deposit). We include both in generation guardrails
 	// and enforce exact path predicate during phase-A filtering.
 	if taxonomy.HasDomainMode(specific, taxonomy.DomainModeSupplyChain) ||
 		taxonomy.HasDomainMode(specific, taxonomy.DomainModeServiceChain) {
@@ -614,14 +614,14 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) ||
 		taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeServiceChain) {
 		b.WriteString(`   SUPPLY CHAIN MODE (operational edges only):
-   - Do NOT use DEPENDS_ON for supply links. Use PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM.
+   - Do NOT use DEPENDS_ON for supply links. Use PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN, EXTRACTS_FROM.
    - Operational type matrix (hard contract):
-     - PRODUCES: ORGANIZATION|FACILITY|DEPOSIT -> PRODUCT
+     - PRODUCES: ORGANIZATION|FACILITY|deposit -> PRODUCT
      - SUPPLIES_TO: ORGANIZATION|FACILITY|PRODUCT -> ORGANIZATION|FACILITY
-     - TRANSFORMS_INTO: PRODUCT -> PRODUCT (upstream -> downstream processing)
-     - ASSEMBLES_INTO: PRODUCT -> PRODUCT (component/subassembly -> assembled downstream product)
+     - transforms_into: PRODUCT -> PRODUCT (upstream -> downstream processing)
+     - assembles_into: PRODUCT -> PRODUCT (component/subassembly -> assembled downstream product)
      - USED_IN: PRODUCT -> PRODUCT (strong operational input, not transformation, not assembly)
-     - EXTRACTS_FROM: FACILITY -> DEPOSIT
+     - EXTRACTS_FROM: FACILITY -> deposit
    - For actor↔actor SUPPLIES_TO links, include qualifiers.source_role=supplier and qualifiers.target_role=customer.
    - OWNS is allowed ONLY for supply-relevant ownership:
      source MUST be /org/... or /gov/... and target MUST be /org/... or /fac/... or /deposit/....
@@ -633,12 +633,12 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
      Do NOT emit CONTROLS for markets/programs/abstract entities.
    - LOCATED_IN/OPERATES_IN only for geo/facility anchoring.
      - LOCATED_IN target MUST be GEO_REGION.
-     - OPERATES_IN source MUST be ORGANIZATION|PERSON, target MUST be GEO_REGION|FACILITY|DEPOSIT.
+     - OPERATES_IN source MUST be ORGANIZATION|PERSON, target MUST be GEO_REGION|FACILITY|deposit.
      - MARKET MUST NOT be source for OPERATES_IN.
    - PARTICIPATES_IN: ORG/FACILITY -> MARKET (commercial market participation). For "market depends on org" use PARTICIPATES_IN with ORG as source.
    - TRADED_IN: PRODUCT -> MARKET only for product trading/price-discovery context.
    - MARKET source guard in supply_chain: MARKET may emit only PARTICIPATES_IN and HAS_MARKET_SEGMENT (plus DOMAIN scaffold when source is /domain/...).
-     Never emit PRODUCES/SUPPLIES_TO/TRANSFORMS_INTO/ASSEMBLES_INTO/USED_IN/EXTRACTS_FROM/OPERATES_IN from MARKET.
+     Never emit PRODUCES/SUPPLIES_TO/transforms_into/assembles_into/USED_IN/EXTRACTS_FROM/OPERATES_IN from MARKET.
    - REGULATES: GOV entity (/gov/...) -> MARKET or ORG (domestic regulatory oversight). NEVER use DEPENDS_ON for government regulation.
    - ADMINISTERS: GOV entity (/gov/...) -> subordinate GOV/PROGRAM/FACILITY (administrative hierarchy).
    - For transmission/capacity add throughput_share, capacity_constraint, reroute_penalty when known.
@@ -798,7 +798,7 @@ func (a *ScoutAgent) buildExtractionPrompt(content string, targetCanonicalPath s
 - Fallback model (only when concrete production facility is unknown or not separable for a small org): org → product.
 - Use /org/ for organizations, /fac/ for facilities, /product/ for products, /deposit/ for deposits. Do NOT invent synthetic /fac/*-general-production placeholders.
 - Each chain has: nodes[], confidence, reason, optional transportVia[] (but expected for route-sensitive legs when inferable).
-- Node shape: canonicalPath (REQUIRED), name (REQUIRED), type (REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|DEPOSIT), role?
+- Node shape: canonicalPath (REQUIRED), name (REQUIRED), type (REQUIRED enum: ORGANIZATION|FACILITY|PRODUCT|deposit), role?
 - Nodes follow: org → fac → product → fac → org (1-to-many at each level). org → product is allowed only for unknown/non-separated production.
 - Include FACILITY where transformation occurs (product → facility → product).
 - For extractive flows: facility → deposit → product.

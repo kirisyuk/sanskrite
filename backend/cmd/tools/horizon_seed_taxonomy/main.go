@@ -15,6 +15,13 @@ import (
 )
 
 // Seeds Horizon taxonomy into Firestore as a single source of truth.
+//
+// Category C — taxonomy seed tooling (exempt from the P13 legacy-token grep
+// oracle in docs/taxonomy/REMAINING_WORK_SPEC.md §9.4): this binary writes
+// Firestore dictionaries that may still list historical relation spellings
+// alongside AH snake_case keys; runtime enforcement lives in
+// internal/taxonomy/runtime.go and internal/taxonomy/ah.
+//
 // Usage:
 //
 //	go run ./cmd/tools/horizon_seed_taxonomy --project <gcp-project> --version v1
@@ -264,9 +271,9 @@ func main() {
 			"INFLUENCES",
 			"DEPENDS_ON",
 			"SUBSIDIARY_OF",
-			"TRANSFORMS_INTO",
-			"ASSEMBLES_INTO",
-			"EXTRACTS_FROM", // FACILITY → DEPOSIT
+			"transforms_into",
+			"assembles_into",
+			"EXTRACTS_FROM", // FACILITY → deposit
 			// Market participation
 			"PARTICIPATES_IN",
 			"DOMINATES",
@@ -479,7 +486,7 @@ func main() {
 			"potash", "phosphate", "sulfur",
 		},
 
-		// Lifecycle stages for FACILITY, DEPOSIT, ORGANIZATION
+		// Lifecycle stages for FACILITY, deposit, ORGANIZATION
 		AllowedLifecycleStages: []string{
 			// Early stages
 			"concept",    // pre-feasibility

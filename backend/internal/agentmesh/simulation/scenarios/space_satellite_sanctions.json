@@ -32,7 +32,7 @@
       "/fac/cn/wenchang-port"
     ],
     "requiredEdgeTypes": [
-      "SUPPLY_LINK",
+      "supply_link",
       "DEPENDS_ON",
       "REGULATES",
       "INFLUENCES",

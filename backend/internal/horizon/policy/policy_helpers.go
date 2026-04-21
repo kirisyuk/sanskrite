@@ -285,15 +285,15 @@ func CanonicalizeEdgeWithPaths(
 		}
 	}
 
-	// PRODUCT transition kind: TRANSFORMS_INTO -> ASSEMBLES_INTO when paths fit.
+	// PRODUCT transition kind: transforms_into -> assembles_into when paths fit.
 	if rel == relTransformsInto &&
 		sourceClass == ah.FragmentClassProduct && targetClass == ah.FragmentClassProduct &&
 		productToProductRelationFromPaths(src, tgt) == relAssemblesInto {
 		return relAssemblesInto, false, true,
-			"canonicalize: PRODUCT transition promoted to ASSEMBLES_INTO by product category/stage"
+			"canonicalize: PRODUCT transition promoted to assembles_into by product category/stage"
 	}
 
-	// PRODUCT PRODUCES PRODUCT -> TRANSFORMS_INTO (or ASSEMBLES_INTO via paths).
+	// PRODUCT PRODUCES PRODUCT -> transforms_into (or assembles_into via paths).
 	// Legacy PRODUCES between two products is a transformation, not a creation
 	// relation. Re-route to the AH transform/assembly relation.
 	if rel == relProduces &&
@@ -431,10 +431,6 @@ func CanonicalizationPenalty(
 // =============================================================================
 // EVIDENCE / OWNERSHIP HEURISTIC
 // =============================================================================
-
-type metricLike interface {
-	GetValue() float64
-}
 
 // HasOwnershipEvidence reports whether the supplied reason / qualifiers /
 // metrics carry ownership semantics (legal stake, voting rights, control

@@ -20,7 +20,7 @@ import (
 // PRODUCT HIERARCHY POLICY
 // =============================================================================
 // Products form value chains where materials transform into other materials.
-// This policy automatically creates TRANSFORMS_INTO edges based on Wikidata
+// This policy automatically creates transforms_into edges based on Wikidata
 // value chain relationships (P10565 "is produced from", P186 "material used").
 //
 // When a new product is created:
@@ -28,7 +28,7 @@ import (
 // 2. Extract downstream products (via SPARQL reverse lookup)
 // 3. For each related product (up to 3 levels up, 3 levels down):
 //    - Deduplicate and create if new
-//    - Create TRANSFORMS_INTO edge
+//    - Create transforms_into edge
 // 4. Fill entityPath from Wikidata (P31, P279)
 //
 // TODO: Make hierarchy building asynchronous via job queue
@@ -69,7 +69,7 @@ func NewProductHierarchyBuilder(
 }
 
 // EnsureProductHierarchy builds value chain hierarchy for a product fragment.
-// Creates upstream (3 levels) and downstream (3 levels) products with TRANSFORMS_INTO edges.
+// Creates upstream (3 levels) and downstream (3 levels) products with transforms_into edges.
 func (b *ProductHierarchyBuilder) EnsureProductHierarchy(
 	ctx context.Context,
 	fragmentID string,
@@ -252,7 +252,7 @@ func (b *ProductHierarchyBuilder) buildUpstreamHierarchy(
 			continue // Best effort
 		}
 
-		// Create TRANSFORMS_INTO edge: upstream → current
+		// Create transforms_into edge: upstream → current
 		if err := b.ensureTransformsIntoEdge(ctx, upstreamFragment.ID, fragmentID, provenanceMethod, sourceID); err != nil {
 			continue // Best effort
 		}
@@ -322,7 +322,7 @@ func (b *ProductHierarchyBuilder) buildDownstreamHierarchy(
 			continue
 		}
 
-		// Create TRANSFORMS_INTO edge: current → downstream
+		// Create transforms_into edge: current → downstream
 		if err := b.ensureTransformsIntoEdge(ctx, fragmentID, childFragment.ID, provenanceMethod, sourceID); err != nil {
 			continue
 		}
@@ -500,7 +500,7 @@ func (b *ProductHierarchyBuilder) ensureProductFromWikidata(
 	return f, nil
 }
 
-// ensureTransformsIntoEdge creates a TRANSFORMS_INTO edge from source to target if it doesn't exist.
+// ensureTransformsIntoEdge creates a transforms_into edge from source to target if it doesn't exist.
 func (b *ProductHierarchyBuilder) ensureTransformsIntoEdge(
 	ctx context.Context,
 	sourceID, targetID, provenanceMethod, sourceIDParam string,
@@ -518,7 +518,7 @@ func (b *ProductHierarchyBuilder) ensureTransformsIntoEdge(
 		return err
 	}
 
-	// Create TRANSFORMS_INTO edge
+	// Create transforms_into edge
 	edge := &models.DependencyEdge{
 		TenantID:         "global",
 		SourceFragmentID: sourceID,
@@ -562,10 +562,10 @@ func (b *ProductHierarchyBuilder) ensureTransformsIntoEdge(
 			}
 		}
 		if srcCP != "" || dstCP != "" {
-			fmt.Printf("[ProductHierarchyBuilder] Created TRANSFORMS_INTO (wikidata) edge: %s -> %s (sourceID=%s targetID=%s)\n",
+			fmt.Printf("[ProductHierarchyBuilder] Created transforms_into (wikidata) edge: %s -> %s (sourceID=%s targetID=%s)\n",
 				srcCP, dstCP, sourceID, targetID)
 		} else {
-			fmt.Printf("[ProductHierarchyBuilder] Created TRANSFORMS_INTO (wikidata) edge: sourceID=%s targetID=%s\n", sourceID, targetID)
+			fmt.Printf("[ProductHierarchyBuilder] Created transforms_into (wikidata) edge: sourceID=%s targetID=%s\n", sourceID, targetID)
 		}
 	}
 	return err

@@ -158,7 +158,7 @@ func IsHorizonMonitorGeoUpdatableClass(c ah.FragmentClass) bool {
 // (Class, Subtype) tuple is eligible for the Horizon Monitor geo refresh
 // pipeline. Replaces the legacy IsHorizonMonitorGeoUpdatableType helper
 // which keyed on the now-removed FragmentType enum (notably FACILITY,
-// DEPOSIT, EVENT, TRACK — all collapsed into AH classes here, with the
+// deposit, EVENT, TRACK — all collapsed into AH classes here, with the
 // subtype carrying the specialised gate).
 func IsHorizonMonitorGeoUpdatableFragment(f *HorizonFragment) bool {
 	if f == nil {

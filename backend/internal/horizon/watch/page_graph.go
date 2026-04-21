@@ -428,7 +428,7 @@ func buildGraphProductItems(graph *lensDiagnosticGraph, now time.Time) []horizon
 		product.score += maxFloat(0.6, 2.5-float64(maxInt(1, relation.Hop))/2)
 		product.backings = compactUnique(append(product.backings, relation.EdgeID, relation.RelatedFragmentID))
 		// In AH the only edge that directly touches a product fragment is `produces`
-		// (org/site → product). Legacy CONSUMES / TRANSFORMS_INTO / ASSEMBLES_INTO no
+		// (org/site → product). Legacy CONSUMES / transforms_into / assembles_into no
 		// longer manifest as product-edges: CONSUMES collapses into `supplies` between
 		// sites/orgs (with the carried product on attributes), and the transform chain
 		// lives as siteTransforms[] attributes on site fragments. The lens-diagnostic
@@ -1003,7 +1003,7 @@ func isLensDiagnosticContextRelation(edgeType string) bool {
 // describeLensDiagnosticRelation produces a human-readable narrative for an
 // edge in the lens diagnostic graph. All cases are AH RelationNames; legacy
 // UPPER_SNAKE values that no longer exist as graph edges (LOCATED_IN /
-// OPERATES_IN / TRANSFORMS_INTO / ASSEMBLES_INTO / CONSUMES / DEPENDS_ON)
+// OPERATES_IN / transforms_into / assembles_into / CONSUMES / DEPENDS_ON)
 // have been folded into attributes/canonical_path/siteTransforms or expanded
 // per-pair upstream and so never reach this switch.
 func describeLensDiagnosticRelation(centerLabel string, relation lensDiagnosticRelation) string {
@@ -1034,7 +1034,7 @@ func describeLensDiagnosticRelation(centerLabel string, relation lensDiagnosticR
 
 // lensDiagnosticRelationPriority orders relations by surface impact for the
 // lens diagnostic UI. AH RelationNames only; legacy values (CONSUMES,
-// TRANSFORMS_INTO, ASSEMBLES_INTO, LOCATED_IN, OPERATES_IN, DEPENDS_ON) no
+// transforms_into, assembles_into, LOCATED_IN, OPERATES_IN, DEPENDS_ON) no
 // longer exist as edges in the AH graph and so don't appear here.
 func lensDiagnosticRelationPriority(edgeType string) int {
 	switch strings.TrimSpace(edgeType) {
@@ -1075,8 +1075,8 @@ func lensDiagnosticSignalTitle(relation lensDiagnosticRelation) string {
 
 // isLensSupplyRelevantRelation returns true for AH RelationNames that carry
 // supply-chain pressure into the lens diagnostic. The legacy set spanned
-// SUPPLIES_TO, CONSUMES, EXTRACTS_FROM, AFFECTS, DEPENDS_ON, TRANSFORMS_INTO,
-// ASSEMBLES_INTO, LOCATED_IN, OPERATES_IN, PARTICIPATES_IN, TRADED_IN. Under
+// SUPPLIES_TO, CONSUMES, EXTRACTS_FROM, AFFECTS, DEPENDS_ON, transforms_into,
+// assembles_into, LOCATED_IN, OPERATES_IN, PARTICIPATES_IN, TRADED_IN. Under
 // AH most of those collapse: the transform/assemble pair lives on
 // siteTransforms[] (no edge), CONSUMES reverses into `supplies`, EXTRACTS_FROM
 // renames to `produces`, AFFECTS becomes `disrupts`, geographic context moves
@@ -1114,7 +1114,7 @@ func filterSupplyRelevantRelations(in []lensDiagnosticRelation) []lensDiagnostic
 
 // isLensGraphSignalRelation gates whether an edge contributes a graph-derived
 // signal item to the lens diagnostic. AH RelationNames only; legacy CONSUMES /
-// TRANSFORMS_INTO / ASSEMBLES_INTO collapse onto attributes (not edges) so
+// transforms_into / assembles_into collapse onto attributes (not edges) so
 // they no longer reach this gate, and DEPENDS_ON expands per-pair into
 // supplies / requires_capability / subject_to / etc.
 func isLensGraphSignalRelation(graph *lensDiagnosticGraph, relation lensDiagnosticRelation) bool {

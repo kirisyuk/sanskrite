@@ -26,7 +26,6 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
-	"github.com/igorkirisyuk/sanskrite/internal/horizon/signals"
 	telemetry "github.com/igorkirisyuk/sanskrite/internal/horizon/telemetrycollector"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
@@ -2004,7 +2003,7 @@ func (e *ScoutEngine) applyDimensionWavesFromAppliedFacts(
 			return ex, nil
 		}
 		// MIGRATION NOTE (AH taxonomy): legacy FragmentTypes that fold onto a
-		// shared parent class (PROGRAM/MEDIA → org, DEPOSIT/SUPPLY_LINK → site,
+		// shared parent class (PROGRAM/MEDIA → org, deposit/supply_link → site,
 		// AFFECTED_ZONE → geo, DOMAIN/SPHERE → evidence) need to carry a
 		// Subtype on the fragment for downstream class/subtype predicates (e.g. deposit, supply_link).
 		// Derive subtype from the canonical path prefix.
@@ -2295,7 +2294,6 @@ type ScoutEngine struct {
 	propagationTrigger        func(ctx context.Context, fragmentID string) error
 	signalPropagationEngine   *propagation.PropagationEngine
 	signalProfileLookup       *propagation.ProfileLookup
-	signalSynthesizer         *signals.Synthesizer              // Optional: for signal synthesis from facts
 	factsRepo                 *corerepo.OntologyFactsRepository // Optional: for saving synthesized signals
 	factEmitter               *coreontology.FactEmitter         // Optional: unified fact emission (write + feed)
 	geoHierarchyBuilder       *GeoHierarchyBuilder              // Auto-creates geo hierarchy when cities are created
@@ -2434,9 +2432,9 @@ func (e *ScoutEngine) bestEffortMergeLensResearchObjects(ctx context.Context, le
 
 // isScopeEligibleEntityType returns true for entity types that should be auto-added
 // to the lens scope when discovered by the pipeline. Excludes small/auxiliary types
-// (SPHERE, TRACK, EVENT, SUPPLY_LINK) to keep the scope meaningful.
+// (SPHERE, TRACK, EVENT, supply_link) to keep the scope meaningful.
 func isScopeEligibleEntityType(ft FragmentType) bool {
-	// Legacy DEPOSIT/PROGRAM fold onto site/org under AH and are therefore covered
+	// Legacy deposit/PROGRAM fold onto site/org under AH and are therefore covered
 	// by ah.FragmentClassSite / ah.FragmentClassOrg.
 	switch ft {
 	case ah.FragmentClassOrg,
@@ -4736,7 +4734,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			// For product nodes, request value chain transformations (product→product).
 			if strings.HasPrefix(strings.TrimSpace(job.TargetCanonicalPath), "/product/") {
 				validationResult.MissingInfo = append(validationResult.MissingInfo,
-					fmt.Sprintf("What materials is %s produced from, and what products does it transform into, assemble into, or get used in? Return TRANSFORMS_INTO for processing/refining, ASSEMBLES_INTO for direct assembly between products, and USED_IN for strong operational input semantics. Format: JSON.", job.TargetCanonicalPath),
+					fmt.Sprintf("What materials is %s produced from, and what products does it transform into, assemble into, or get used in? Return transforms_into for processing/refining, assembles_into for direct assembly between products, and USED_IN for strong operational input semantics. Format: JSON.", job.TargetCanonicalPath),
 				)
 			}
 		}

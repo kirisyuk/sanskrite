@@ -3822,7 +3822,7 @@ func affectedZoneFallbackTargetScore(candidate *affectedZoneCandidate, frag *hor
 		return 0
 	}
 	score := base
-	// Legacy DEPOSIT is site/deposit and legacy PROGRAM is org/program under the
+	// Legacy deposit is site/deposit and legacy PROGRAM is org/program under the
 	// AH taxonomy; disambiguate via predicates before falling back to the bare class.
 	switch {
 	case frag.IsDepositSite():
@@ -3924,7 +3924,7 @@ func (p *HorizonMonitorPipeline) relatedAffectedZoneFragments(
 		if err != nil || target == nil || strings.TrimSpace(target.ID) == "" {
 			return
 		}
-		// FragmentTypeFacility (=site) already covers legacy DEPOSIT under AH taxonomy.
+		// FragmentTypeFacility (=site) already covers legacy deposit under AH taxonomy.
 		if target.Class != FragmentTypeFacility &&
 			target.Class != FragmentTypeOrganization &&
 			target.Class != FragmentTypeProduct &&
@@ -3934,7 +3934,7 @@ func (p *HorizonMonitorPipeline) relatedAffectedZoneFragments(
 		out = append(out, target)
 	}
 	switch frag.Class {
-	// FragmentTypeFacility (=site) already covers legacy DEPOSIT under AH taxonomy.
+	// FragmentTypeFacility (=site) already covers legacy deposit under AH taxonomy.
 	case FragmentTypeFacility:
 		for _, edgeType := range []DependencyType{
 			DependencyTypeOwns,
@@ -4025,7 +4025,7 @@ func isGeoRegionLikeFragment(f *horizonmodels.HorizonFragment) bool {
 }
 
 func isAffectedZoneBindableFragmentType(fragmentType FragmentType) bool {
-	// Legacy DEPOSIT (=site/deposit) and PROGRAM (=org/program) are folded into
+	// Legacy deposit (=site/deposit) and PROGRAM (=org/program) are folded into
 	// FragmentTypeFacility / FragmentTypeOrganization under the AH taxonomy.
 	switch fragmentType {
 	case FragmentTypeFacility,
@@ -8250,7 +8250,7 @@ func exactAffectedZoneAnchorFragments(
 	}
 	out := make([]*horizonmodels.HorizonFragment, 0, 6)
 	seen := make(map[string]struct{}, 6)
-	// Legacy DEPOSIT (=site/deposit subtype) is covered by FragmentTypeFacility (=site)
+	// Legacy deposit (=site/deposit subtype) is covered by FragmentTypeFacility (=site)
 	// queries under the AH taxonomy; do not enumerate it as a separate class.
 	for _, fragmentType := range []FragmentType{
 		FragmentTypeFacility,
@@ -8300,7 +8300,7 @@ func affectedZoneExactAnchorFragmentScore(seed string, frag *horizonmodels.Horiz
 		return 0
 	}
 	score := 0.0
-	// Legacy DEPOSIT (=site/deposit) gets a slightly different score than a generic
+	// Legacy deposit (=site/deposit) gets a slightly different score than a generic
 	// facility/site; disambiguate via predicate before falling back to the bare class.
 	switch {
 	case frag.IsDepositSite():
@@ -8355,7 +8355,7 @@ func affectedZoneLinkedFragmentScore(
 		return 0
 	}
 	score := baseScore
-	// Legacy DEPOSIT (=site/deposit) needs to be matched separately from a generic facility/site.
+	// Legacy deposit (=site/deposit) needs to be matched separately from a generic facility/site.
 	switch {
 	case frag.IsDepositSite():
 		score += 0.26
@@ -8459,7 +8459,7 @@ func buildAffectedZoneAnchorFromFragment(
 		label = humanizePathTail(frag.CanonicalPath)
 	}
 	score := baseScore
-	// Legacy DEPOSIT (=site/deposit) needs to be matched separately from a generic facility/site.
+	// Legacy deposit (=site/deposit) needs to be matched separately from a generic facility/site.
 	switch {
 	case frag.IsDepositSite():
 		score += 0.28
@@ -8584,7 +8584,7 @@ func resolveAffectedZoneOperationalAnchorFromOrg(
 			if ferr != nil || frag == nil {
 				continue
 			}
-			// FragmentTypeFacility (=site) already covers legacy DEPOSIT under AH taxonomy.
+			// FragmentTypeFacility (=site) already covers legacy deposit under AH taxonomy.
 			if frag.Class != FragmentTypeFacility && frag.Class != FragmentTypeGeoRegion {
 				continue
 			}

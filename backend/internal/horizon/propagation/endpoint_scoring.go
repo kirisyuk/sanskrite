@@ -229,7 +229,7 @@ func scoreEndpoint(
 		out.SurpriseScore += endpointMinFloat(float64(distinctPathTypes-1)*profile.PathDiversityStep, profile.PathDiversityCap)
 	}
 
-	// FragmentTypeFacility (=site) already covers legacy DEPOSIT (site/deposit
+	// FragmentTypeFacility (=site) already covers legacy deposit (site/deposit
 	// subtype) under the AH taxonomy.
 	if strings.TrimSpace(signal.Axis) == horizonmodels.AxisGeoConflict && out.Remote &&
 		(out.FragmentType == FragmentTypeFacility || out.FragmentType == FragmentTypeMarket) {
@@ -341,7 +341,7 @@ func scoreTraceEndpoint(
 		out.BusinessScore += profile.TraceFlowAxisBonus
 		out.Reasons = append(out.Reasons, "flow_axis_bridge")
 	}
-	// FragmentTypeFacility (=site) already covers legacy DEPOSIT under the AH taxonomy.
+	// FragmentTypeFacility (=site) already covers legacy deposit under the AH taxonomy.
 	if strings.TrimSpace(signal.Axis) == horizonmodels.AxisGeoConflict && out.Remote &&
 		(out.FragmentType == FragmentTypeFacility || out.FragmentType == FragmentTypeMarket) {
 		out.BusinessScore += profile.ConflictBusinessTailBonus

@@ -235,10 +235,6 @@ func resolveRouteGeometryProfile(
 	}
 }
 
-func normalizeRouteRefs(refs []string) []string {
-	return models.NormalizeOrderedRouteRefs(refs)
-}
-
 func extractFragmentCoordinate(frag *models.HorizonFragment) (models.Coordinates, bool) {
 	if frag == nil {
 		return models.Coordinates{}, false

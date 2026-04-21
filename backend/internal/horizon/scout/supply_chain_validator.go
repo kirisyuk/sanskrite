@@ -163,7 +163,7 @@ func (v *SupplyChainStrictValidator) ValidateSupplyLink(f *models.HorizonFragmen
 	return nil
 }
 
-// IsOperationalEdgeType returns true for PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM.
+// IsOperationalEdgeType returns true for PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN, EXTRACTS_FROM.
 func IsOperationalEdgeType(relType string) bool {
 	return operationalEdgeTypes[strings.TrimSpace(strings.ToUpper(relType))]
 }

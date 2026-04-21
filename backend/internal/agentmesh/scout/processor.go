@@ -9666,14 +9666,6 @@ func collectResearchSummaries(items []ResearchResult) []string {
 	return compactStrings(out)
 }
 
-func collectResearchQuestions(items []ResearchResult) []string {
-	out := make([]string, 0, len(items))
-	for _, item := range items {
-		out = append(out, item.OpenQuestions...)
-	}
-	return compactStrings(out)
-}
-
 func extractCanonicalTokens(query string, prefix string) []string {
 	fields := strings.Fields(strings.ToLower(query))
 	out := make([]string, 0, len(fields))

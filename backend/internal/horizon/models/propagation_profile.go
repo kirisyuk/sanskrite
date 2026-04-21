@@ -71,8 +71,8 @@ type TransformationRule struct {
 //	                         org->market, *->evidence -> attributes (no edge)
 //	TRADED_IN           -> listed_on
 //	HAS_MARKET_SEGMENT  -> attributes (no edge; propagation entry removed)
-//	TRANSFORMS_INTO     -> siteTransforms attribute (no edge; propagation entry removed)
-//	ASSEMBLES_INTO      -> siteTransforms attribute (no edge; propagation entry removed)
+//	transforms_into     -> siteTransforms attribute (no edge; propagation entry removed)
+//	assembles_into      -> siteTransforms attribute (no edge; propagation entry removed)
 //	USED_IN             -> dropped (inverse of produces; FE always queries by produces)
 //	OPERATES_IN         -> attributes.operating_geos (no edge; propagation entry removed)
 //	LOCATED_IN          -> canonical_path slot (no edge; propagation entry removed)

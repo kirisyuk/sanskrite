@@ -104,10 +104,10 @@ type ParsedChainStats struct {
 type ChainEdge struct {
 	SourceCanonicalPath string
 	TargetCanonicalPath string
-	RelationType        string // PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN
+	RelationType        string // PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN
 	Confidence          float64
 	Reason              string
-	// Qualifiers carry edge-specific metadata (e.g. at_facility for TRANSFORMS_INTO).
+	// Qualifiers carry edge-specific metadata (e.g. at_facility for transforms_into).
 	// Passed through to DependencyEdge.Qualifiers on materialization.
 	Qualifiers map[string]interface{} `json:"qualifiers,omitempty"`
 }
@@ -610,7 +610,7 @@ func (p *SupplyChainParser) createFragmentFromNode(node agents.SupplyChainNode) 
 // collapsed onto (org, program) and (site, deposit) respectively. This function
 // returns the parent FragmentClass only; subtype assignment is handled by
 // createFragmentFromNode via InferClassSubtypeFromCanonicalPath, so the returned
-// class for PROGRAM is ah.FragmentClassOrg and for DEPOSIT is ah.FragmentClassSite.
+// class for PROGRAM is ah.FragmentClassOrg and for deposit is ah.FragmentClassSite.
 func (p *SupplyChainParser) inferFragmentType(nodeType string, canonicalPath string) FragmentType {
 	nodeType = strings.ToUpper(strings.TrimSpace(nodeType))
 
@@ -659,12 +659,12 @@ func (p *SupplyChainParser) inferFragmentType(nodeType string, canonicalPath str
 
 // createEdgeBetweenNodes creates an edge based on the node types.
 // Supply chain pattern: actor → product → actor → product
-// Operational model: PRODUCES, SUPPLIES_TO, TRANSFORMS_INTO, ASSEMBLES_INTO, USED_IN, EXTRACTS_FROM only. NO DEPENDS_ON.
+// Operational model: PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN, EXTRACTS_FROM only. NO DEPENDS_ON.
 // - Actor (org/fac) → Product: PRODUCES
 // - Product → Actor: abstain. Flow is captured by SupplyLink segments (fac1 SUPPLIES_TO fac2 via product).
 // - Facility → Deposit: EXTRACTS_FROM
 // - Actor → Actor: no direct inference (ambiguous without product-flow context)
-// - Product → Product: TRANSFORMS_INTO or ASSEMBLES_INTO or USED_IN
+// - Product → Product: transforms_into or assembles_into or USED_IN
 // - Unknown pair: abstain (return nil, true).
 func (p *SupplyChainParser) createEdgeBetweenNodes(from, to agents.SupplyChainNode, confidence float64, reason string) (*ChainEdge, bool) {
 	fromPath := normalizeSupplyChainCanonicalPath(from.CanonicalPath)

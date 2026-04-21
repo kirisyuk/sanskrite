@@ -190,7 +190,7 @@ func (h *HorizonHandlers) collectProducerTargets(ctx context.Context, tenantID s
 
 func isProducerFragmentType(fragmentType ah.FragmentClass) bool {
 	// Org covers legacy ORGANIZATION and PROGRAM (which folds to org/program);
-	// Site covers legacy FACILITY and DEPOSIT (which folds to site/deposit).
+	// Site covers legacy FACILITY and deposit (which folds to site/deposit).
 	// Subtype-level filtering is intentionally not applied here — historical
 	// callers accept any org/site as a candidate producer.
 	switch fragmentType {

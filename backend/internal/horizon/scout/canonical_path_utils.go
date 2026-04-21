@@ -14,7 +14,7 @@ import (
 //
 // Prefixes whose subtype is non-empty correspond to legacy FragmentTypes that
 // collapsed onto a parent AH class (PROGRAM/MEDIA_CHANNEL → org,
-// DEPOSIT/SUPPLY_LINK → site, AFFECTED_ZONE → geo, DOMAIN → evidence).
+// deposit/supply_link → site, AFFECTED_ZONE → geo, DOMAIN → evidence).
 // Callers that only need the AH class can use InferFragmentTypeFromCanonicalPath
 // (this discards the subtype hint); callers that need to distinguish, for
 // example, /deposit/ from /fac/ must use InferClassSubtypeFromCanonicalPath.

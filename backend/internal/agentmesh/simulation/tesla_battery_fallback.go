@@ -1,7 +1,6 @@
 package simulation
 
 import (
-	"fmt"
 	"strings"
 
 	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
@@ -463,8 +462,4 @@ func teslaBatteryActionPlan(agent *horizonmodels.SimulationAgentSpec, axis strin
 		return string(horizonmodels.SimulationActionDoNothing), 0, targets
 	}
 	return "", 0, nil
-}
-
-func teslaBatteryDisplay(reportID string) string {
-	return fmt.Sprintf("tesla:%s", strings.TrimSpace(reportID))
 }

@@ -38,7 +38,7 @@
     ],
     "requiredEdgeTypes": [
       "DEPENDS_ON",
-      "SUPPLY_LINK",
+      "supply_link",
       "REGULATES",
       "INFLUENCES",
       "OPERATES_IN",

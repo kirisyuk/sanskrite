@@ -497,14 +497,6 @@ func (b *SupplyChainAssemblyBuilder) loadExistingPathArtifacts(ctx context.Conte
 	return out, nil
 }
 
-func buildAssemblyPayloadFromContributions(
-	anchors []string,
-	contributions []assemblyContribution,
-	opts SupplyChainAssemblyOptions,
-) (map[string]interface{}, map[string]string, []string, *models.SupplyChainAssemblyCoverage, []string) {
-	return buildAssemblyPayloadFromInputs(anchors, contributions, opts, nil)
-}
-
 func buildAssemblyPayloadFromInputs(
 	anchors []string,
 	contributions []assemblyContribution,

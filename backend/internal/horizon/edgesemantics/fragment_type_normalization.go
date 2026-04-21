@@ -117,6 +117,9 @@ var fragmentClassAliases = map[string]fragmentClassAlias{
 	"AIRCRAFT":     {ah.FragmentClassMobileAsset, ""},
 	"TRACK":        {ah.FragmentClassMobileAsset, ""},
 
+	// Legacy supply-link overlay (no underscore in some LLM/tool outputs).
+	"SUPPLYLINK": {ah.FragmentClassSite, "supply_link"},
+
 	// Legacy strategic overlays — folded but recognised so legacy LLM
 	// output still resolves to a valid class for normalisation.
 	"DOMAIN": {ah.FragmentClassEvidence, "domain_legacy"},

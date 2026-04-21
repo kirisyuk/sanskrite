@@ -58,7 +58,7 @@ type ExpandProductMaterialsResult struct {
 // 2. Resolves Wikidata Q-ID (from identifiers or by searching)
 // 3. Fetches upstream materials (P10565 "is produced from", P186 "material used")
 // 4. Fetches downstream products (via SPARQL reverse lookup)
-// 5. Creates TRANSFORMS_INTO edges between products
+// 5. Creates transforms_into edges between products
 // 6. Optionally creates PRODUCES edges from manufacturer organizations
 //
 // Returns statistics about created fragments and edges.

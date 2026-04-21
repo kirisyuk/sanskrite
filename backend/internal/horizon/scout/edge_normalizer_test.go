@@ -9,7 +9,7 @@ import (
 
 // MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassSite collapsed onto
 // (site, deposit). Class-only assertions in this file now use
-// ah.FragmentClassSite — the DEPOSIT subtype distinction is no longer
+// ah.FragmentClassSite — the deposit subtype distinction is no longer
 // observable through FragmentClass alone.
 
 func TestEdgeDirectionPolicies_EXTRACTS_FROM(t *testing.T) {
@@ -27,17 +27,17 @@ func TestEdgeDirectionPolicies_EXTRACTS_FROM(t *testing.T) {
 		t.Errorf("EXTRACTS_FROM source should be FACILITY, got %s", rule.ValidSourceClasses[0])
 	}
 
-	// Verify valid target types (only DEPOSIT)
+	// Verify valid target types (only deposit)
 	if len(rule.ValidTargetClasses) != 1 {
 		t.Errorf("EXTRACTS_FROM should have exactly 1 valid target type, got %d", len(rule.ValidTargetClasses))
 	}
 	if rule.ValidTargetClasses[0] != ah.FragmentClassSite {
-		t.Errorf("EXTRACTS_FROM target should be DEPOSIT, got %s", rule.ValidTargetClasses[0])
+		t.Errorf("EXTRACTS_FROM target should be deposit, got %s", rule.ValidTargetClasses[0])
 	}
 }
 
 func TestEdgeDirectionPolicies_OWNS_IncludesDeposit(t *testing.T) {
-	// Verify OWNS policy includes DEPOSIT as valid target
+	// Verify OWNS policy includes deposit as valid target
 	rule, exists := EdgeDirectionPolicies[ah.RelationNameBeneficiallyOwns]
 	if !exists {
 		t.Fatal("OWNS edge direction policy not found")
@@ -51,7 +51,7 @@ func TestEdgeDirectionPolicies_OWNS_IncludesDeposit(t *testing.T) {
 		}
 	}
 	if !hasDeposit {
-		t.Error("OWNS should allow DEPOSIT as target type")
+		t.Error("OWNS should allow deposit as target type")
 	}
 }
 
@@ -74,7 +74,7 @@ func TestEdgeDirectionPolicies_OWNS_IncludesCommunitySource(t *testing.T) {
 }
 
 func TestEdgeDirectionPolicies_PRODUCES_IncludesDeposit(t *testing.T) {
-	// Verify PRODUCES policy includes DEPOSIT as valid source
+	// Verify PRODUCES policy includes deposit as valid source
 	rule, exists := EdgeDirectionPolicies[ah.RelationNameProduces]
 	if !exists {
 		t.Fatal("PRODUCES edge direction policy not found")
@@ -88,12 +88,12 @@ func TestEdgeDirectionPolicies_PRODUCES_IncludesDeposit(t *testing.T) {
 		}
 	}
 	if !hasDeposit {
-		t.Error("PRODUCES should allow DEPOSIT as source type")
+		t.Error("PRODUCES should allow deposit as source type")
 	}
 }
 
 func TestEdgeDirectionPolicies_LOCATED_IN_IncludesDeposit(t *testing.T) {
-	// Verify LOCATED_IN policy includes DEPOSIT as valid source
+	// Verify LOCATED_IN policy includes deposit as valid source
 	rule, exists := EdgeDirectionPolicies[DependencyType("located_in")]
 	if !exists {
 		t.Fatal("LOCATED_IN edge direction policy not found")
@@ -107,12 +107,12 @@ func TestEdgeDirectionPolicies_LOCATED_IN_IncludesDeposit(t *testing.T) {
 		}
 	}
 	if !hasDeposit {
-		t.Error("LOCATED_IN should allow DEPOSIT as source type")
+		t.Error("LOCATED_IN should allow deposit as source type")
 	}
 }
 
 func TestEdgeDirectionPolicies_OPERATES_IN_IncludesDeposit(t *testing.T) {
-	// Verify OPERATES_IN policy includes DEPOSIT as valid target
+	// Verify OPERATES_IN policy includes deposit as valid target
 	rule, exists := EdgeDirectionPolicies[DependencyType("operates_in")]
 	if !exists {
 		t.Fatal("OPERATES_IN edge direction policy not found")
@@ -126,7 +126,7 @@ func TestEdgeDirectionPolicies_OPERATES_IN_IncludesDeposit(t *testing.T) {
 		}
 	}
 	if !hasDeposit {
-		t.Error("OPERATES_IN should allow DEPOSIT as target type")
+		t.Error("OPERATES_IN should allow deposit as target type")
 	}
 }
 
@@ -247,7 +247,7 @@ func TestCanonicalizeEdge_ProductOwnsOrganization_ToProduces(t *testing.T) {
 			wantChange: false,
 		},
 		{
-			name:       "PRODUCT PRODUCES PRODUCT -> TRANSFORMS_INTO",
+			name:       "PRODUCT PRODUCES PRODUCT -> transforms_into",
 			edgeType:   ah.RelationNameProduces,
 			sourceType: ah.FragmentClassProduct,
 			targetType: ah.FragmentClassProduct,
@@ -256,7 +256,7 @@ func TestCanonicalizeEdge_ProductOwnsOrganization_ToProduces(t *testing.T) {
 			wantChange: true,
 		},
 		{
-			name:       "ORGANIZATION EXTRACTS_FROM DEPOSIT -> OPERATES_IN (best-effort)",
+			name:       "ORGANIZATION EXTRACTS_FROM deposit -> OPERATES_IN (best-effort)",
 			edgeType:   DependencyType("extracts_from"),
 			sourceType: ah.FragmentClassOrg,
 			targetType: ah.FragmentClassSite,
@@ -265,7 +265,7 @@ func TestCanonicalizeEdge_ProductOwnsOrganization_ToProduces(t *testing.T) {
 			wantChange: true,
 		},
 		{
-			name:       "DEPOSIT EXTRACTS_FROM ORGANIZATION -> OPERATES_IN with swap (best-effort)",
+			name:       "deposit EXTRACTS_FROM ORGANIZATION -> OPERATES_IN with swap (best-effort)",
 			edgeType:   DependencyType("extracts_from"),
 			sourceType: ah.FragmentClassSite,
 			targetType: ah.FragmentClassOrg,

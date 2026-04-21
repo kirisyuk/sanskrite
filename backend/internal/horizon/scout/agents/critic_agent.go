@@ -567,7 +567,7 @@ TASK: Compare the extracted data with the source content and identify any confli
       - "Is <person> affiliated with a dynasty or tribe? If yes, return /community/{geo}/dynasty|tribe/{slug} and MEMBER_OF edges."
     - Only ask this when culturally relevant and plausible for the person/context (avoid forcing for modern corporate contexts).
 
-	MANDATORY - Lifecycle stage (always required for FACILITY, DEPOSIT, extractive ORGANIZATION):
+	MANDATORY - Lifecycle stage (always required for FACILITY, deposit, extractive ORGANIZATION):
 	  - If lifecycleStage is empty/missing for a /fac/, /deposit/, or extractive /org/ (mining/O&G sector), add:
 	    - "What is the operational status of <entity>? Is it: concept/planning/permitting/financing/construction/commissioning/operational/expansion/suspended/decommissioning/closed?"
 	  - If lifecycleStage is 'construction' or 'planning' but expectedStartDate is missing, add:
@@ -654,15 +654,15 @@ TASK: Compare the extracted data with the source content and identify any confli
 	  - NOTE: PERSON relations may appear inverted due to extraction being anchored on the organization; still treat them as valid signals for completeness.
 	  - If "products_and_services" specialty is requested (ENHANCED requirements beyond the baseline):
 	  - For ORGANIZATION/FACILITY: in addition to baseline PRODUCES/SUPPLIES_TO, also check for:
-	    - TRANSFORMS_INTO / ASSEMBLES_INTO / USED_IN relations for products (value chain + direct assembly + functional input)
+	    - transforms_into / assembles_into / USED_IN relations for products (value chain + direct assembly + functional input)
 	    - Capacity/volume metrics on edges
 	    - Add questions for missing transformations/assembly links and metrics.
-	  - For PRODUCT: if there are no product-to-product transition relations (TRANSFORMS_INTO / ASSEMBLES_INTO / USED_IN), add a question:
+	  - For PRODUCT: if there are no product-to-product transition relations (transforms_into / assembles_into / USED_IN), add a question:
 	    - "What is this product produced from, what does it transform into, what does it assemble into, and what is it used in? Provide upstream/downstream products."
-	  - TRANSFORMS_INTO DIRECTION INVARIANT: source MUST be upstream (raw/earlier-stage), target MUST be downstream (refined/later-stage).
+	  - transforms_into DIRECTION INVARIANT: source MUST be upstream (raw/earlier-stage), target MUST be downstream (refined/later-stage).
 	    Stage order: extraction < refining < smelting < processing < manufacturing < assembly.
-	    If any TRANSFORMS_INTO edge points from a later-stage product to an earlier-stage product, flag it as a direction error.
-	  - ASSEMBLES_INTO DIRECTION INVARIANT: source MUST be component/subassembly, target MUST be the downstream assembled product.
+	    If any transforms_into edge points from a later-stage product to an earlier-stage product, flag it as a direction error.
+	  - assembles_into DIRECTION INVARIANT: source MUST be component/subassembly, target MUST be the downstream assembled product.
 	- If "supply_chain" specialty is requested:
 	  - Validate that extracted supply chains are COMPLETE and COHERENT:
 	    - Nodes must alternate: actor (org/fac) → product → actor → product → ...

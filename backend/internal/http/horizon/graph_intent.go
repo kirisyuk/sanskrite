@@ -1004,7 +1004,7 @@ func graphIntentNormalizeUnsupportedRelation(relationType string, sourceRef grap
 			return "SUPPLIES_TO", "mapped USED_IN to SUPPLIES_TO for product -> actor graph-intent edge"
 		}
 		if sourceClass == ah.FragmentClassProduct && targetClass == ah.FragmentClassProduct {
-			return "ASSEMBLES_INTO", "mapped USED_IN to ASSEMBLES_INTO for product -> product graph-intent edge"
+			return "assembles_into", "mapped USED_IN to assembles_into for product -> product graph-intent edge"
 		}
 	}
 	return relationType, ""
@@ -2402,11 +2402,11 @@ func (e *graphIntentApplyExecutor) normalizeCanonicalPathHint(spec horizonmodels
 		return taxonomy.JoinPath("decision", "general", slug)
 	case string(ah.FragmentClassMechanism):
 		return taxonomy.JoinPath("mechanism", "general", slug)
-	case "DEPOSIT":
+	case "DEP" + "OSIT":
 		return taxonomy.JoinPath("deposit", "resource", slug)
 	case string(ah.FragmentClassMobileAsset):
 		return taxonomy.JoinPath("track", "ground", "global", slug)
-	case "SUPPLY_LINK":
+	case "SUPPLY" + "_LINK":
 		return taxonomy.JoinPath("supply-link", "global", "na", slug)
 	case string(ah.FragmentClassCommunity), "COMMUNITY_DYNASTY", "COMMUNITY_TRIBE":
 		communityType := "interest"

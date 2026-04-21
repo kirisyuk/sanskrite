@@ -308,18 +308,6 @@ func buildTransactionAwareNarrative(protocolSummary, transactionSummary []map[st
 	return compactNarrativeLines(lines)
 }
 
-func transactionPressureSignals(transactionSummary []map[string]any) []string {
-	out := make([]string, 0, 6)
-	for _, item := range transactionSummary[:min(len(transactionSummary), 3)] {
-		txType := stringValue(item, "transactionType")
-		statusProfile := mapValue(item["statusProfile"])
-		if floatValue(statusProfile, "delayed", 0) > 0 || floatValue(statusProfile, "blocked", 0) > 0 || floatValue(statusProfile, "rejected", 0) > 0 {
-			out = append(out, txType)
-		}
-	}
-	return compactStrings(out)
-}
-
 func anySlice(raw any) []any {
 	switch typed := raw.(type) {
 	case []any:

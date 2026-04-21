@@ -1,7 +1,6 @@
 package policy
 
 import (
-	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
@@ -74,17 +73,3 @@ const (
 	subtypeDeposit    = "deposit"
 	subtypeSupplyLink = "supply_link"
 )
-
-func canonicalRelationFromWire(s string) ah.RelationName {
-	if dec, ok := horizonmodels.NormalizeRelationName(s); ok && !dec.Dropped && dec.Relation != "" {
-		return dec.Relation
-	}
-	return ""
-}
-
-func canonicalClassFromWire(s string) ah.FragmentClass {
-	if cls, _, ok := horizonmodels.NormalizeFragmentClassName(s, ""); ok {
-		return cls
-	}
-	return ""
-}
