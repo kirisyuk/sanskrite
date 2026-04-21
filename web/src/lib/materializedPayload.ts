@@ -3,7 +3,7 @@
  * with legacy `type` / UPPER_SNAKE fallbacks. See docs/taxonomy/materialized_payload.md.
  */
 import type { FragmentClass } from './taxonomy.generated';
-import { RELATION } from './taxonomy.generated';
+import { FRAGMENT_CLASS, RELATION } from './taxonomy.generated';
 import { normalizeEdgeType, tryParseFragmentClass } from './taxonomy';
 
 /** Effective fragment class from a path payload node (`class` preferred, else legacy `type`). */
@@ -13,6 +13,14 @@ export function pathPayloadNodeFragmentClass(node: unknown): FragmentClass | und
   const cls = String(n.class ?? '').trim();
   const legacy = String(n.type ?? '').trim();
   return tryParseFragmentClass(cls || legacy);
+}
+
+/** True if payload node represents a product (AH `class: product`, legacy `type`, or `/product/` ref). */
+export function pathPayloadNodeIsProduct(node: unknown): boolean {
+  const n = node as Record<string, unknown> | null | undefined;
+  const ref = String(n?.ref ?? '').trim();
+  if (ref.startsWith('/product/')) return true;
+  return pathPayloadNodeFragmentClass(node) === FRAGMENT_CLASS.Product;
 }
 
 /**

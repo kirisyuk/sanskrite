@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { FRAGMENT_CLASS, RELATION } from './taxonomy.generated';
-import { pathPayloadEdgeRelation, pathPayloadNodeFragmentClass } from './materializedPayload';
+import { pathPayloadEdgeRelation, pathPayloadNodeFragmentClass, pathPayloadNodeIsProduct } from './materializedPayload';
 
 test('pathPayloadEdgeRelation prefers relation (AH snake_case)', () => {
   assert.equal(pathPayloadEdgeRelation({ relation: 'supplies', from: 0, to: 1 }), RELATION.Supplies);
@@ -19,4 +19,11 @@ test('pathPayloadNodeFragmentClass reads class or legacy type', () => {
   assert.equal(pathPayloadNodeFragmentClass({ class: 'org', ref: '/org/a' }), FRAGMENT_CLASS.Org);
   assert.equal(pathPayloadNodeFragmentClass({ type: 'ORGANIZATION', ref: '/org/a' }), FRAGMENT_CLASS.Org);
   assert.equal(pathPayloadNodeFragmentClass({ class: 'site', subtype: 'factory', ref: '/fac/x' }), FRAGMENT_CLASS.Site);
+});
+
+test('pathPayloadNodeIsProduct accepts class, legacy type, or /product/ ref', () => {
+  assert.equal(pathPayloadNodeIsProduct({ class: 'product', ref: '/x' }), true);
+  assert.equal(pathPayloadNodeIsProduct({ type: 'PRODUCT', ref: '/org/a' }), true);
+  assert.equal(pathPayloadNodeIsProduct({ ref: '/product/foo/bar' }), true);
+  assert.equal(pathPayloadNodeIsProduct({ class: 'org', ref: '/org/a' }), false);
 });

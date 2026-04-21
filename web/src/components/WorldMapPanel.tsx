@@ -42,6 +42,7 @@ import {
 } from '../lib/api';
 import type { MaterializedArtifact } from './SupplyChainOverlay';
 import type { GeoMarkerSelection } from '../hooks/useGeoMarkerLayer';
+import { pathPayloadNodeIsProduct } from '../lib/materializedPayload';
 import { humanizeCanonicalPath, humanizeSlug } from '../lib/uiUtils';
 import { useHorizonRealtimeStore } from '../stores/horizonRealtimeStore';
 import { mapLayerColor } from '../lib/mapRenderPolicy';
@@ -360,13 +361,13 @@ function artifactRouteProductEntries(artifact: MaterializedArtifact | null | und
   const seen = new Set<string>();
   const out: ProductRouteEntry[] = [];
   const payload = artifact?.payload as MaterializedArtifact['payload'] & {
-    productNodes?: Array<{ type?: string; ref?: string; name?: string }>;
+    productNodes?: Array<{ class?: string; type?: string; ref?: string; name?: string }>;
   };
   const productNodes = Array.isArray(payload?.productNodes) ? payload.productNodes : [];
   const productNameByRef = new Map<string, string>();
   for (const node of productNodes) {
     const ref = String(node?.ref || '').trim();
-    if (!ref || String(node?.type || '').trim().toLowerCase() !== 'product') continue;
+    if (!ref || !pathPayloadNodeIsProduct(node)) continue;
     const name = String(node?.name || '').trim();
     if (name && !productNameByRef.has(ref)) productNameByRef.set(ref, name);
   }
