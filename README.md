@@ -232,11 +232,11 @@ echo "YOUR_AISSTREAM_KEY" | gcloud secrets versions add aisstream_api_key --data
 
 ```bash
 # Check health
-API_URL=$(gcloud run services describe nv-horizon-api --region us-central1 --format='value(status.url)')
+API_URL=$(gcloud run services describe api --region us-central1 --format='value(status.url)')
 curl "$API_URL/healthz"
 
 # View logs
-gcloud run services logs read nv-horizon-api --region us-central1 --limit 20
+gcloud run services logs read api --region us-central1 --limit 20
 ```
 
 ## Features

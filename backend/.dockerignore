@@ -1,7 +1,7 @@
 # Ignore build artifacts and service binaries
 /server
 /verified-proxy
-/nv_horizon_ws
+/ws
 /main
 *.exe
 *.dll

@@ -142,8 +142,8 @@ done
 ═══════════════════════════════════════════════════════
 ✓ Deployment Complete
 ═══════════════════════════════════════════════════════
-Backend API: https://nv-horizon-api-xxx.run.app
-Telegram Service: https://nv-horizon-telegram-xxx.run.app
+Backend API: https://api-xxx.run.app
+Telegram Service: https://telegram-xxx.run.app
 
 Post-deployment checklist:
   ☐ Verify secrets have real API keys

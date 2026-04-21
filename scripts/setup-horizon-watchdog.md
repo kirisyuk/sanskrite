@@ -10,7 +10,7 @@ Watchdog Service должен:
 
 ## Варианты реализации
 
-### Вариант 1: Cloud Scheduler → HTTP endpoint в Cloud Run `nv-horizon-api` (РЕКОМЕНДУЕТСЯ)
+### Вариант 1: Cloud Scheduler → HTTP endpoint в Cloud Run `api` (РЕКОМЕНДУЕТСЯ)
 
 **Преимущества:**
 - ✅ Простота развертывания и управления
@@ -28,7 +28,7 @@ Watchdog Service должен:
 ```
 Cloud Scheduler (каждые 5 минут)
   ↓
-Cloud Run: nv-horizon-api (cron endpoint)
+Cloud Run: api (cron endpoint)
   ↓
 Watchdog Service (internal/horizon/watchdog)
   ↓
@@ -38,7 +38,7 @@ Scout Engine (создание ScoutingJob)
 ```
 
 **Реализация:**
-- Cloud Scheduler вызывает cron endpoint в `nv-horizon-api`
+- Cloud Scheduler вызывает cron endpoint в `api`
 - Endpoint защищён через `X-Job-Token` (переменная `ADMIN_JOB_TOKEN`), как и другие scheduler jobs
 - Endpoint берет due-конфиги из Firestore, сканирует источники, при необходимости запускает Scout
 
@@ -76,7 +76,7 @@ Scout Engine (создание ScoutingJob)
 - Если Watchdog интегрирован в основной сервис
 - Если нужна тесная интеграция с другими компонентами
 
-## Рекомендация: Cloud Scheduler → HTTP endpoint в Cloud Run `nv-horizon-api`
+## Рекомендация: Cloud Scheduler → HTTP endpoint в Cloud Run `api`
 
 ### Обоснование
 
@@ -136,7 +136,7 @@ gcloud functions deploy horizon-watchdog-trigger \
 
 ## Итоговая рекомендация
 
-**Использовать Cloud Scheduler → HTTP endpoint в Cloud Run `nv-horizon-api`** для периодических проверок.
+**Использовать Cloud Scheduler → HTTP endpoint в Cloud Run `api`** для периодических проверок.
 
 **Причины:**
 1. Простота реализации и поддержки

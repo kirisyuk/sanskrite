@@ -7,9 +7,9 @@
 ## Создаваемые ресурсы
 
 ### 1. Cloud Run Services (4 сервиса)
-- `nv-horizon-api` - основной backend API
-- `nv-horizon-ws` - WebSocket broker для realtime событий
-- `nv-horizon-telegram` - Telegram сервис
+- `api` - основной backend API
+- `ws` - WebSocket broker для realtime событий
+- `telegram` - Telegram сервис
 - `verified-proxy` - прокси для verified URL анализа
 
 ### 2. Pub/Sub Topics (33 топика)
@@ -25,7 +25,7 @@
 - Interaction: `interaction.created`, `interaction.updated`
 - Verified: `verified.stream`
 
-**Aggregated топики (для nv-horizon-ws):**
+**Aggregated топики (для ws):**
 - `nv_horizon.genai.streams`
 - `nv_horizon.discovery.events`
 - `nv_horizon.artifact.events`
@@ -37,7 +37,7 @@
 - `source.poll`
 
 ### 3. Pub/Sub Subscriptions (14 подписок)
-- Подписки для nv-horizon-ws (aggregated топиков): `<topic>-ws-broker` (9 подписок)
+- Подписки для ws (aggregated топиков): `<topic>-ws-broker` (9 подписок)
 - Worker подписки: `source.poll.worker`, `source.poll.due.worker`, `ground.refresh.worker`, и др.
 
 ### 4. Cloud Storage Buckets (3 основных)

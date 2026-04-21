@@ -18,7 +18,7 @@
 
 ```bash
 curl -X POST \
-  https://nv-horizon-api-sqt63d2k2q-uc.a.run.app/api/v1/sources/{sourceId}/reprocess \
+  https://api-sqt63d2k2q-uc.a.run.app/api/v1/sources/{sourceId}/reprocess \
   -H "Authorization: Bearer <token>"
 ```
 

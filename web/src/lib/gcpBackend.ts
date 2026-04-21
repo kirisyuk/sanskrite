@@ -3,8 +3,8 @@
  * Override with VITE_API_BASE_URL / VITE_WS_BROKER_URL / VITE_WS_BASE_URL for another project or stage.
  */
 
-export const DEFAULT_GCP_API_BASE_URL = 'https://nv-horizon-api-uqvkncypxa-uc.a.run.app';
-export const DEFAULT_GCP_WS_BROKER_BASE_URL = 'https://nv-horizon-ws-uqvkncypxa-uc.a.run.app';
+export const DEFAULT_GCP_API_BASE_URL = 'https://api-uqvkncypxa-uc.a.run.app';
+export const DEFAULT_GCP_WS_BROKER_BASE_URL = 'https://ws-uqvkncypxa-uc.a.run.app';
 
 function trimVite(key: 'VITE_API_BASE_URL' | 'VITE_WS_BROKER_URL' | 'VITE_WS_BASE_URL'): string {
   const v = import.meta.env[key];

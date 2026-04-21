@@ -254,18 +254,18 @@ Landing встроен в:
 
 В течение дня и ночного цикла были последовательно выкачены live-revisions:
 
-- `nv-horizon-api-00064-wfk`
-- `nv-horizon-api-00067-z25`
-- `nv-horizon-api-00068-jpv`
-- `nv-horizon-api-00069-6b4`
-- `nv-horizon-api-00070-wzm`
-- `nv-horizon-api-00071-sm4`
-- `nv-horizon-api-00072-vvr`
-- `nv-horizon-api-00073-jbk`
+- `api-00064-wfk`
+- `api-00067-z25`
+- `api-00068-jpv`
+- `api-00069-6b4`
+- `api-00070-wzm`
+- `api-00071-sm4`
+- `api-00072-vvr`
+- `api-00073-jbk`
 
 Текущий сервис URL:
 
-- `https://nv-horizon-api-vosmg5vzoa-uc.a.run.app`
+- `https://api-vosmg5vzoa-uc.a.run.app`
 
 Это важно, потому что проверка шла уже через deployed API path, а не только через локальные tool-runtime сценарии.
 
@@ -336,7 +336,7 @@ Landing встроен в:
 
 Live-подтверждение после выката:
 
-- hook log на `nv-horizon-api-00064-wfk`:
+- hook log на `api-00064-wfk`:
   - `matchedLenses=4`
   - `projectionHits=1`
   - `scopeFallbackHits=3`
@@ -813,7 +813,7 @@ Affected zone — это именно карта территории встря
 
 - `scripts/deploy` теперь явно прокидывает `BIGQUERY_DATASET_ID`, вычисленный из project id
 - server init считает BigQuery обязательным, если dataset ID задан явно
-- live revision `nv-horizon-api-00076-2jz` стартовала с:
+- live revision `api-00076-2jz` стартовала с:
   - `BigQuery AI service enabled: project=nv-horizon-test, dataset=nv_horizon_test_documents`
   - без прежнего `Dataset ... not found`
 
@@ -832,7 +832,7 @@ Affected zone — это именно карта территории встря
 
 Что подтверждено:
 
-- live revision `nv-horizon-api-00076-2jz` работает с
+- live revision `api-00076-2jz` работает с
   - `run.googleapis.com/network-interfaces: [{"network":"default","subnetwork":"nv-horizon-run"}]`
   - `run.googleapis.com/vpc-access-egress: private-ranges-only`
 - Redis client на старте инициализируется
@@ -840,7 +840,7 @@ Affected zone — это именно карта территории встря
 
 Дальнейшая диагностика показала, что этого ещё недостаточно для полного Redis fix:
 
-- на `nv-horizon-api-00078-tcq` BigQuery уже clean, но `redis: ... i/o timeout` всё ещё воспроизводится
+- на `api-00078-tcq` BigQuery уже clean, но `redis: ... i/o timeout` всё ещё воспроизводится
 - текущий Redis instance оказался в `DIRECT_PEERING`
 
 Поэтому следующий фундаментальный шаг уже начат:
@@ -876,7 +876,7 @@ Affected zone — это именно карта территории встря
   - source range `10.20.0.0/26`
   - allow `tcp,udp,icmp`
 - после этого выпущена новая live revision:
-  - `nv-horizon-api-00080-pgs`
+  - `api-00080-pgs`
 
 Что подтверждено live:
 
@@ -934,9 +934,9 @@ Affected zone — это именно карта территории встря
 ### Полезные live сущности
 
 - API URL:
-  - `https://nv-horizon-api-vosmg5vzoa-uc.a.run.app`
+  - `https://api-vosmg5vzoa-uc.a.run.app`
 - serving revision at end of this session:
-  - `nv-horizon-api-00082-596`
+  - `api-00082-596`
 - Saudi scratch lens:
   - `Kdn5G1AR4rfCkLwvQTse`
 - UAE + Saudi space lens:
@@ -1029,7 +1029,7 @@ Affected zone — это именно карта территории встря
 
 Финальная live ревизия:
 
-- `nv-horizon-api-00089-d74`
+- `api-00089-d74`
 
 Дополнительная проверка после выката:
 

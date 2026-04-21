@@ -14,9 +14,9 @@ function Exec($cmd) {
 $repo = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 
 # Build and push Go API
-Exec "gcloud builds submit `"$repo/backend`" --project $ProjectId --tag gcr.io/$ProjectId/nv-horizon-api:latest"
+Exec "gcloud builds submit `"$repo/backend`" --project $ProjectId --tag gcr.io/$ProjectId/api:latest"
 if (-not $BuildOnly) {
-  Exec "gcloud run deploy nv-horizon-api --image gcr.io/$ProjectId/nv-horizon-api:latest --project $ProjectId --region $Region --allow-unauthenticated --port 8080 --set-env-vars GEONAMES_USERNAME=kirisyuk"
+  Exec "gcloud run deploy api --image gcr.io/$ProjectId/api:latest --project $ProjectId --region $Region --allow-unauthenticated --port 8080 --set-env-vars GEONAMES_USERNAME=kirisyuk"
 }
 
 # Build and push Telegram service

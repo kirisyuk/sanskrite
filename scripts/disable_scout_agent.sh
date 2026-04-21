@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 # Параметры по умолчанию
 PROJECT_ID="${GCP_PROJECT_ID:-nv-horizon}"
 REGION="${GCP_REGION:-us-central1}"
-SERVICE="${CLOUD_RUN_SERVICE:-nv-horizon-api}"
+SERVICE="${CLOUD_RUN_SERVICE:-api}"
 
 echo -e "${BLUE}=== Отключение агента запуска скаутов ===${NC}"
 echo -e "Проект: ${GREEN}$PROJECT_ID${NC}"

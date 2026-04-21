@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || true)}"
 REGION="${REGION:-us-central1}"
-SERVICE="${SERVICE:-nv-horizon-api}"
+SERVICE="${SERVICE:-api}"
 FRESHNESS="${FRESHNESS:-6h}"
 LIMIT="${LIMIT:-50000}"
 INPUT_LOG=""
@@ -24,7 +24,7 @@ Usage: scripts/horizon_shadow_replay.sh [options]
 Options:
   --project <id>              GCP project (default: current gcloud project)
   --region <region>           Cloud Run region (default: us-central1)
-  --service <name>            Cloud Run service (default: nv-horizon-api)
+  --service <name>            Cloud Run service (default: api)
   --freshness <dur>           gcloud log freshness (default: 6h)
   --limit <n>                 max log rows (default: 50000)
   --input-log <file>          use local log file instead of gcloud logging read

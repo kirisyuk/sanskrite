@@ -29,6 +29,7 @@ desktop.ini
 backend/bin/
 backend/build/
 backend/server
+backend/ws
 # Local tool binaries (go build -o ... in backend/ or in repo root)
 backend/horizon_smart_dedup
 backend/horizon_*

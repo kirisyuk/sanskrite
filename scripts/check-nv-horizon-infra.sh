@@ -112,7 +112,7 @@ for topic in "${REQUIRED_TOPICS[@]}"; do
 done
 
 echo ""
-echo "4.1 Проверка Pub/Sub подписок для nv-horizon-ws..."
+echo "4.1 Проверка Pub/Sub подписок для ws..."
 # Подписка имеет фиксированный нейминг: <topic>-ws-broker
 REQUIRED_SUBS=("nv_horizon.horizon.events-ws-broker")
 for sub in "${REQUIRED_SUBS[@]}"; do
@@ -157,7 +157,7 @@ fi
 
 echo ""
 echo "7. Проверка переменных окружения Cloud Run..."
-SERVICE="nv-horizon-api"
+SERVICE="api"
 REGION="us-central1"
 if gcloud run services describe "$SERVICE" --region="$REGION" --format="value(metadata.name)" 2>/dev/null | grep -q "$SERVICE"; then
   check "Cloud Run сервис существует: $SERVICE"

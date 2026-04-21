@@ -6,7 +6,7 @@ export function apiBaseToWs(baseUrl: string) {
   return baseUrl.replace(/^https?:/, (m) => (m === 'https:' ? 'wss:' : 'ws:'));
 }
 
-/** WebSocket broker base URL (https). Default: Cloud Run nv-horizon-ws in GCP. */
+/** WebSocket broker base URL (https). Default: Cloud Run ws in GCP. */
 export function getWsBrokerBaseUrl(): string {
   return resolveWsBrokerBaseUrl();
 }

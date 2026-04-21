@@ -41,7 +41,7 @@ done
 [[ -z "$INFRA_TOPICS" ]] && echo "  (нет топиков или ошибка доступа)"
 
 # --- Pub/Sub Subscriptions ---
-# Deploy создаёт: nv-horizon-ws (agg_topics), worker subs.
+# Deploy создаёт: ws (agg_topics), worker subs.
 DEPLOY_SUBS=(
   "nv_horizon.genai.streams-ws-broker" "nv_horizon.discovery.events-ws-broker" "nv_horizon.artifact.events-ws-broker"
   "nv_horizon.interaction.events-ws-broker" "nv_horizon.analysis.events-ws-broker" "nv_horizon.verified.streams-ws-broker"
@@ -145,7 +145,7 @@ done
 
 # --- Cloud Run Services: deploy creates ---
 DEPLOY_SERVICES=(
-  nv-horizon-api nv-horizon-ws verified-proxy nv-horizon-telegram
+  api ws verified-proxy telegram
 )
 
 echo ""

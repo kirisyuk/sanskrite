@@ -10,14 +10,14 @@ if [[ -z "$PROJECT" || "$PROJECT" == "(unset)" ]]; then
   exit 1
 fi
 
-API_URL=$(gcloud run services describe nv-horizon-api --region "$REGION" --project "$PROJECT" --format='value(status.url)' 2>/dev/null || true)
-WS_URL=$(gcloud run services describe nv-horizon-ws --region "$REGION" --project "$PROJECT" --format='value(status.url)' 2>/dev/null || true)
+API_URL=$(gcloud run services describe api --region "$REGION" --project "$PROJECT" --format='value(status.url)' 2>/dev/null || true)
+WS_URL=$(gcloud run services describe ws --region "$REGION" --project "$PROJECT" --format='value(status.url)' 2>/dev/null || true)
 if [[ -z "$API_URL" ]]; then
-  echo "nv-horizon-api not found in project $PROJECT (region $REGION)." >&2
+  echo "api not found in project $PROJECT (region $REGION)." >&2
   exit 1
 fi
 if [[ -z "$WS_URL" ]]; then
-  echo "nv-horizon-ws not found in project $PROJECT (region $REGION)." >&2
+  echo "ws not found in project $PROJECT (region $REGION)." >&2
   exit 1
 fi
 

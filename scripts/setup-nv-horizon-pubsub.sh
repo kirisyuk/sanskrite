@@ -13,10 +13,10 @@ echo "=== Настройка Pub/Sub топиков для Horizon (Nordic Visio
 echo "Проект: $PROJECT_ID"
 echo ""
 
-# Service account that publishes/subscribes (API + nv-horizon-ws usually share it)
+# Service account that publishes/subscribes (API + ws usually share it)
 SA="${PUBSUB_SERVICE_ACCOUNT:-backend@${PROJECT_ID}.iam.gserviceaccount.com}"
 
-# Агрегированные топики (используются системой realtime / nv-horizon-ws broker)
+# Агрегированные топики (используются системой realtime / ws broker)
 TOPICS=(
   "nv_horizon.genai.streams"
   "nv_horizon.discovery.events"
@@ -48,7 +48,7 @@ for topic in "${TOPICS[@]}"; do
 done
 
 echo ""
-echo "=== Настройка подписок для nv-horizon-ws ==="
+echo "=== Настройка подписок для ws ==="
 echo "Subscriber создает подписки автоматически, но для надежности фиксируем их здесь (idempotent)."
 echo ""
 

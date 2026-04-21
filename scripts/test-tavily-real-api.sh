@@ -9,12 +9,12 @@ YELLOW='\033[0;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-API_URL="${API_URL:-$(gcloud run services describe nv-horizon-api --region=us-central1 --project=nv-horizon --format='value(status.url)' 2>/dev/null || echo "")}"
+API_URL="${API_URL:-$(gcloud run services describe api --region=us-central1 --project=nv-horizon --format='value(status.url)' 2>/dev/null || echo "")}"
 TEST_QUERY="${TEST_QUERY:-latest news about AI}"
 
 if [[ -z "$API_URL" ]]; then
-    echo -e "${RED}✗ API_URL not set and nv-horizon-api Cloud Run service not found${NC}"
-    echo -e "${YELLOW}Set API_URL manually or deploy nv-horizon-api first${NC}"
+    echo -e "${RED}✗ API_URL not set and api Cloud Run service not found${NC}"
+    echo -e "${YELLOW}Set API_URL manually or deploy api first${NC}"
     exit 1
 fi
 
@@ -73,7 +73,7 @@ echo ""
 # Test 2: Check Cloud Run logs for Tavily usage
 echo -e "${BLUE}[Step 3] Checking Cloud Run logs for Tavily activity...${NC}"
 RECENT_LOGS=$(gcloud logging read \
-    "resource.type=cloud_run_revision AND resource.labels.service_name=nv-horizon-api AND (textPayload=~\"Tavily\" OR textPayload=~\"tavily\" OR textPayload=~\"web_search\")" \
+    "resource.type=cloud_run_revision AND resource.labels.service_name=api AND (textPayload=~\"Tavily\" OR textPayload=~\"tavily\" OR textPayload=~\"web_search\")" \
     --limit=5 \
     --format="value(textPayload)" \
     --project=nv-horizon \
@@ -90,7 +90,7 @@ echo ""
 
 # Test 3: Check if TAVILY_API_KEY is accessible in Cloud Run
 echo -e "${BLUE}[Step 4] Verifying Cloud Run configuration...${NC}"
-HAS_TAVILY_ENV=$(gcloud run services describe nv-horizon-api \
+HAS_TAVILY_ENV=$(gcloud run services describe api \
     --region=us-central1 \
     --format="get(spec.template.spec.containers[0].env)" \
     --project=nv-horizon 2>/dev/null | grep -o "TAVILY_API_KEY" || echo "")
@@ -164,5 +164,5 @@ echo ""
 echo -e "${YELLOW}Next steps:${NC}"
 echo -e "  1. If key is invalid, update it: ${BLUE}gcloud secrets versions add tavily_api_key --data-file=-${NC}"
 echo -e "  2. Trigger a real web search request through the UI or API with auth"
-echo -e "  3. Check logs: ${BLUE}gcloud logging read 'resource.labels.service_name=nv-horizon-api AND textPayload~\"Tavily\"' --limit=20${NC}"
+echo -e "  3. Check logs: ${BLUE}gcloud logging read 'resource.labels.service_name=api AND textPayload~\"Tavily\"' --limit=20${NC}"
 echo ""

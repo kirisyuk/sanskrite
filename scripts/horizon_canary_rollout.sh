@@ -3,7 +3,7 @@ set -euo pipefail
 
 PROJECT_ID="${PROJECT_ID:-$(gcloud config get-value project 2>/dev/null || true)}"
 REGION="${REGION:-us-central1}"
-SERVICE="${SERVICE:-nv-horizon-api}"
+SERVICE="${SERVICE:-api}"
 CANDIDATE_REVISION=""
 STABLE_REVISION=""
 FRESHNESS="${FRESHNESS:-30m}"
@@ -22,7 +22,7 @@ Options:
   --stable-revision <rev>      stable Cloud Run revision (default: current dominant traffic revision)
   --project <id>               GCP project (default: current gcloud project)
   --region <region>            Cloud Run region (default: us-central1)
-  --service <name>             Cloud Run service (default: nv-horizon-api)
+  --service <name>             Cloud Run service (default: api)
   --freshness <dur>            freshness window for gate checks (default: 30m)
   --limit <n>                  max rows for gate checks (default: 50000)
   --hold-minutes <n>           wait time between phases (default: 10)

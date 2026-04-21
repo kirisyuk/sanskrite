@@ -33,7 +33,7 @@
    - `roles/discoveryengine.editor` для backend SA (рекомендуется)
 
 7. **Cloud Run Configuration**:
-   - Существование сервиса `nv-horizon-api`
+   - Существование сервиса `api`
    - Наличие `VERTEX_SEARCH_DATA_STORE_ID` в env vars
    - Наличие `RAG_DOCUMENTS_BUCKET` в env vars
    - Binding секрета `GEMINI_API_KEY`
@@ -82,7 +82,7 @@ local paypal_secrets="GEMINI_API_KEY=gemini_api_key:latest,..."
 ### 1. Установить VERTEX_SEARCH_DATA_STORE_ID:
 
 ```bash
-gcloud run services update nv-horizon-api \
+gcloud run services update api \
   --region=us-central1 \
   --update-env-vars="VERTEX_SEARCH_DATA_STORE_ID=rag-documents-store" \
   --project=nv-horizon

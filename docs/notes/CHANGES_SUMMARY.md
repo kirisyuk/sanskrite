@@ -85,7 +85,7 @@
 ```bash
 # Backend
 cd backend
-gcloud run deploy nv-horizon-api --source . --region us-central1 --platform managed --allow-unauthenticated --set-env-vars="PROJECT_ID=inquire-data-84889"
+gcloud run deploy api --source . --region us-central1 --platform managed --allow-unauthenticated --set-env-vars="PROJECT_ID=inquire-data-84889"
 
 # Frontend
 cd ../web

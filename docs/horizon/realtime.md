@@ -7,7 +7,7 @@
 Horizon использует общий realtime pipeline:
 
 - Backend публикует события через `internal/realtime.Publisher` в **Google Cloud Pub/Sub**.
-- Отдельный сервис WS-брокера `cmd/nv_horizon_ws` подписан на Pub/Sub топики и ретранслирует события в WebSocket клиентов.
+- Отдельный сервис WS-брокера `cmd/ws` подписан на Pub/Sub топики и ретранслирует события в WebSocket клиентов.
 - Клиент открывает WebSocket и **подписывается на проект** control-сообщением `subscribe`.
 
 ## WebSocket подключение
@@ -154,7 +154,7 @@ Legacy (kept during migration):
 ### WebSocket / broker plumbing
 
 - **WS endpoint `/ws`**
-  - `backend/cmd/nv_horizon_ws/main.go` (отдельный сервис брокера)
+  - `backend/cmd/ws/main.go` (отдельный сервис брокера)
   - `backend/internal/realtime/ws.go` (Hub: subscribe + project routing)
   - `backend/internal/realtime/subscriber.go` (Pub/Sub → WS delivery)
 - **Pub/Sub routing по топикам**

@@ -58,7 +58,7 @@ This was intentionally filtered to exclude obvious off-scope contamination such 
 
 ## Deployed revisions
 
-- `nv-horizon-api-00195-6q6`
+- `api-00195-6q6`
 - `nv-horizon-agentmesh-00064-g4q`
 
 ## Live run

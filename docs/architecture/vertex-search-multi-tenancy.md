@@ -234,7 +234,7 @@ Expected output:
 
 ```bash
 # Test search with tenant isolation
-curl -X POST https://nv-horizon-api-sqt63d2k2q-uc.a.run.app/api/v1/projects/{projectId}/vertex-search \
+curl -X POST https://api-sqt63d2k2q-uc.a.run.app/api/v1/projects/{projectId}/vertex-search \
   -H "Authorization: Bearer {tenant1_token}" \
   -H "Content-Type: application/json" \
   -d '{"query": "test", "pageSize": 5}'

@@ -30,7 +30,7 @@ gcloud config set project nv-horizon
   - Aggregated топики: `nv-horizon.*` (9 топиков)
 
 - **Pub/Sub подписки** (11 подписок):
-  - Подписки для nv-horizon-ws (aggregated топиков): `<topic>-ws-broker` (9 подписок)
+  - Подписки для ws (aggregated топиков): `<topic>-ws-broker` (9 подписок)
 
 - **Cloud Scheduler Jobs** (4 jobs):
   - `nv-horizon-source-poller` - опрос источников каждые 5 минут
