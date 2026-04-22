@@ -56,12 +56,12 @@ curl "$(gcloud run services describe api --region us-central1 --format='value(st
 
 | Симптом | Причина | Решение |
 |---------|---------|---------|
-| `Permission denied on secret` | Нет роли `secretAccessor` | См. docs/deployment/deployment-checklist.md |
+| `Permission denied on secret` | Нет роли `secretAccessor` | `gcloud secrets add-iam-policy-binding <NAME> --member=serviceAccount:<SA> --role=roles/secretmanager.secretAccessor` |
 | `Topic not found` | Pub/Sub топики не созданы | `gcloud pubsub topics create discovery.status ...` |
 | `projectID was empty` | Env var потерялся | Скрипт теперь передаёт `GCP_PROJECT_ID` + `GOOGLE_CLOUD_PROJECT` |
 | Старый код работает | Трафик не переключён | `gcloud run services update-traffic ... --to-latest` |
 
-**Полная документация**: [docs/deployment/deployment-checklist.md](docs/deployment/deployment-checklist.md)
+**SoT деплоя**: `scripts/deploy` (bash со встроенными флагами). Fork/rename — [docs/deployment/FORK_MIGRATION_2026.md](docs/deployment/FORK_MIGRATION_2026.md).
 
 ---
 

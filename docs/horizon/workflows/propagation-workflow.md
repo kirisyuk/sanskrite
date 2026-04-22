@@ -448,7 +448,6 @@ pe.logger.Info("propagation started",
 ## См. также
 
 - [Архитектурный обзор](../architecture/overview.md)
-- [Компоненты системы](../architecture/components.md)
 - [Scout Workflow](scout-workflow.md)
 - [Жизненный цикл](lifecycle.md)
 

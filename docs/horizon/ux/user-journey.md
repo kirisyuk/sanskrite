@@ -398,6 +398,5 @@ Confidence: 0.92
 ## См. также
 
 - [API Endpoints](../api/endpoints.md)
-- [Архитектура компонентов](../architecture/components.md)
 - [Организация кода](../architecture/code-organization.md)
 

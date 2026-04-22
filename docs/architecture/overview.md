@@ -55,17 +55,11 @@ graph TD
 ### Key Links
 - Documentation index: [docs/README.md](../README.md)
 - **HTTP route catalog (platform `/api/v1`, WS, internal tasks):** [apis.md](apis.md)
-- Vertex AI Search (RAG): [vertex-ai-search.md](vertex-ai-search.md)
-- Archived docs policy: [docs/archive/README.md](../archive/README.md)
+- BigQuery + Vertex AI: [bigquery-vertex-ai-integration.md](bigquery-vertex-ai-integration.md)
+- Deployment SoT: [infrastructure/deployment.md](infrastructure/deployment.md), [../deployment/FORK_MIGRATION_2026.md](../deployment/FORK_MIGRATION_2026.md)
+- Archived docs: [docs/archive/README.md](../archive/README.md)
 - Backend packages: `backend/internal/*`
 - Frontend app: `web/src/*`
-- Infra/config: `docs/deployment/*`, `web/cloudbuild.deploy.yaml`, `scripts/*`, `backend/Dockerfile`
+- Infra/config: `scripts/deploy`, `backend/cloudbuild.*.yaml`, `web/cloudbuild.deploy.yaml`, `backend/Dockerfile`
 
 See also: `architecture/backend/overview.md`, `architecture/frontend/overview.md`, `architecture/infrastructure/overview.md`.
-
-
-### Branding
-
-- Internal project codename: `Sanskrite` (technical name used in code and repos).
-- External branding: `Horizon` (`horizon.nordicvision.io`).
-- UI uses Horizon branding; technical docs and directories may still reference `Sanskrite`.

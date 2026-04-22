@@ -2,7 +2,7 @@
 
 ## Обзор
 
-Horizon интегрируется с существующей системой проектов и источников данных Sanskrite для обеспечения изоляции, переиспользования данных и использования существующей инфраструктуры обработки источников.
+Horizon использует общесистемную модель проектов и источников данных для изоляции, переиспользования данных и обработки источников.
 
 ## Принципы интеграции
 
@@ -491,7 +491,6 @@ func (w *WatchdogService) GetSourcesForMonitoring(ctx context.Context, config *W
 
 ## См. также
 
-- [Модель данных](data-model.md)
-- [Интеграция с Sanskrite](integration.md)
 - [Scout Workflow](../workflows/scout-workflow.md)
+- Код моделей: `backend/internal/horizon/models/*.go`
 

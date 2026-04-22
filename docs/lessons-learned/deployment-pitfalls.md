@@ -1,6 +1,6 @@
 # Deployment Pitfalls & Lessons Learned
 
-Этот документ собирает типовые ошибки и anti-patterns, на которые мы потратили время в процессе разработки и деплоя Sanskrite Discovery Platform.
+Этот документ собирает типовые ошибки и anti-patterns, на которые мы потратили время в процессе деплоя Horizon.
 
 **Дата**: 2025-10-11  
 **Контекст**: Миграция с Azure (C#) на GCP (Go), первый деплой нового проекта
@@ -46,7 +46,7 @@ gcloud secrets create gemini_api_key
 --set-secrets "GEMINI_API_KEY=gemini_api_key:latest"
 ```
 
-**Документация**: Naming convention в [deployment-checklist.md](../deployment/deployment-checklist.md)
+**Документация**: Naming convention — в `scripts/deploy`.
 
 ---
 
@@ -336,9 +336,9 @@ gcloud firestore indexes composite create \
 
 ## 📚 Related Documentation
 
-- [Deployment Checklist](../deployment/deployment-checklist.md) - Полный чеклист для деплоя
+- [scripts/deploy](../../scripts/deploy) - Automated deployment script (SoT)
 - [DEPLOY_QUICK_START.md](../../DEPLOY_QUICK_START.md) - Быстрая памятка
-- [scripts/deploy](../../scripts/deploy) - Automated deployment script
+- [FORK_MIGRATION_2026.md](../deployment/FORK_MIGRATION_2026.md) - Prevalent Horizon naming conventions
 
 ---
 

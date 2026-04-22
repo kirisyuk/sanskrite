@@ -7,5 +7,4 @@ SoT — исполняемые артефакты, а не md. Md-файлы у�
 - Runtime config: `backend/Dockerfile`, `backend/cmd/*/main.go`.
 - Firebase: `web/firebase.json`, `web/.firebaserc`.
 - GCP project / resource naming conventions: `docs/deployment/FORK_MIGRATION_2026.md`.
-
-Troubleshooting и чеклисты: `docs/deployment/deployment-checklist.md`, `docs/deployment/TROUBLESHOOTING.md`.
+- Firestore indexes: `web/firestore.indexes.json` (schema alignment — `docs/taxonomy/P15_CLOSEOUT.md`).

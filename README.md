@@ -188,9 +188,9 @@ Service will run on `http://localhost:8081`
 
 ## Deployment
 
-**📖 Full documentation**: [docs/deployment/deployment-checklist.md](docs/deployment/deployment-checklist.md)
+**SoT**: `scripts/deploy` (bash, с флагами `--web/--api/--ws/--telegram/...`), `backend/cloudbuild.*.yaml`, `web/cloudbuild.deploy.yaml`.
 
-**🚀 Quick Start**: See [DEPLOY_QUICK_START.md](DEPLOY_QUICK_START.md)
+**🚀 Quick Start**: See [DEPLOY_QUICK_START.md](DEPLOY_QUICK_START.md). Fork/rename conventions: [docs/deployment/FORK_MIGRATION_2026.md](docs/deployment/FORK_MIGRATION_2026.md).
 
 ### Automated Deployment Script
 

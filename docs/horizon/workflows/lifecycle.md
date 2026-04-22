@@ -399,7 +399,6 @@ func (ls *LensService) SubscribeToFragment(ctx context.Context, lensID, fragment
 ## См. также
 
 - [Архитектурный обзор](../architecture/overview.md)
-- [Модель данных](../architecture/data-model.md)
-- [Компоненты системы](../architecture/components.md)
 - [Scout Workflow](scout-workflow.md)
+- Код моделей: `backend/internal/horizon/models/*.go`
 

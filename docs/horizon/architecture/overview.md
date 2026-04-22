@@ -2,7 +2,7 @@
 
 ## Контекст системы
 
-Система мониторинга горизонта является подсистемой платформы Sanskrite, интегрированной в моноядре. Она использует существующую инфраструктуру (Firestore, AI, агенты, realtime) и добавляет доменные пакеты под `backend/internal/horizon/` и HTTP под `backend/internal/http/horizon/`.
+Horizon живёт в моноядре: доменные пакеты под `backend/internal/horizon/`, HTTP под `backend/internal/http/horizon/`. Использует общую инфраструктуру (Firestore, AI, агенты, realtime).
 
 ## Обязательный документ для supply-chain логики
 
@@ -30,7 +30,7 @@ graph TB
         FE[Web Frontend<br/>React/Vite]
     end
 
-    subgraph SanskriteBackend["Sanskrite Backend (Go)"]
+    subgraph HorizonBackend["Horizon Backend (Go)"]
         HTTP[HTTP Handlers<br/>REST + WebSocket]
         
         subgraph RiskAnalysis["Risk Analysis Subsystem"]
@@ -303,6 +303,6 @@ watchdog/
 
 ## См. также
 
-- [Модель данных](data-model.md)
-- [Интеграция с Sanskrite](integration.md)
-- [Компоненты системы](components.md)
+- [Supply Chain Canonical Control Plane](supply-chain-canonical-control-plane.md)
+- [code-organization.md](code-organization.md)
+- Код: `backend/internal/horizon/`, `backend/internal/http/horizon/`

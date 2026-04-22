@@ -508,7 +508,6 @@ Scout Agent должен использовать базовую таксоно�
 ## См. также
 
 - [Архитектурный обзор](../architecture/overview.md)
-- [Компоненты системы](../architecture/components.md)
 - [Базовая таксономия](../architecture/taxonomy.md)
 - [Propagation Workflow](propagation-workflow.md)
 

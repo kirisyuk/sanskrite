@@ -2124,7 +2124,6 @@ Acceptance:
     - `backend/internal/horizon/scout/taxonomy.go` → `InferTaxonomyFromCanonicalPath` для `/deposit/`
   - [ ] **Документация** — обновить:
     - `docs/horizon/architecture/taxonomy.md` — добавить секцию про `/deposit/`
-    - `docs/horizon/architecture/data-model.md` — добавить DEPOSIT fragment type
   - [ ] **Firestore re-seed** — после изменений:
     - Выполнить `go run ./cmd/tools/horizon_seed_taxonomy --project <project> --version v1`
   - [ ] **Type & Edge Normalizers** — код приведения типов/рёбер к единообразию:
@@ -2479,7 +2478,6 @@ Acceptance:
     - [ ] `backend/cmd/tools/horizon_seed_taxonomy/main.go` → расширить `AllowedMetricUnits` (`percent`, `years`, `count`, `ratio`)
     - [ ] `backend/internal/horizon/scout/agents/scout_agent.go` → извлекать edge metrics
     - [ ] `backend/internal/horizon/scout/agents/critic_agent.go` → требовать metrics для OWNS, INVESTS_IN, SUPPLIES_TO
-    - [ ] `docs/horizon/architecture/data-model.md` → документировать edge metrics
 - **Track Entities (Moving Objects) — `/track/...`**
   - **Контекст**: Для отслеживания перемещаемых объектов (суда, самолеты, грузы) используется отдельный тип фрагментов с высокой частотой обновлений.
   - **Canonical Path Format** (без брендинга, нейтральный):
@@ -2636,7 +2634,6 @@ Acceptance:
     - [ ] Propagation engine → фильтровать historical edges из real-time propagation
     - [ ] Risk model (future) → учитывать historical relationships в risk scoring
     - [ ] Query API → параметр `?includeHistorical=true|false` (default: false для active only)
-    - [ ] `docs/horizon/architecture/data-model.md` → документировать edge temporal validity
 - **Связь Lifecycle Stage → Edge Modality**
   - **Проблема**: Если target fragment в `construction`, edge к нему — это "будущая" связь, не текущая.
   - **Решение**: Автоматически помечать edges к non-operational targets:
