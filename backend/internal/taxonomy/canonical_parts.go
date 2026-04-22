@@ -35,6 +35,7 @@ type CanonicalPathParts struct {
 	Person    *PersonPathParts
 	Media     *MediaPathParts
 	Deposit   *DepositPathParts
+	Evidence  *EvidencePathParts
 	Sphere    *SpherePathParts
 	Event     *EventPathParts
 	Decision  *DecisionPathParts
@@ -169,6 +170,11 @@ type DepositPathParts struct {
 	Resource string
 	Slug     string
 	Legacy   bool // deprecated transitional flag
+}
+
+// EvidencePathParts represents /evidence/{slug}.
+type EvidencePathParts struct {
+	Slug string
 }
 
 // SpherePathParts represents /sphere/{slug}.
@@ -404,6 +410,13 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 		}
 		return nil, fmt.Errorf("deposit path must be /deposit/{resource}/{slug}: %q", path)
 
+	case "evidence":
+		if len(parts) != 2 {
+			return nil, fmt.Errorf("evidence path must be /evidence/{slug}: %q", path)
+		}
+		out.Evidence = &EvidencePathParts{Slug: parts[1]}
+		return out, nil
+
 	case "sphere":
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("sphere path must be /sphere/{slug}: %q", path)
@@ -620,6 +633,12 @@ func (p *CanonicalPathParts) BuildCanonicalPath() (string, bool) {
 			resource = "other"
 		}
 		return JoinPath("deposit", resource, p.Deposit.Slug), true
+
+	case "evidence":
+		if p.Evidence == nil || p.Evidence.Slug == "" {
+			return "", false
+		}
+		return JoinPath("evidence", p.Evidence.Slug), true
 
 	case "sphere":
 		if p.Sphere == nil || p.Sphere.Slug == "" {

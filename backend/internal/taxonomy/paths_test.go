@@ -161,6 +161,11 @@ func TestValidateCanonicalPath(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "valid evidence path",
+			path:    "/evidence/launch-2024",
+			wantErr: false,
+		},
+		{
 			name:    "valid market path",
 			path:    "/market/global/energy/secondary-liquidity",
 			wantErr: false,

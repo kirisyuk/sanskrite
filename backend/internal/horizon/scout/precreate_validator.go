@@ -814,7 +814,7 @@ func repairInvalidCanonicalPath(fragment *models.HorizonFragment) (string, bool)
 	case fragment.Class == ah.FragmentClassProject:
 		candidate = taxonomy.ProjectCanonicalPath("", slug)
 	case fragment.Class == ah.FragmentClassEvidence:
-		candidate = taxonomy.JoinPath("event", slug)
+		candidate = taxonomy.JoinPath("evidence", slug)
 	default:
 		return "", false
 	}

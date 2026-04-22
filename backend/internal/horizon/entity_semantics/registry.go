@@ -63,6 +63,9 @@ func ResolveByPath(canonicalPath string, class ah.FragmentClass, subtype string,
 	if strings.HasPrefix(cp, "/program/") {
 		return EntityTypeProgram
 	}
+	if strings.HasPrefix(cp, "/project/") {
+		return EntityTypeProgram
+	}
 	if strings.HasPrefix(cp, "/loc/") || strings.HasPrefix(cp, "/region/") || strings.HasPrefix(cp, "/geo/") {
 		return EntityTypeGeoRegion
 	}
@@ -72,9 +75,9 @@ func ResolveByPath(canonicalPath string, class ah.FragmentClass, subtype string,
 	if strings.HasPrefix(cp, "/mechanism/") || class == ah.FragmentClassMechanism {
 		return EntityTypeMechanism
 	}
-	// Legacy /domain/ paths fold into evidence under AH; we still
-	// surface them as DOMAIN entity for prompt continuity.
-	if strings.HasPrefix(cp, "/domain/") || (class == ah.FragmentClassEvidence && subtype == "domain_legacy") {
+	// Domain contracts are config nodes, not ordinary fragments, but they
+	// still need a dedicated semantics profile.
+	if strings.HasPrefix(cp, "/domain/") {
 		return EntityTypeDomain
 	}
 	if strings.HasPrefix(cp, "/zone/") || (class == ah.FragmentClassGeo && subtype == "affected_zone") {
@@ -122,14 +125,12 @@ func ResolveByPath(canonicalPath string, class ah.FragmentClass, subtype string,
 			return EntityTypeProgram
 		}
 		return EntityTypeOrganization
+	case ah.FragmentClassProject:
+		return EntityTypeProgram
 	case ah.FragmentClassDecision:
 		return EntityTypeDecisionPoint
 	case ah.FragmentClassMechanism:
 		return EntityTypeMechanism
-	case ah.FragmentClassEvidence:
-		if subtype == "domain_legacy" {
-			return EntityTypeDomain
-		}
 	}
 	return EntityTypeGeneral
 }
@@ -158,8 +159,12 @@ func inferFragmentClassFromPath(cp string) (ah.FragmentClass, string) {
 		return ah.FragmentClassCommunity, ""
 	case strings.HasPrefix(cp, "/program/"):
 		return ah.FragmentClassOrg, "program"
+	case strings.HasPrefix(cp, "/project/"):
+		return ah.FragmentClassProject, ""
 	case strings.HasPrefix(cp, "/domain/"):
 		return ah.FragmentClassEvidence, "domain_legacy"
+	case strings.HasPrefix(cp, "/evidence/"):
+		return ah.FragmentClassEvidence, ""
 	case strings.HasPrefix(cp, "/decision/"):
 		return ah.FragmentClassDecision, ""
 	case strings.HasPrefix(cp, "/mechanism/"):

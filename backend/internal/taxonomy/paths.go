@@ -186,6 +186,7 @@ var ValidCanonicalPathNamespace = map[string]bool{
 	"domain": true,
 	// Informal communities (trade/professional/etc.).
 	"community": true,
+	"evidence":  true,
 	// Market segments (ORG-level classification; may be materialized later).
 	"segment": true,
 	"fac":     true,
@@ -389,6 +390,11 @@ func ValidateCanonicalPath(path string) error {
 		// The path is a machine-readable contract; it must be parseable and deterministic.
 		if err := validateDomainCanonicalPathParts(parts, path); err != nil {
 			return err
+		}
+	case "evidence":
+		// /evidence/{slug}
+		if len(parts) != 2 {
+			return fmt.Errorf("evidence canonical path must have exactly 2 segments: /evidence/{slug}: %s", path)
 		}
 	case "decision":
 		// /decision/{domain-slug}/{decision-slug}

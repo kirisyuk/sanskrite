@@ -11,10 +11,10 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
-horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
+	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // =============================================================================
@@ -383,7 +383,9 @@ func shouldValidateCanonicalPath(path string) bool {
 		strings.HasPrefix(path, "/person/"),
 		strings.HasPrefix(path, "/product/"),
 		strings.HasPrefix(path, "/program/"),
+		strings.HasPrefix(path, "/project/"),
 		strings.HasPrefix(path, "/domain/"),
+		strings.HasPrefix(path, "/evidence/"),
 		strings.HasPrefix(path, "/market/"),
 		strings.HasPrefix(path, "/segment/"),
 		strings.HasPrefix(path, "/fac/"),

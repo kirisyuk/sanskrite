@@ -14,7 +14,7 @@ import (
 //
 // Prefixes whose subtype is non-empty correspond to legacy FragmentTypes that
 // collapsed onto a parent AH class (PROGRAM/MEDIA_CHANNEL → org,
-// deposit/supply_link → site, AFFECTED_ZONE → geo, DOMAIN → evidence).
+// deposit/supply_link → site, AFFECTED_ZONE → geo, EVENT → evidence).
 // Callers that only need the AH class can use InferFragmentTypeFromCanonicalPath
 // (this discards the subtype hint); callers that need to distinguish, for
 // example, /deposit/ from /fac/ must use InferClassSubtypeFromCanonicalPath.
@@ -22,7 +22,7 @@ import (
 // InferClassSubtypeFromCanonicalPath returns a best-effort (Class, Subtype)
 // tuple based on canonical path prefix. The subtype hint is non-empty only for
 // the legacy FragmentTypes that fold into a shared parent AH class (program,
-// media_channel, deposit, supply_link, affected_zone, domain, sphere).
+// media_channel, deposit, supply_link, affected_zone, event).
 //
 // The function is intentionally conservative; unknown / non-canonical paths
 // fall back to (org, ""). Trim and case-fold the input upstream if needed.
@@ -31,6 +31,8 @@ func InferClassSubtypeFromCanonicalPath(path string) horizonmodels.ClassSubtype 
 	switch {
 	case strings.HasPrefix(p, "/domain/"):
 		return horizonmodels.CS(ah.FragmentClassEvidence, "domain")
+	case strings.HasPrefix(p, "/evidence/"):
+		return horizonmodels.CS(ah.FragmentClassEvidence, "")
 	case strings.HasPrefix(p, "/sphere/"):
 		return horizonmodels.CS(ah.FragmentClassEvidence, "sphere")
 	case strings.HasPrefix(p, "/decision/"):
@@ -41,6 +43,8 @@ func InferClassSubtypeFromCanonicalPath(path string) horizonmodels.ClassSubtype 
 		return horizonmodels.CS(ah.FragmentClassProduct, "")
 	case strings.HasPrefix(p, "/program/"):
 		return horizonmodels.CS(ah.FragmentClassOrg, "program")
+	case strings.HasPrefix(p, "/project/"):
+		return horizonmodels.CS(ah.FragmentClassProject, "")
 	case strings.HasPrefix(p, "/market/"):
 		return horizonmodels.CS(ah.FragmentClassMarket, "")
 	case strings.HasPrefix(p, "/fac/"):
@@ -84,7 +88,9 @@ func InferClassSubtypeFromCanonicalPath(path string) horizonmodels.ClassSubtype 
 //	/deposit/     -> site  (subtype=deposit)
 //	/supply-link/ -> site  (subtype=supply_link)
 //	/zone/        -> geo   (subtype=affected_zone)
+//	/project/     -> project
 //	/domain/      -> evidence (subtype=domain)
+//	/evidence/    -> evidence
 //	/sphere/      -> evidence (subtype=sphere)
 //	/event/       -> evidence (subtype=event)
 //	/gov/         -> org   (subtype=gov)

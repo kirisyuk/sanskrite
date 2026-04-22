@@ -186,12 +186,8 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 		return []string{BuildProductCanonicalPath("", "", "", slug)}
 	case t == ah.FragmentClassMarket:
 		return []string{"/market/global/" + slug}
-	case t == ah.FragmentClassEvidence && subtype == "domain":
-		return []string{"/domain/v1/other/" + slug}
-	case t == ah.FragmentClassEvidence && subtype == "sphere":
-		return []string{"/sphere/" + slug}
 	case t == ah.FragmentClassEvidence:
-		return []string{"/event/" + slug}
+		return []string{"/evidence/" + slug}
 	case t == ah.FragmentClassGeo:
 		return nil
 	case t == ah.FragmentClassPerson:
