@@ -36,9 +36,9 @@ echo "Dry run: $([ -z "$DRY_RUN_FLAG" ] && echo "no" || echo "yes")"
 
 cd "$(dirname "$0")/../backend"
 
-# Export environment variables
+# Export environment variables.
+# Google Gemini generative calls use Vertex AI under ADC of the caller — no GEMINI_API_KEY.
 export OPENAI_API_KEY="${OPENAI_API_KEY:-$(gcloud secrets versions access latest --secret="openai_api_key" --project="$GCP_PROJECT" 2>/dev/null || echo "")}"
-export GEMINI_API_KEY="${GEMINI_API_KEY:-$(gcloud secrets versions access latest --secret="gemini_api_key" --project="$GCP_PROJECT" 2>/dev/null || echo "")}"
 export VERTEX_SEARCH_LOCATION="${VERTEX_SEARCH_LOCATION:-global}"
 export VERTEX_SEARCH_DATA_STORE_ID="${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store}"
 export RAG_DOCUMENTS_BUCKET="${RAG_DOCUMENTS_BUCKET:-prevalent-horizon-test-rag-documents}"

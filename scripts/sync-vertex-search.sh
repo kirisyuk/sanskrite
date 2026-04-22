@@ -23,8 +23,8 @@ echo "Tenant ID: $TENANT_ID"
 
 cd "$(dirname "$0")/../backend"
 
-# Export environment variables
-# Note: GEMINI_API_KEY may be set for other services, but Vertex AI Search will use OAuth2
+# Export environment variables.
+# Vertex AI Search authenticates via ADC (OAuth2) — no API key required.
 export VERTEX_SEARCH_LOCATION="${VERTEX_SEARCH_LOCATION:-global}"
 export VERTEX_SEARCH_DATA_STORE_ID="${VERTEX_SEARCH_DATA_STORE_ID:-rag-documents-store}"
 export RAG_DOCUMENTS_BUCKET="${RAG_DOCUMENTS_BUCKET:-prevalent-horizon-test-rag-documents}"

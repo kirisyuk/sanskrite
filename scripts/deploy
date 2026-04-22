@@ -393,11 +393,14 @@ setup_infrastructure() {
   
   # 3. Ensure secrets exist (create if missing with placeholder)
   echo -e "${BLUE}[infra] Ensuring secrets exist...${NC}"
+  # Note: gemini_api_key / vertex_api_key / VERTEX_API_KEY* intentionally NOT listed here.
+  # All Google generative-AI traffic goes through Vertex AI on aiplatform.googleapis.com
+  # under ADC/OAuth of the backend service account. See docs: no public Generative
+  # Language API (generativelanguage.googleapis.com) is used anymore.
   local known_secrets=(
-    gemini_api_key openai_api_key anthropic_api_key deepseek_api_key grok_api_key tavily_api_key
-    vertex_api_key
+    openai_api_key anthropic_api_key deepseek_api_key grok_api_key tavily_api_key
     ANTHROPIC_API_KEY ANTHROPIC_API_KEY_TEST DEEPSEEK_API_KEY DEEPSEEK_API_KEY_TEST
-    GROK_API_KEY GROK_API_KEY_TEST OPENAI_API_KEY_TEST VERTEX_API_KEY VERTEX_API_KEY_TEST
+    GROK_API_KEY GROK_API_KEY_TEST OPENAI_API_KEY_TEST
     TELEGRAM_API_ID TELEGRAM_API_HASH TELEGRAM_BOT_TOKEN TELEGRAM_SESSION_STRING
     paypal_client_id paypal_secret paypal_webhook_id
     google-custom-search-api-key google_maps_api_key
@@ -609,26 +612,10 @@ setup_infrastructure() {
     gcloud services enable aiplatform.googleapis.com --project="$PROJECT_ID" 2>/dev/null || true
   fi
   
-  # Check Vertex AI API keys (for Vertex AI Platform, not public endpoints)
-  echo -e "${BLUE}[infra] Checking Vertex AI API keys...${NC}"
-  local vertex_keys=$(gcloud services api-keys list --project="$PROJECT_ID" \
-    --filter="restrictions.apiTargets.service:aiplatform.googleapis.com OR restrictions.apiTargets.service:discoveryengine.googleapis.com" \
-    --format="value(name)" 2>/dev/null | wc -l | tr -d ' ')
-  
-  if [[ "$vertex_keys" -gt 0 ]]; then
-    echo -e "${GREEN}[infra] Found ${vertex_keys} Vertex AI Platform API key(s)${NC}"
-  else
-    echo -e "${YELLOW}[infra] Note: No Vertex AI Platform API keys found${NC}"
-    echo -e "${YELLOW}[infra] Note: Vertex AI Platform typically uses service account auth, not API keys${NC}"
-    echo -e "${YELLOW}[infra] API keys are used for public endpoints (Gemini API), not Vertex AI Platform${NC}"
-  fi
-  
-  # Verify GEMINI_API_KEY secret exists (for Gemini/public endpoints)
-  if gcloud secrets describe gemini_api_key --project="$PROJECT_ID" >/dev/null 2>&1; then
-    echo -e "${GREEN}[infra] GEMINI_API_KEY secret exists (for Gemini/public endpoints)${NC}"
-  else
-    echo -e "${YELLOW}[infra] Warning: gemini_api_key secret not found${NC}"
-  fi
+  # Vertex AI Platform uses ADC/OAuth of the backend service account.
+  # No API key is required or supported — we intentionally do NOT check for
+  # gemini_api_key / vertex_api_key here (the public Generative Language API
+  # is not used by the Horizon backend).
 
   # Verify Google Geocoding API + key secret (required for paid geocoding fallback).
   if gcloud services list --enabled --project="$PROJECT_ID" --format='value(config.name)' 2>/dev/null | grep -q '^geocoding-backend.googleapis.com$'; then
@@ -1766,8 +1753,8 @@ deploy_api() {
   local service="api"
   local image="us-central1-docker.pkg.dev/$PROJECT_ID/cloud-run-source-deploy/$service:$(date +%s)"
 
-  # PayPal secrets (optional - PayPal integration will be disabled if not set)
-  local paypal_secrets="GEMINI_API_KEY=gemini_api_key:latest,OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,DEEPSEEK_API_KEY=deepseek_api_key:latest,GROK_API_KEY=grok_api_key:latest,TAVILY_API_KEY=tavily_api_key:latest,ADMIN_JOB_TOKEN=${SECRET_ADMIN_JOB_TOKEN}:latest"
+  # External LLM provider secrets (Google Gemini goes through Vertex AI on ADC — no key).
+  local paypal_secrets="OPENAI_API_KEY=openai_api_key:latest,ANTHROPIC_API_KEY=anthropic_api_key:latest,DEEPSEEK_API_KEY=deepseek_api_key:latest,GROK_API_KEY=grok_api_key:latest,TAVILY_API_KEY=tavily_api_key:latest,ADMIN_JOB_TOKEN=${SECRET_ADMIN_JOB_TOKEN}:latest"
   
   # ACLED secrets (optional)
   if gcloud secrets describe ACLED_ACCESS_TOKEN >/dev/null 2>&1; then

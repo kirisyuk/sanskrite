@@ -40,14 +40,8 @@ fi
 
 echo ""
 
-# 2. Проверка секретов
-echo "2. Проверка секретов..."
-if gcloud secrets describe gemini_api_key --project="$PROJECT_ID" >/dev/null 2>&1; then
-  echo "  ✅ gemini_api_key существует"
-else
-  echo "  ❌ gemini_api_key не найден"
-fi
-
+# 2. Vertex AI auth (ADC of backend SA — никаких ключей в Secret Manager)
+echo "2. Vertex AI генеративные вызовы идут под ADC backend SA (gemini_api_key не требуется)."
 echo ""
 
 # 3. Проверка BigQuery dataset
@@ -157,7 +151,6 @@ echo "7. Рекомендуемые переменные окружения:"
 echo "  - GCP_PROJECT_ID=$PROJECT_ID"
 echo "  - GOOGLE_CLOUD_PROJECT=$PROJECT_ID"
 echo "  - BIGQUERY_DATASET_ID=horizon_documents (опционально, по умолчанию)"
-echo "  - GEMINI_API_KEY (из Secret Manager)"
 echo "  - VERTEX_LOCATION=us-central1 (опционально)"
 echo "  - RAG_DOCUMENTS_BUCKET=$PROJECT_ID-rag-documents"
 echo "  - CORE_DOCS_BUCKET=$PROJECT_ID-core-docs"

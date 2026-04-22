@@ -58,9 +58,12 @@ vim scripts/create-secrets.sh
   - `DEEPSEEK_API_KEY`, `deepseek_api_key`
   - `GROK_API_KEY`, `grok_api_key`
   - `OPENAI_API_KEY_TEST`, `openai_api_key`
-  - `VERTEX_API_KEY`, `VERTEX_API_KEY_TEST`, `vertex_api_key`
-  - `gemini_api_key`
   - `tavily_api_key`
+
+Примечание: Google Gemini больше не вызывается через публичный Generative Language API
+— все genai-обращения идут через Vertex AI (`aiplatform.googleapis.com`) под ADC
+сервисного аккаунта `backend@…`, поэтому `gemini_api_key` / `vertex_api_key` /
+`VERTEX_API_KEY*` в Secret Manager не создаются.
 
 - Telegram секреты:
   - `TELEGRAM_API_ID`

@@ -6,8 +6,8 @@ set -euo pipefail
 #   export ANTHROPIC_API_KEY_TEST=...
 #   export DEEPSEEK_API_KEY_TEST=...
 #   export GROK_API_KEY_TEST=...
-#   export GEMINI_API_KEY_TEST=...
 #   export TAVILY_API_KEY_TEST=...
+# (Gemini calls go through Vertex AI under ADC — no API key required.)
 #   ./scripts/setup-test-secrets.sh [-p|--project prevalent-horizon-test]
 
 PROJECT="prevalent-horizon-test"
@@ -61,7 +61,6 @@ upsert_secret_from_env OPENAI_API_KEY_TEST
 upsert_secret_from_env ANTHROPIC_API_KEY_TEST
 upsert_secret_from_env DEEPSEEK_API_KEY_TEST
 upsert_secret_from_env GROK_API_KEY_TEST
-upsert_secret_from_env GEMINI_API_KEY_TEST
 upsert_secret_from_env TAVILY_API_KEY_TEST
 
 echo "Done."

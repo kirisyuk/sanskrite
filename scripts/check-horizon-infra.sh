@@ -125,7 +125,7 @@ done
 
 echo ""
 echo "5. Проверка Secret Manager..."
-REQUIRED_SECRETS=("vertex_api_key" "gemini_api_key" "openai_api_key" "anthropic_api_key")
+REQUIRED_SECRETS=("openai_api_key" "anthropic_api_key")
 for secret in "${REQUIRED_SECRETS[@]}"; do
   if gcloud secrets describe "$secret" --format="value(name)" 2>/dev/null | grep -q "$secret"; then
     check "Секрет существует: $secret"

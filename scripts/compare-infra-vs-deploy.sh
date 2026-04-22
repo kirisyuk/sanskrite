@@ -64,10 +64,10 @@ done
 
 # --- Secrets: deploy creates (placeholders or from secrets.env via apply-secrets) ---
 DEPLOY_SECRETS=(
-  gemini_api_key openai_api_key openrouter_api_key anthropic_api_key deepseek_api_key grok_api_key tavily_api_key
-  vertex_api_key admin_job_token
+  openai_api_key openrouter_api_key anthropic_api_key deepseek_api_key grok_api_key tavily_api_key
+  admin_job_token
   ANTHROPIC_API_KEY ANTHROPIC_API_KEY_TEST DEEPSEEK_API_KEY DEEPSEEK_API_KEY_TEST
-  GROK_API_KEY GROK_API_KEY_TEST OPENAI_API_KEY_TEST VERTEX_API_KEY VERTEX_API_KEY_TEST
+  GROK_API_KEY GROK_API_KEY_TEST OPENAI_API_KEY_TEST
   TELEGRAM_API_ID TELEGRAM_API_HASH TELEGRAM_BOT_TOKEN TELEGRAM_SESSION_STRING
   paypal_client_id paypal_secret paypal_webhook_id google-custom-search-api-key
   GEONAMES_USERNAME functions-key
