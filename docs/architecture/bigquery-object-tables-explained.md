@@ -32,7 +32,7 @@ Object Table (внешняя)
 
 ### 1. Файлы в GCS:
 ```
-gs://sanskrite-core-docs/
+gs://prevalent-horizon-test-core-docs/
 ├── tenant1/project1/document1.txt
 ├── tenant1/project1/document2.json
 └── tenant2/project1/data.csv
@@ -44,7 +44,7 @@ CREATE EXTERNAL TABLE `prevalent-horizon-test.horizon_documents.core_docs_text_t
 WITH CONNECTION `prevalent-horizon-test.us.gcs-connection`
 OPTIONS (
   object_metadata = 'SIMPLE',
-  uris = ['gs://sanskrite-core-docs/**/*.txt']
+  uris = ['gs://prevalent-horizon-test-core-docs/**/*.txt']
 )
 ```
 
@@ -64,20 +64,20 @@ BigQuery автоматически читает файлы из GCS при вы
 ```sql
 -- Для текстовых файлов
 documents_object_table          → gs://prevalent-horizon-test-rag-documents/**/*.txt
-core_docs_text_table           → gs://sanskrite-core-docs/**/*.{txt,md,csv,tsv}
-core_docs_json_table           → gs://sanskrite-core-docs/**/*.json
+core_docs_text_table           → gs://prevalent-horizon-test-core-docs/**/*.{txt,md,csv,tsv}
+core_docs_json_table           → gs://prevalent-horizon-test-core-docs/**/*.json
 ```
 
 ### Новые Object Tables (если добавим поддержку новых форматов):
 ```sql
 -- Для Parquet файлов (если добавим поддержку)
-core_docs_parquet_table        → gs://sanskrite-core-docs/**/*.parquet
+core_docs_parquet_table        → gs://prevalent-horizon-test-core-docs/**/*.parquet
 
 -- Для Avro файлов (если добавим поддержку)
-core_docs_avro_table           → gs://sanskrite-core-docs/**/*.avro
+core_docs_avro_table           → gs://prevalent-horizon-test-core-docs/**/*.avro
 
 -- Для Excel файлов (если добавим поддержку)
-core_docs_excel_table          → gs://sanskrite-core-docs/**/*.{xlsx,xls}
+core_docs_excel_table          → gs://prevalent-horizon-test-core-docs/**/*.{xlsx,xls}
 ```
 
 ## Структура Object Table
@@ -186,7 +186,7 @@ WHERE m.projectId = 'project-x'
 
 ### Шаг 1: Файлы уже в GCS
 ```
-gs://sanskrite-core-docs/tenant1/project1/data.parquet
+gs://prevalent-horizon-test-core-docs/tenant1/project1/data.parquet
 ```
 
 ### Шаг 2: Создаем Object Table
@@ -195,7 +195,7 @@ CREATE OR REPLACE EXTERNAL TABLE `prevalent-horizon-test.horizon_documents.core_
 WITH CONNECTION `prevalent-horizon-test.us.gcs-connection`
 OPTIONS (
   object_metadata = 'SIMPLE',
-  uris = ['gs://sanskrite-core-docs/**/*.parquet'],
+  uris = ['gs://prevalent-horizon-test-core-docs/**/*.parquet'],
   format = 'PARQUET'
 )
 ```

@@ -176,10 +176,10 @@ WITH CONNECTION \`prevalent-horizon-test.us.gcs-connection\`
 OPTIONS (
   object_metadata = 'SIMPLE',
   uris = [
-    'gs://sanskrite-core-docs/**/*.txt',
-    'gs://sanskrite-core-docs/**/*.md',
-    'gs://sanskrite-core-docs/**/*.csv',
-    'gs://sanskrite-core-docs/**/*.tsv'
+    'gs://prevalent-horizon-test-core-docs/**/*.txt',
+    'gs://prevalent-horizon-test-core-docs/**/*.md',
+    'gs://prevalent-horizon-test-core-docs/**/*.csv',
+    'gs://prevalent-horizon-test-core-docs/**/*.tsv'
   ]
 )
 EOF
@@ -190,7 +190,7 @@ CREATE OR REPLACE EXTERNAL TABLE \`prevalent-horizon-test.horizon_documents.core
 WITH CONNECTION \`prevalent-horizon-test.us.gcs-connection\`
 OPTIONS (
   object_metadata = 'SIMPLE',
-  uris = ['gs://sanskrite-core-docs/**/*.json'],
+  uris = ['gs://prevalent-horizon-test-core-docs/**/*.json'],
   format = 'JSON'
 )
 EOF

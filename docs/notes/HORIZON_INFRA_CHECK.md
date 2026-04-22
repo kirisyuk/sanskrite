@@ -13,7 +13,7 @@
    - ✓ Security Rules добавлены в `backend/firestore.rules`
 
 2. **GCS Buckets**
-   - ✓ `sanskrite-core-docs` - существует
+   - ✓ `prevalent-horizon-test-core-docs` - существует
    - ✓ `prevalent-horizon-test-rag-documents` - существует
 
 3. **Vertex AI Search**
@@ -44,7 +44,7 @@
    - ✓ `VERTEX_SEARCH_DATA_STORE_ID` = `rag-documents-store`
    - ✓ `VERTEX_SEARCH_LOCATION` = `global`
    - ✓ `RAG_DOCUMENTS_BUCKET` = `prevalent-horizon-test-rag-documents`
-   - ✓ `CORE_DOCS_BUCKET` = `sanskrite-core-docs`
+   - ✓ `CORE_DOCS_BUCKET` = `prevalent-horizon-test-core-docs`
 
 8. **Firestore Security Rules**
    - ✓ Правила для Horizon коллекций добавлены

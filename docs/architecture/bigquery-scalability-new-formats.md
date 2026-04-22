@@ -52,7 +52,7 @@ CREATE OR REPLACE EXTERNAL TABLE `prevalent-horizon-test.horizon_documents.core_
 WITH CONNECTION `prevalent-horizon-test.us.gcs-connection`
 OPTIONS (
   object_metadata = 'SIMPLE',
-  uris = ['gs://sanskrite-core-docs/**/*.parquet'],
+  uris = ['gs://prevalent-horizon-test-core-docs/**/*.parquet'],
   format = 'PARQUET'
 )
 
@@ -61,7 +61,7 @@ CREATE OR REPLACE EXTERNAL TABLE `prevalent-horizon-test.horizon_documents.core_
 WITH CONNECTION `prevalent-horizon-test.us.gcs-connection`
 OPTIONS (
   object_metadata = 'SIMPLE',
-  uris = ['gs://sanskrite-core-docs/**/*.avro'],
+  uris = ['gs://prevalent-horizon-test-core-docs/**/*.avro'],
   format = 'AVRO'
 )
 
@@ -70,7 +70,7 @@ CREATE OR REPLACE EXTERNAL TABLE `prevalent-horizon-test.horizon_documents.core_
 WITH CONNECTION `prevalent-horizon-test.us.gcs-connection`
 OPTIONS (
   object_metadata = 'SIMPLE',
-  uris = ['gs://sanskrite-core-docs/**/*.xlsx', 'gs://sanskrite-core-docs/**/*.xls']
+  uris = ['gs://prevalent-horizon-test-core-docs/**/*.xlsx', 'gs://prevalent-horizon-test-core-docs/**/*.xls']
 )
 ```
 
@@ -155,7 +155,7 @@ CREATE OR REPLACE EXTERNAL TABLE `prevalent-horizon-test.horizon_documents.core_
 WITH CONNECTION `prevalent-horizon-test.us.gcs-connection`
 OPTIONS (
   object_metadata = 'SIMPLE',
-  uris = ['gs://sanskrite-core-docs/**/*.parquet'],
+  uris = ['gs://prevalent-horizon-test-core-docs/**/*.parquet'],
   format = 'PARQUET'
 )
 EOF

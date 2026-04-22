@@ -28,7 +28,7 @@
 
 5. **GCS Buckets:**
    - ✅ `prevalent-horizon-test-rag-documents` существует
-   - ✅ `sanskrite-core-docs` существует
+   - ✅ `prevalent-horizon-test-core-docs` существует
 
 6. **Service Account права:**
    - ✅ `backend@inquire-data-84889.iam.gserviceaccount.com` имеет:
@@ -72,7 +72,7 @@ GEMINI_API_KEY=<из Secret Manager>
 BIGQUERY_DATASET_ID=horizon_documents  # по умолчанию
 VERTEX_LOCATION=us-central1              # по умолчанию
 RAG_DOCUMENTS_BUCKET=prevalent-horizon-test-rag-documents
-CORE_DOCS_BUCKET=sanskrite-core-docs
+CORE_DOCS_BUCKET=prevalent-horizon-test-core-docs
 ```
 
 ### Проверка работоспособности:
