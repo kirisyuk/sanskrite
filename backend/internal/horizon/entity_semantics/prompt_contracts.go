@@ -3,26 +3,26 @@ package entity_semantics
 import (
 	"fmt"
 	"strings"
+
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
-var promptRelationTargetTypes = []EntityTypeKey{
-	EntityTypeOrganization,
-	EntityTypeFacility,
-	EntityTypeGeoRegion,
-	EntityTypeProduct,
-	EntityTypeProgram,
-	EntityTypeMarket,
-	// EVENT and MEDIA_CHANNEL are valid relation targets even without dedicated object-detail profiles.
-	EntityTypeKey("EVENT"),
-	EntityTypePerson,
-	EntityTypeKey("MEDIA_CHANNEL"),
-	EntityTypeDeposit,
-	EntityTypeCommunity,
-	EntityTypeDecisionPoint,
-	EntityTypeMechanism,
-	EntityTypeAffectedZone,
-	EntityTypeSupplyLink,
-	EntityTypeTrack,
+var promptRelationTargetTypes = []ah.FragmentClass{
+	ah.FragmentClassCommunity,
+	ah.FragmentClassDecision,
+	ah.FragmentClassEvidence,
+	ah.FragmentClassGeo,
+	ah.FragmentClassMarket,
+	ah.FragmentClassMechanism,
+	ah.FragmentClassMobileAsset,
+	ah.FragmentClassOrg,
+	ah.FragmentClassPerson,
+	ah.FragmentClassProduct,
+	ah.FragmentClassProject,
+	ah.FragmentClassRegime,
+	ah.FragmentClassRoute,
+	ah.FragmentClassSite,
+	ah.FragmentClassVesselClass,
 }
 
 // PromptRelationTargetTypes returns the stable relation target type list used by Scout/Research prompts.

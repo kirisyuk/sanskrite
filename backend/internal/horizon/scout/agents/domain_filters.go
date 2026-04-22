@@ -100,7 +100,7 @@ func FilterDomainRelations(ctx context.Context, mode string, rels []DiscoveredRe
 			// Falls back to the upper-case wire form for the strict equality
 			// path so legacy tokens that have NO AH home (relations dropped
 			// in docs/archive/taxonomy-migration-2026/migration_map.yaml) still get a single equality check.
-			normalizedWire := taxonomy.NormalizeRelationType(rel.RelationType)
+			normalizedWire := normalizeAgentRelationToken(rel.RelationType)
 			matched := false
 			if normalizedWire != "" && filterContains(allowedEdges, normalizedWire) {
 				matched = true

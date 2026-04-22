@@ -2,6 +2,15 @@ package taxonomy
 
 import "strings"
 
+var promptSupplyChainEdgeTypes = []string{"produces", "supplies", "invested_in", "joint_venture_with", "member_of", "wields"}
+var promptServiceChainEdgeTypes = []string{"produces", "supplies", "imposes", "wields"}
+var promptGovernanceEdgeTypes = []string{"assures", "beneficially_owns", "controls_via", "holds_board_seat", "invested_in", "managed_by", "member_of", "operates", "subsidiary_of", "wields"}
+var promptAssuranceEdgeTypes = []string{"assures", "regulates"}
+var promptEcosystemEdgeTypes = []string{"beneficially_owns", "controls_via", "influences", "invested_in", "joint_venture_with", "member_of", "regulates", "subsidiary_of", "supplies", "wields"}
+var promptMarketEdgeTypes = []string{"listed_on", "member_of", "wields"}
+var promptStrategicEdgeTypes = []string{"gatekeeps", "imposes", "member_of", "wields"}
+var promptPolicyImpactEdgeTypes = []string{"disrupts", "gatekeeps", "imposes", "influences", "listed_on", "member_of", "operates", "regulates", "wields"}
+
 // DomainMode determines which Scout phases, Research strategies, and Critic validators run.
 // Source of truth: intent-resolved domains (contract types) and steering profile mapping.
 const (
@@ -150,19 +159,19 @@ var ServiceChainEdgeTypes = []string{
 
 // SupplyChainEdgeTypesString returns comma-separated list for prompts. Derives from SupplyChainEdgeTypes.
 func SupplyChainEdgeTypesString() string {
-	return strings.Join(SupplyChainEdgeTypes, ", ")
+	return strings.Join(promptSupplyChainEdgeTypes, ", ")
 }
 
 // ServiceChainEdgeTypesString returns comma-separated list for prompts. Derives from ServiceChainEdgeTypes.
 func ServiceChainEdgeTypesString() string {
-	return strings.Join(ServiceChainEdgeTypes, ", ")
+	return strings.Join(promptServiceChainEdgeTypes, ", ")
 }
 
 // SupplyChainEdgeTypesForPrompt returns prompt enum string for supply-chain-only schemas:
 // `"PRODUCES" | "SUPPLIES_TO" | ...`. Use in supply-chain contract prompts instead of AllEdgeTypesForPrompt.
 func SupplyChainEdgeTypesForPrompt() string {
-	quoted := make([]string, 0, len(SupplyChainEdgeTypes))
-	for _, t := range SupplyChainEdgeTypes {
+	quoted := make([]string, 0, len(promptSupplyChainEdgeTypes))
+	for _, t := range promptSupplyChainEdgeTypes {
 		quoted = append(quoted, `"`+t+`"`)
 	}
 	return strings.Join(quoted, " | ")
@@ -209,7 +218,7 @@ var GovernanceEdgeTypes = []string{
 // GovernanceEdgeTypesString returns comma-separated list for prompts.
 // Must stay in sync with GovernanceEdgeTypes.
 func GovernanceEdgeTypesString() string {
-	return strings.Join(GovernanceEdgeTypes, ", ")
+	return strings.Join(promptGovernanceEdgeTypes, ", ")
 }
 
 // AssuranceEdgeTypes — Third Line: independent audit, certification, regulatory approval, inspection.
@@ -220,7 +229,7 @@ var AssuranceEdgeTypes = []string{
 
 // AssuranceEdgeTypesString returns comma-separated list for prompts.
 func AssuranceEdgeTypesString() string {
-	return "ASSURES, REGULATES"
+	return strings.Join(promptAssuranceEdgeTypes, ", ")
 }
 
 // AssuranceTypeQualifierValues — allowed values for qualifiers.assurance_type on ASSURES edges.
@@ -241,7 +250,7 @@ var EcosystemEdgeTypes = []string{
 
 // EcosystemEdgeTypesString returns comma-separated list for prompts.
 func EcosystemEdgeTypesString() string {
-	return strings.Join(EcosystemEdgeTypes, ", ")
+	return strings.Join(promptEcosystemEdgeTypes, ", ")
 }
 
 // MarketEdgeTypes is the allowlist for market mode.
@@ -252,7 +261,7 @@ var MarketEdgeTypes = []string{
 
 // MarketEdgeTypesString returns comma-separated list for prompts (market/competitive analysis).
 func MarketEdgeTypesString() string {
-	return strings.Join(MarketEdgeTypes, ", ")
+	return strings.Join(promptMarketEdgeTypes, ", ")
 }
 
 // StrategicEdgeTypes is the allowlist for strategic mode.
@@ -263,7 +272,7 @@ var StrategicEdgeTypes = []string{
 
 // StrategicEdgeTypesString returns comma-separated list for prompts (strategic/geopolitical analysis).
 func StrategicEdgeTypesString() string {
-	return strings.Join(StrategicEdgeTypes, ", ")
+	return strings.Join(promptStrategicEdgeTypes, ", ")
 }
 
 // PolicyImpactEdgeTypes is the allowlist for policy_impact mode.
@@ -283,7 +292,7 @@ var PolicyImpactEdgeTypes = []string{
 
 // PolicyImpactEdgeTypesString returns comma-separated list for prompts (regulatory impact).
 func PolicyImpactEdgeTypesString() string {
-	return strings.Join(PolicyImpactEdgeTypes, ", ")
+	return strings.Join(promptPolicyImpactEdgeTypes, ", ")
 }
 
 // AllowedEntityTypesForDomainMode returns the strict programmatic list of allowed entity types for a given domain mode.

@@ -23,11 +23,11 @@ func TestBuildExtractionPrompt_EnablesSupplyChainModuleFromDomainMode(t *testing
 	if !strings.Contains(prompt, "DOMAIN MODE GUARDRAILS (strict)") {
 		t.Fatalf("expected domain guardrails block in extraction prompt")
 	}
-	if !strings.Contains(prompt, "DEPENDS_ON") || !strings.Contains(prompt, "SUPPLIES_TO") {
+	if !strings.Contains(prompt, "beneficially_owns") || !strings.Contains(prompt, "supplies") {
 		t.Fatalf("expected supply-chain relation taxonomy in domain guardrails")
 	}
-	if !strings.Contains(prompt, "OWNS is allowed ONLY for supply-relevant ownership") {
-		t.Fatalf("expected scoped OWNS supply-chain guidance in extraction prompt")
+	if !strings.Contains(prompt, "beneficially_owns is allowed ONLY for supply-relevant ownership") {
+		t.Fatalf("expected scoped beneficially_owns supply-chain guidance in extraction prompt")
 	}
 	if !strings.Contains(prompt, "DOMAIN-SCOPED RELATION CATALOG (strict override)") {
 		t.Fatalf("expected strict relation catalog override in domain mode prompt")
@@ -41,10 +41,10 @@ func TestBuildExtractionPrompt_EnablesSupplyChainModuleFromDomainMode(t *testing
 	if !strings.Contains(prompt, "targetCanonicalPath MUST NOT start with /domain/") {
 		t.Fatalf("expected scoped guardrail that non-domain relations must not target /domain/")
 	}
-	if strings.Contains(prompt, "RELATIVE_OF") {
+	if strings.Contains(prompt, "relative_of") {
 		t.Fatalf("supply_chain scoped prompt must not contain general-only relation taxonomy")
 	}
-	if strings.Contains(prompt, "RENAMED_TO") {
+	if strings.Contains(prompt, "renamed_to") {
 		t.Fatalf("supply_chain scoped prompt must not contain org-lifecycle relation taxonomy")
 	}
 }
@@ -59,10 +59,10 @@ func TestBuildExtractionPrompt_GeneralModeKeepsFullRelationCatalog(t *testing.T)
 		"",
 		nil,
 	)
-	if !strings.Contains(prompt, "RELATIVE_OF") {
+	if !strings.Contains(prompt, "beneficially_owns") {
 		t.Fatalf("general prompt must include broad relation taxonomy")
 	}
-	if !strings.Contains(prompt, "RENAMED_TO") {
+	if !strings.Contains(prompt, "acquired_stake_from") {
 		t.Fatalf("general prompt must include org lifecycle relation taxonomy")
 	}
 	if !strings.Contains(prompt, "targetCanonicalPath MUST NOT start with /domain/") {
@@ -83,7 +83,7 @@ func TestBuildExtractionPrompt_MixedGeneralAndSpecificUsesScopedCatalog(t *testi
 	if !strings.Contains(prompt, "DOMAIN-SCOPED RELATION RULES (active contract)") {
 		t.Fatalf("mixed general+specific should use scoped relation rules")
 	}
-	if strings.Contains(prompt, "RELATIVE_OF") {
+	if strings.Contains(prompt, "relative_of") {
 		t.Fatalf("mixed general+specific should not include unrelated general taxonomy")
 	}
 }
@@ -122,9 +122,9 @@ func TestBuildExtractionPrompt_RoleFirstDirectionContract(t *testing.T) {
 	)
 	for _, want := range []string{
 		"ROLE-FIRST DIRECTION CONTRACT",
-		"Do NOT assume source = THIS FRAGMENT for OWNS / INVESTS_IN / ASSURES / CONTROLS.",
+		"Do NOT assume source = THIS FRAGMENT for beneficially_owns / invested_in / assures / controls_via.",
 		"qualifiers.source_role and qualifiers.target_role",
-		"DEPENDS_ON/SUPPLIES_TO",
+		"depends_on / supplies",
 		"Direction is ROLE-FIRST",
 	} {
 		if !strings.Contains(prompt, want) {

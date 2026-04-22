@@ -3540,7 +3540,11 @@ func (a *ResearchAgent) buildRegulatoryImpactRefinementPrompt(domainCP string, e
 		if s == "" || t == "" {
 			continue
 		}
-		edgeLines = append(edgeLines, fmt.Sprintf("%s --%s--> %s", s, strings.TrimSpace(taxonomy.NormalizeRelationType(r.RelationType)), t))
+		edgeLabel := normalizeAgentRelationToken(r.RelationType)
+		if edgeLabel == "" {
+			edgeLabel = strings.TrimSpace(r.RelationType)
+		}
+		edgeLines = append(edgeLines, fmt.Sprintf("%s --%s--> %s", s, edgeLabel, t))
 	}
 	nodesBlock := strings.Join(nodeList, "\n")
 	edgesBlock := strings.Join(edgeLines, "\n")

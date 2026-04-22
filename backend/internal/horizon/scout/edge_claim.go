@@ -4,7 +4,6 @@ import (
 	"strings"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // EdgeClaim is the unified internal contract for "an edge we want to materialize".
@@ -22,7 +21,7 @@ type EdgeClaim = agents.DiscoveredRelation
 func claimFromStrategicEdge(src string, srcType string, tgt string, tgtType string, relType string, reason string, confidence float64, qualifiers map[string]interface{}) EdgeClaim {
 	src = strings.TrimSpace(src)
 	tgt = strings.TrimSpace(tgt)
-	relType = strings.TrimSpace(taxonomy.NormalizeRelationType(relType))
+	relType = normalizeRelationToken(relType)
 
 	c := EdgeClaim{
 		SourceCanonicalPath: src,
@@ -38,4 +37,3 @@ func claimFromStrategicEdge(src string, srcType string, tgt string, tgtType stri
 	}
 	return c
 }
-

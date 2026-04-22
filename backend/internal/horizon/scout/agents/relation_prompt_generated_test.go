@@ -25,11 +25,10 @@ func TestGeneratedIntentDecomposerRelationRulesBlock_RespectsSupplyChainAllowlis
 	for _, allowed := range []ah.RelationName{
 		ah.RelationNameProduces,
 		ah.RelationNameSupplies,
-		ah.RelationName("transforms_into"),
-		ah.RelationName("has_market_segment"),
-		ah.RelationName("competes_with"),
+		ah.RelationNameBeneficiallyOwns,
+		ah.RelationName("participates_in"),
 		ah.RelationNameJointVentureWith,
-		ah.RelationName("operates_via"),
+		ah.RelationNameWields,
 		ah.RelationNameMemberOf,
 		ah.RelationNameInvestedIn,
 	} {
@@ -38,8 +37,8 @@ func TestGeneratedIntentDecomposerRelationRulesBlock_RespectsSupplyChainAllowlis
 		}
 	}
 	for _, forbidden := range []ah.RelationName{
-		ah.RelationNameBeneficiallyOwns,
 		ah.RelationName("depends_on"),
+		ah.RelationName("relative_of"),
 	} {
 		if strings.Contains(block, string(forbidden)+":") {
 			t.Fatalf("did not expect supply-chain decomposer block to include %s entry", forbidden)

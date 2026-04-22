@@ -79,11 +79,11 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChain(t *testing.T) {
 	for _, r := range out {
 		types[r.RelationType] = true
 	}
-	if !types["SUPPLIES_TO"] || !types["PRODUCES"] {
-		t.Fatalf("expected SUPPLIES_TO, PRODUCES; got %v", types)
+	if !types["supplies"] || !types["produces"] {
+		t.Fatalf("expected supplies, produces; got %v", types)
 	}
-	if types["DEPENDS_ON"] || types["OWNS"] {
-		t.Fatalf("DEPENDS_ON and OWNS must be excluded in supply_chain; got %v", types)
+	if types["depends_on"] || types["beneficially_owns"] {
+		t.Fatalf("depends_on and beneficially_owns must be excluded in supply_chain; got %v", types)
 	}
 }
 
@@ -103,11 +103,11 @@ func TestFilterDiscoveredRelationsByDomainModes_DomainAnchorKeepsScaffold(t *tes
 	for _, r := range out {
 		types[r.RelationType] = true
 	}
-	if !types["FOCUSES_ON"] || !types["RELATED_DOMAIN"] {
-		t.Fatalf("expected FOCUSES_ON and RELATED_DOMAIN from domain anchor, got %v", types)
+	if !types["focuses_on"] || !types["related_domain"] {
+		t.Fatalf("expected focuses_on and related_domain from domain anchor, got %v", types)
 	}
-	if types["OWNS"] {
-		t.Fatalf("OWNS must remain excluded in supply_chain mode even from domain")
+	if types["beneficially_owns"] {
+		t.Fatalf("beneficially_owns must remain excluded in supply_chain mode even from domain")
 	}
 }
 
@@ -178,11 +178,11 @@ func TestFilterDiscoveredRelationsByDomainModes_MarketAnchorKeepsMarketTypes(t *
 	for _, r := range out {
 		types[r.RelationType] = true
 	}
-	if !types["HAS_MARKET_SEGMENT"] || !types["PARTICIPATES_IN"] {
-		t.Fatalf("expected HAS_MARKET_SEGMENT and PARTICIPATES_IN from market anchor, got %v", types)
+	if !types["has_market_segment"] || !types["participates_in"] {
+		t.Fatalf("expected has_market_segment and participates_in from market anchor, got %v", types)
 	}
-	if types["DEPENDS_ON"] || types["OWNS"] {
-		t.Fatalf("DEPENDS_ON and OWNS must remain excluded in supply_chain mode; got %v", types)
+	if types["depends_on"] || types["beneficially_owns"] {
+		t.Fatalf("depends_on and beneficially_owns must remain excluded in supply_chain mode; got %v", types)
 	}
 }
 
@@ -208,8 +208,8 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChainOwnsAllowedForRelevan
 		t.Fatalf("expected 2 supply-relevant OWNS relations, got %d", len(out))
 	}
 	for _, r := range out {
-		if r.RelationType != "OWNS" {
-			t.Fatalf("expected OWNS relation, got %s", r.RelationType)
+		if r.RelationType != string(ah.RelationNameBeneficiallyOwns) {
+			t.Fatalf("expected beneficially_owns relation, got %s", r.RelationType)
 		}
 		if r.TargetCanonicalPath == "/market/jp/electronics/imaging" {
 			t.Fatalf("market target must not pass supply-chain OWNS predicate")
@@ -239,8 +239,8 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChainControlsAllowedForRel
 		t.Fatalf("expected 2 supply-relevant CONTROLS relations, got %d", len(out))
 	}
 	for _, r := range out {
-		if r.RelationType != "CONTROLS" {
-			t.Fatalf("expected CONTROLS relation, got %s", r.RelationType)
+		if r.RelationType != string(ah.RelationNameControlsVia) {
+			t.Fatalf("expected controls_via relation, got %s", r.RelationType)
 		}
 		if r.TargetCanonicalPath == "/market/us/energy/oil-gas" {
 			t.Fatalf("market target must not pass supply-chain CONTROLS predicate")
@@ -270,8 +270,8 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChainAdministersAllowedFor
 		t.Fatalf("expected 2 supply-relevant ADMINISTERS relations, got %d", len(out))
 	}
 	for _, r := range out {
-		if r.RelationType != "ADMINISTERS" {
-			t.Fatalf("expected ADMINISTERS relation, got %s", r.RelationType)
+		if r.RelationType != string(ah.RelationNameOperates) {
+			t.Fatalf("expected operates relation, got %s", r.RelationType)
 		}
 		if r.TargetCanonicalPath == "/market/us/defense/naval-systems" {
 			t.Fatalf("market target must not pass supply-chain ADMINISTERS predicate")
@@ -301,8 +301,8 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChainSubsidiaryOfAllowedFo
 		t.Fatalf("expected 2 supply-relevant SUBSIDIARY_OF relations, got %d", len(out))
 	}
 	for _, r := range out {
-		if r.RelationType != "SUBSIDIARY_OF" {
-			t.Fatalf("expected SUBSIDIARY_OF relation, got %s", r.RelationType)
+		if r.RelationType != string(ah.RelationNameSubsidiaryOf) {
+			t.Fatalf("expected subsidiary_of relation, got %s", r.RelationType)
 		}
 		if r.TargetCanonicalPath == "/market/jp/automotive/oem" {
 			t.Fatalf("market target must not pass supply-chain SUBSIDIARY_OF predicate")
@@ -579,8 +579,15 @@ func TestFilterDomainRelations_CommunitySpecificEdgesAllowedInInfluenceModes(t *
 		tc := tc
 		t.Run(tc.mode, func(t *testing.T) {
 			out, dropped := agents.FilterDomainRelations(context.Background(), tc.mode, in)
-			if dropped != 0 || len(out) != len(in) {
-				t.Fatalf("%s should keep all community-specific contract edges, dropped=%d out=%d", tc.mode, dropped, len(out))
+			if dropped != 2 || len(out) != 2 {
+				t.Fatalf("%s should keep only member_of / operates_via and drop legacy community edges, dropped=%d out=%d", tc.mode, dropped, len(out))
+			}
+			seen := map[string]bool{}
+			for _, rel := range out {
+				seen[rel.RelationType] = true
+			}
+			if !seen["MEMBER_OF"] || !seen["OPERATES_VIA"] {
+				t.Fatalf("%s should preserve MEMBER_OF and OPERATES_VIA, got %v", tc.mode, seen)
 			}
 		})
 	}
@@ -608,13 +615,18 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChainDropsNonContractTypes
 	for _, r := range out {
 		types[r.RelationType] = true
 	}
-	if !types["SUPPLIES_TO"] || !types["PARTICIPATES_IN"] || !types["COMPETES_WITH"] || !types["PARTNERS_WITH"] || !types["OPERATES_VIA"] || !types["MEMBER_OF"] || !types["INVESTS_IN"] {
-		t.Fatalf("expected SUPPLIES_TO, PARTICIPATES_IN, COMPETES_WITH, PARTNERS_WITH, OPERATES_VIA, MEMBER_OF, and INVESTS_IN to pass, got %v", types)
+	for _, want := range []string{"supplies", "participates_in", "competes_with", "joint_venture_with", "wields", "member_of", "invested_in"} {
+		if !types[want] {
+			t.Fatalf("expected %s to pass, got %v", want, types)
+		}
 	}
-	if types["DEPENDS_ON"] {
-		t.Fatalf("DEPENDS_ON must be excluded in supply_chain; got %v", types)
+	if !types["subsidiary_of"] {
+		t.Fatalf("expected subsidiary_of to survive canonical ownership filtering, got %v", types)
 	}
-	for _, bad := range []string{"ASSOCIATED_WITH"} {
+	if types["depends_on"] {
+		t.Fatalf("depends_on must be excluded in supply_chain; got %v", types)
+	}
+	for _, bad := range []string{"associated_with"} {
 		if types[bad] {
 			t.Fatalf("supply-chain filter must drop %s (out-of-contract)", bad)
 		}

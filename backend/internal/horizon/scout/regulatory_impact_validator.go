@@ -2,7 +2,6 @@ package scout
 
 import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"strings"
 )
@@ -40,11 +39,11 @@ func (v RegulatoryImpactStrictValidator) ValidateRelations(rels []agents.Discove
 func regulatoryImpactEdgeStructurallyValid(rel agents.DiscoveredRelation) (bool, string) {
 	src := strings.TrimSpace(rel.SourceCanonicalPath)
 	tgt := strings.TrimSpace(rel.TargetCanonicalPath)
-	rt := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
+	rt := normalizeRelationToken(rel.RelationType)
 	if tgt == "" {
 		return false, "empty_target"
 	}
-	dt := DependencyType(strings.ToUpper(rt))
+	dt := DependencyType(rt)
 	switch dt {
 	case ah.RelationNameRegulates:
 		return prefixAny(src, "/gov/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/"), "regulates"

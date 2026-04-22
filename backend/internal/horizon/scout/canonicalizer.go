@@ -306,6 +306,36 @@ func (e *ScoutEngine) normalizeFragmentType(ctx context.Context, s string) Fragm
 // site/community parents.
 func normalizeFragmentTypeHardcoded(s string) FragmentType {
 	switch strings.ToUpper(strings.TrimSpace(s)) {
+	case "ORG", "ORGANIZATION", "GOV", "GOVERNMENT", "GOVERNMENT_AGENCY":
+		return ah.FragmentClassOrg
+	case "SITE", "FACILITY":
+		return ah.FragmentClassSite
+	case "GEO", "GEO_REGION", "LOCATION":
+		return ah.FragmentClassGeo
+	case "PRODUCT":
+		return ah.FragmentClassProduct
+	case "MARKET":
+		return ah.FragmentClassMarket
+	case "PERSON":
+		return ah.FragmentClassPerson
+	case "COMMUNITY":
+		return ah.FragmentClassCommunity
+	case "PROJECT", "PROGRAM":
+		return ah.FragmentClassProject
+	case "EVIDENCE", "EVENT":
+		return ah.FragmentClassEvidence
+	case "REGIME":
+		return ah.FragmentClassRegime
+	case "ROUTE":
+		return ah.FragmentClassRoute
+	case "VESSEL_CLASS":
+		return ah.FragmentClassVesselClass
+	case "MOBILE_ASSET", "TRACK":
+		return ah.FragmentClassMobileAsset
+	case "DECISION", "DECISION_POINT":
+		return ah.FragmentClassDecision
+	case "MECHANISM":
+		return ah.FragmentClassMechanism
 	case "DOMAIN", "SPHERE":
 		// LEGACY (read-side only): both folded to evidence overlays.
 		return ah.FragmentClassEvidence

@@ -599,10 +599,10 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 		domainBlock += "This fragment is a DOMAIN contract. Your primary goal is to expand it into first-order entities.\n"
 		domainBlock += fmt.Sprintf("Use ONLY domain relation types: %s.\n", domainScaffoldRelationTypesPromptString())
 		domainBlock += "Target canonicalPath MUST match targetType:\n"
-		domainBlock += "  ORGANIZATION->/org or /gov, PERSON->/person, PRODUCT->/product, PROGRAM->/program, MARKET->/market, FACILITY->/fac, GEO_REGION->/loc, EVENT->/event, MEDIA_CHANNEL->/media, COMMUNITY->/community, DOMAIN->/domain, AFFECTED_ZONE->/zone\n"
+		domainBlock += "  org->/org or /gov, person->/person, product->/product, project->/project, market->/market, site->/fac, geo->/loc, evidence->/evidence, media_channel->/media, community->/community, evidence/domain->/domain, zone->/zone\n"
 		domainBlock += "If the user asks about a market, use /market/... as a TARGET (anchor), NOT as a DOMAIN.\n"
 		domainBlock += "Do NOT output placeholder names like NA/N-A/Unknown. Use fewer entities instead.\n"
-		domainBlock += "For AFFECTED_ZONE: slug MUST be descriptive place/region name (northern-rakhine, gaza-strip, donbas). NEVER \"na\".\n"
+		domainBlock += "For zone: slug MUST be descriptive place/region name (northern-rakhine, gaza-strip, donbas). NEVER \"na\".\n"
 		domainBlock += taxonomy.ZoneVsEventDistinctionPrompt() + "\n\n"
 	}
 	specBlock := buildResearchSpecializationModulesBlock(specialties)

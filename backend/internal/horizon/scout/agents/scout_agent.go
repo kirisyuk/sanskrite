@@ -516,18 +516,18 @@ func extractionAllowedRelationTypesByDomainModes(domainModes []string) []string 
 		hasOwns := false
 		hasControls := false
 		for _, t := range allowed {
-			if strings.EqualFold(strings.TrimSpace(t), "OWNS") {
+			if strings.EqualFold(strings.TrimSpace(t), string(ah.RelationNameBeneficiallyOwns)) {
 				hasOwns = true
 			}
-			if strings.EqualFold(strings.TrimSpace(t), "CONTROLS") {
+			if strings.EqualFold(strings.TrimSpace(t), string(ah.RelationNameControlsVia)) {
 				hasControls = true
 			}
 		}
 		if !hasOwns {
-			allowed = append(allowed, "OWNS")
+			allowed = append(allowed, string(ah.RelationNameBeneficiallyOwns))
 		}
 		if !hasControls {
-			allowed = append(allowed, "CONTROLS")
+			allowed = append(allowed, string(ah.RelationNameControlsVia))
 		}
 	}
 	return allowed
@@ -566,11 +566,11 @@ func extractionDomainRelationCatalogOverrideBlock(domainModes []string) string {
 const extractionGeneralRelationRulesTemplate = `%s
 
    ROLE-FIRST DIRECTION CONTRACT (CRITICAL for ORG<->ORG):
-   - Do NOT assume source = THIS FRAGMENT for OWNS / INVESTS_IN / ASSURES / CONTROLS.
+   - Do NOT assume source = THIS FRAGMENT for beneficially_owns / invested_in / assures / controls_via.
    - Determine semantic roles first, then set edge direction.
    - For ORG->ORG directed edges above, include:
      qualifiers.source_role and qualifiers.target_role (e.g., owner->owned_entity, investor->investee, assurer->assuree, controller->controlled_entity).
-   - For directional actor↔actor DEPENDS_ON/SUPPLIES_TO, also include source_role/target_role (dependent->dependency, supplier->customer).
+   - For directional actor↔actor depends_on / supplies, also include source_role/target_role (dependent->dependency, supplier->customer).
    - If semantic source is not THIS FRAGMENT, sourceCanonicalPath/sourceType/sourceName is REQUIRED.
    - If direction is unclear, omit the relation (do not guess).
 
@@ -614,81 +614,76 @@ func buildExtractionRelationsRulesBlock(domainModes []string) string {
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) ||
 		taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeServiceChain) {
 		b.WriteString(`   SUPPLY CHAIN MODE (operational edges only):
-   - Do NOT use DEPENDS_ON for supply links. Use PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN, EXTRACTS_FROM.
+   - Think in canonical AH relations only. Operational flow is primarily produces, supplies, leg_connects, passes_through, transships_at, and requires_capability when supported by evidence.
    - Operational type matrix (hard contract):
-     - PRODUCES: ORGANIZATION|FACILITY|deposit -> PRODUCT
-     - SUPPLIES_TO: ORGANIZATION|FACILITY|PRODUCT -> ORGANIZATION|FACILITY
-     - transforms_into: PRODUCT -> PRODUCT (upstream -> downstream processing)
-     - assembles_into: PRODUCT -> PRODUCT (component/subassembly -> assembled downstream product)
-     - USED_IN: PRODUCT -> PRODUCT (strong operational input, not transformation, not assembly)
-     - EXTRACTS_FROM: FACILITY -> deposit
-   - For actor↔actor SUPPLIES_TO links, include qualifiers.source_role=supplier and qualifiers.target_role=customer.
-   - OWNS is allowed ONLY for supply-relevant ownership:
+     - produces: org|site|deposit -> product
+     - supplies: org|site|product -> org|site
+     - leg_connects / passes_through / transships_at: route/site logistics topology only when the route or transshipment point is explicit
+     - requires_capability: delivery/operations dependency on a concrete capability or service
+   - For actor↔actor supplies links, include qualifiers.source_role=supplier and qualifiers.target_role=customer.
+   - beneficially_owns is allowed ONLY for supply-relevant ownership:
      source MUST be /org/... or /gov/... and target MUST be /org/... or /fac/... or /deposit/....
-     Use OWNS when ownership clarifies who controls producing subsidiaries or critical facilities/deposits.
-     Do NOT emit OWNS for markets/programs/abstract entities.
-   - CONTROLS is allowed ONLY for supply-relevant non-equity control:
+     Use beneficially_owns when ownership clarifies who controls producing subsidiaries or critical facilities/deposits.
+     Do NOT emit beneficially_owns for markets/projects/abstract entities.
+   - controls_via is allowed ONLY for supply-relevant non-equity control:
      source MUST be /org/... or /gov/... and target MUST be /org/... or /fac/... or /deposit/....
-     Use CONTROLS for state/contractual/operational control when ownership is unclear.
-     Do NOT emit CONTROLS for markets/programs/abstract entities.
-   - LOCATED_IN/OPERATES_IN only for geo/facility anchoring.
-     - LOCATED_IN target MUST be GEO_REGION.
-     - OPERATES_IN source MUST be ORGANIZATION|PERSON, target MUST be GEO_REGION|FACILITY|deposit.
-     - MARKET MUST NOT be source for OPERATES_IN.
-   - PARTICIPATES_IN: ORG/FACILITY -> MARKET (commercial market participation). For "market depends on org" use PARTICIPATES_IN with ORG as source.
-   - TRADED_IN: PRODUCT -> MARKET only for product trading/price-discovery context.
-   - MARKET source guard in supply_chain: MARKET may emit only PARTICIPATES_IN and HAS_MARKET_SEGMENT (plus DOMAIN scaffold when source is /domain/...).
-     Never emit PRODUCES/SUPPLIES_TO/transforms_into/assembles_into/USED_IN/EXTRACTS_FROM/OPERATES_IN from MARKET.
-   - REGULATES: GOV entity (/gov/...) -> MARKET or ORG (domestic regulatory oversight). NEVER use DEPENDS_ON for government regulation.
-   - ADMINISTERS: GOV entity (/gov/...) -> subordinate GOV/PROGRAM/FACILITY (administrative hierarchy).
+     Use controls_via for state/contractual/operational control when ownership is unclear.
+     Do NOT emit controls_via for markets/projects/abstract entities.
+   - incorporated_in / operates only for geo/site anchoring.
+     - incorporated_in target MUST be geo.
+     - market MUST NOT be source for operates.
+   - participates_in: org/site -> market (commercial market participation).
+   - listed_on: product -> market only for explicit trading/price-discovery context.
+   - market source guard in supply_chain: market may emit only participates_in plus domain-scaffold relations when source is /domain/....
+     Never emit produces/supplies/leg_connects/passes_through/transships_at/requires_capability from market.
+   - regulates: gov entity (/gov/...) -> market or org (domestic regulatory oversight).
+   - operates: gov entity (/gov/...) -> subordinate gov/project/site (administrative or operating hierarchy).
    - For transmission/capacity add throughput_share, capacity_constraint, reroute_penalty when known.
 `)
 		b.WriteString(GovEntityRelationRulesBlock())
 	}
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeGovernance) {
 		b.WriteString(`   GOVERNANCE MODE:
-   - OWNS and SUBSIDIARY_OF for equity hierarchy.
-   - CONTROLS for explicit non-equity control.
-   - MANAGES for formal management (CEO, director, operator).
-   - INVESTS_IN for minority/stake investments.
-   - BOARD_MEMBER_OF, EMPLOYED_BY, FOUNDED for people governance links.
-   - ADMINISTERS for GOV/ORG hierarchy into GOV/PROGRAM.
-   - ASSURES for external auditors/certifiers participating in corporate governance.
-   - Role-first direction for OWNS/SUBSIDIARY_OF/INVESTS_IN/ASSURES/CONTROLS on ORG<->ORG.
+   - beneficially_owns and subsidiary_of for equity hierarchy.
+   - controls_via for explicit non-equity control.
+   - managed_by / operates for formal management and operating authority.
+   - invested_in for minority/stake investments.
+   - holds_board_seat for board governance links.
+   - operates for gov/org hierarchy into gov/project/site when administrative operation is explicit.
+   - assures for external auditors/certifiers participating in corporate governance.
+   - Role-first direction for beneficially_owns/subsidiary_of/invested_in/assures/controls_via on org<->org.
    - For those directed ORG->ORG edges include qualifiers.source_role and qualifiers.target_role.
    - Add metrics.ownership_percent and/or voting_percent when evidence exists.
 `)
 	}
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeAssurance) {
 		b.WriteString(`   ASSURANCE MODE:
-   - ASSURES: assurer -> assuree. Add qualifiers.assurance_type: audit|certification|regulatory|inspection.
-   - For ORG->ORG ASSURES edges include qualifiers.source_role=assurer and qualifiers.target_role=assuree.
-   - Do NOT emit AUDITED_BY (legacy inverse form).
-   - REGULATES: regulator -> regulated entity (same-jurisdiction domestic oversight only; for sanctions/restrictions use CONTROLS_ACCESS or IMPOSES_CONDITION).
+   - assures: assurer -> assuree. Add qualifiers.assurance_type: audit|certification|regulatory|inspection.
+   - For org->org assures edges include qualifiers.source_role=assurer and qualifiers.target_role=assuree.
+   - regulates: regulator -> regulated entity (same-jurisdiction domestic oversight only; for sanctions/restrictions use controls_access or imposes).
 `)
 	}
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeMarket) {
 		b.WriteString(`   MARKET MODE:
-   - PARTICIPATES_IN: entity -> market.
-   - TRADED_IN: product -> market for traded commodity/product exposure.
-   - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities may also REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES market.
-   - HAS_MARKET_SEGMENT: parent market -> segment (child path = parent path + one segment).
+   - participates_in: entity -> market.
+   - listed_on: product -> market for traded commodity/product exposure.
+   - org ↔ market: participates_in (org -> market). gov entities may also regulates (domestic oversight), controls_access (sanctions/restrictions), or influences market.
    - Keep focus on market structure and placement, not supply/governance edges.
 `)
 	}
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeStrategic) {
 		b.WriteString(`   STRATEGIC MODE:
-   - CONTROLS_ACCESS, IMPOSES_CONDITION, GATEKEEPS_DECISION, USES_MECHANISM, APPLIES_TO only.
-   - Respect DECISION_POINT/MECHANISM typing and direction.
+   - controls_access, imposes, gatekeeps, wields, applies_to only.
+   - Respect decision/mechanism typing and direction.
 `)
 	}
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModePolicyImpact) {
 		b.WriteString(`   POLICY IMPACT MODE:
-   - Focus on policy transmission channels from regulator/program to market/org/community.
-   - REGULATES/ADMINISTERS for formal domestic public-policy authority (same jurisdiction). For sanctions, trade bans, or extra-territorial restrictions use CONTROLS_ACCESS or IMPOSES_CONDITION.
-   - CONTROLS_ACCESS/IMPOSES_CONDITION/USES_MECHANISM/APPLIES_TO for explicit instruments and constraints (including sanctions).
-   - INFLUENCES for soft or second-order impact channels when formal authority is absent.
-   - DEPENDS_ON/PARTICIPATES_IN/TRADED_IN/LOCATED_IN/OPERATES_IN for exposure context needed in impact modeling.
+   - Focus on policy transmission channels from regulator/project to market/org/community.
+   - regulates/operates for formal domestic public-policy authority (same jurisdiction). For sanctions, trade bans, or extra-territorial restrictions use controls_access or imposes.
+   - controls_access/imposes/wields/applies_to for explicit instruments and constraints (including sanctions).
+   - influences for soft or second-order impact channels when formal authority is absent.
+   - depends_on/participates_in/listed_on/incorporated_in/operates for exposure context needed in impact modeling.
 `)
 	}
 
@@ -718,7 +713,7 @@ func extractionCanonicalNamespaceDetailsBlock() string {
   - Example chains: /market/sa/finance → .../banking → .../banking/islamic-banking; /market/tw/technology → .../semiconductors → .../semiconductors/foundry
   - HAS_MARKET_SEGMENT child path = parent path + one segment
 - Communities: /community/{geo}/{type}/{slug}; subgroup hierarchy via HAS_SUBGROUP (broader -> narrower).
-- Programs: /program/{jurisdiction}/{slug}; if jurisdiction is unknown, use global.
+- Projects: /project/{jurisdiction}/{slug}; if jurisdiction is unknown, use global.
 - Facilities: /fac/{geo}/{facilitySlug}; geo like org/gov (ISO2, na, or regional). /fac/na is LAST-RESORT ONLY after checking facility name, site/city mention, operator context, and source text for geography. If the facility name itself contains a clear place clue, infer the ISO2 instead of using na.`
 }
 

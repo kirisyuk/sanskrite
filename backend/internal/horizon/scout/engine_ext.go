@@ -1,9 +1,7 @@
 package scout
 
 import (
-	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
 	"context"
-	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
@@ -11,11 +9,13 @@ import (
 	"fmt"
 	"github.com/igorkirisyuk/sanskrite/internal/ai"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/domain"
+	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/pathbuilder"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/propagation"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/regstress"
+	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/rtctx"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/pipeline"
@@ -23,12 +23,12 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/supplysemantics"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/trace"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/tracking"
+	agentmodels "github.com/igorkirisyuk/sanskrite/internal/models"
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 	"golang.org/x/sync/errgroup"
-	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
-	horizonrepo "github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
 	"log"
 	"sort"
 	"strconv"
@@ -85,12 +85,12 @@ func mergeQualifiers(dst map[string]interface{}, extra map[string]interface{}) m
 }
 
 func isDomainScaffoldRelationType(rt string) bool {
-	rt = strings.TrimSpace(taxonomy.NormalizeRelationType(rt))
+	rt = normalizeRelationToken(rt)
 	return IsDomainScaffoldRelationType(DependencyType(rt))
 }
 
 func canonicalDomainAnchorRelationType(rawType, targetPath string) string {
-	rt := strings.TrimSpace(taxonomy.NormalizeRelationType(rawType))
+	rt := normalizeRelationToken(rawType)
 	if rt == "" {
 		rt = string(ah.RelationNameInfluences)
 	}
@@ -131,7 +131,7 @@ func sanitizeDomainResearchRelations(domainCanonicalPath, contractType string, r
 		// fold through normalizeToScoutRelation. Domain-anchor relations
 		// stay in the canonicalDomainAnchorRelationType space which
 		// already speaks the scout DependencyType vocabulary.
-		rt := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
+		rt := normalizeRelationToken(rel.RelationType)
 		if rt == "" {
 			rt = string(ah.RelationNameInfluences)
 		}
@@ -1335,7 +1335,7 @@ func (e *ScoutEngine) getOrCreateFragmentByPath(
 	newFrag := &models.HorizonFragment{
 		TenantID:      "global",
 		CanonicalPath: cp,
-		Class:          fragType,
+		Class:         fragType,
 		Status:        string(models.FragmentStatusActive),
 		State:         map[string]models.MetricValue{},
 		Labels:        map[string]string{"en": strings.TrimSpace(label)},
@@ -1431,7 +1431,7 @@ func (e *ScoutEngine) ensureOrgGeoFallbackLink(ctx context.Context, frag *models
 		TenantID:         "global",
 		SourceFragmentID: orgID,
 		TargetFragmentID: geoID,
-		Relation:             ah.RelationNameIncorporatedIn,
+		Relation:         ah.RelationNameIncorporatedIn,
 		Properties: models.EdgeProperties{
 			Criticality:   0.45,
 			Amplification: 1.0,
@@ -1495,7 +1495,7 @@ func (e *ScoutEngine) ensureFacilityGeoFallbackLink(ctx context.Context, frag *m
 		TenantID:         "global",
 		SourceFragmentID: facilityID,
 		TargetFragmentID: geoID,
-		Relation:             ah.RelationNameIncorporatedIn,
+		Relation:         ah.RelationNameIncorporatedIn,
 		Properties: models.EdgeProperties{
 			Criticality:   0.45,
 			Amplification: 1.0,
@@ -3583,7 +3583,10 @@ func (e *ScoutEngine) executeDomainExpansionJob(
 				if rt == "" {
 					rt = string(DependencyType("focuses_on"))
 				}
-				rt = strings.TrimSpace(taxonomy.NormalizeRelationType(rt))
+				rt = normalizeRelationToken(rt)
+				if rt == "" {
+					rt = string(DependencyType("focuses_on"))
+				}
 				switch rt {
 				case string(DependencyType("focuses_on")),
 					string(DependencyType("involves_actor")),
@@ -4669,7 +4672,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 			TenantID:         "global",
 			SourceFragmentID: fragmentID,
 			TargetFragmentID: targetFrag.ID,
-			Relation:             ah.RelationNameInfluences,
+			Relation:         ah.RelationNameInfluences,
 			Properties: models.EdgeProperties{
 				Criticality:   0.8,
 				Amplification: 1.0,
@@ -4741,7 +4744,7 @@ func (e *ScoutEngine) executeDomainStrategicOverlayJob(
 		if err := taxonomy.ValidateCanonicalPath(tgt); err != nil {
 			continue
 		}
-		relType := strings.TrimSpace(taxonomy.NormalizeRelationType(ed.RelationType))
+		relType := normalizeRelationToken(ed.RelationType)
 		if relType == "" {
 			continue
 		}
@@ -5202,7 +5205,7 @@ func (e *ScoutEngine) processRelationsInternal(
 		// Normalize relation type early (code-defined allowlist) to avoid creating edges with unsupported types.
 		// IMPORTANT: preserve the raw relation type for debugging taxonomy drift / LLM outputs.
 		rawRelationType := strings.TrimSpace(rel.RelationType)
-		rel.RelationType = strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
+		rel.RelationType = normalizeRelationToken(rel.RelationType)
 		normalizedRelationType := strings.TrimSpace(rel.RelationType)
 		if rawRelationType != "" && normalizedRelationType != "" && rawRelationType != normalizedRelationType {
 			logGroundingInfof("component=scout phase=relations.normalize_type jobId=%s targetCanonicalPath=%s reasonCode=relation_type_normalized raw=%q normalized=%q",
@@ -5405,7 +5408,7 @@ func (e *ScoutEngine) processRelationsInternal(
 			newFragment := &models.HorizonFragment{
 				TenantID:      "global",
 				CanonicalPath: targetPath,
-				Class:          ft,
+				Class:         ft,
 				Status:        "active",
 				State:         make(map[string]models.MetricValue),
 				Labels:        map[string]string{"en": labelEN},
@@ -7166,7 +7169,7 @@ func (e *ScoutEngine) enrichRouteFacilityGeoContext(ctx context.Context, fragmen
 	if scoutResult != nil {
 		fragCP := strings.TrimSpace(fragment.CanonicalPath)
 		for _, rel := range scoutResult.Relations {
-			rt := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
+			rt := normalizeRelationToken(rel.RelationType)
 			src := strings.TrimSpace(rel.SourceCanonicalPath)
 			fromFragment := src == "" || src == fragCP
 			if !fromFragment {
@@ -9010,7 +9013,7 @@ Use canonical paths. type must be one of: REGULATES, INFLUENCES, PARTICIPATES_IN
 			TenantID:         "global",
 			SourceFragmentID: srcFrag.ID,
 			TargetFragmentID: tgtFrag.ID,
-			Relation:             edgeType,
+			Relation:         edgeType,
 			Properties:       models.EdgeProperties{Criticality: 0.6, Amplification: 1.0},
 			Provenance:       models.Provenance{Method: "scout_stage2_overlay", SourceIDs: []string{job.ID}},
 			Qualifiers:       map[string]interface{}{"overlay_type": overlayType, "reason": ed.Reason},
@@ -9268,7 +9271,7 @@ func (e *ScoutEngine) processSupplyChains(
 				existing = &models.HorizonFragment{
 					ID:            strings.TrimSpace(cached.ID),
 					CanonicalPath: strings.TrimSpace(cached.CanonicalPath),
-					Class:          FragmentType(strings.TrimSpace(cached.Type)),
+					Class:         FragmentType(strings.TrimSpace(cached.Type)),
 					TenantID:      strings.TrimSpace(cached.TenantID),
 				}
 			}
@@ -9410,7 +9413,7 @@ func (e *ScoutEngine) processSupplyChains(
 					pathToFragment[cp] = &models.HorizonFragment{
 						ID:            strings.TrimSpace(cached.ID),
 						CanonicalPath: strings.TrimSpace(cached.CanonicalPath),
-						Class:          FragmentType(strings.TrimSpace(cached.Type)),
+						Class:         FragmentType(strings.TrimSpace(cached.Type)),
 						TenantID:      strings.TrimSpace(cached.TenantID),
 					}
 					continue
@@ -9474,7 +9477,7 @@ func (e *ScoutEngine) processSupplyChains(
 		fragment := &models.HorizonFragment{
 			TenantID:      "global",
 			CanonicalPath: path,
-			Class:          ft,
+			Class:         ft,
 			Labels:        map[string]string{"en": label},
 			Identifiers:   map[string]string{},
 			State:         make(map[string]models.MetricValue),
@@ -9871,7 +9874,7 @@ func (e *ScoutEngine) processSupplyChains(
 			TenantID:         "global",
 			SourceFragmentID: sourceID,
 			TargetFragmentID: targetID,
-			Relation:             edgeType,
+			Relation:         edgeType,
 			Properties: models.EdgeProperties{
 				Criticality:   edgeCriticality,
 				Amplification: 1.0,

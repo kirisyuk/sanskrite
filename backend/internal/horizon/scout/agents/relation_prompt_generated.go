@@ -78,11 +78,11 @@ var preferredPromptEdgeOrder = []ah.RelationName{
 }
 
 var strategicPromptEdges = map[ah.RelationName]struct{}{
-	ah.RelationNameGatekeeps: {},
-	ah.RelationNameWields:     {},
-	ah.RelationName("applies_to"):         {},
-	ah.RelationName("controls_access"):    {},
-	ah.RelationNameImposes:  {},
+	ah.RelationNameGatekeeps:           {},
+	ah.RelationNameWields:              {},
+	ah.RelationName("applies_to"):      {},
+	ah.RelationName("controls_access"): {},
+	ah.RelationNameImposes:             {},
 }
 
 // legacyPromptOnlyDirectionPolicies enumerates ah.RelationName values (including prompt-only legacy literals)
@@ -166,19 +166,19 @@ var supplyChainLegacyDecomposerEdges = []ah.RelationName{
 var domainPromptEdges = map[ah.RelationName]struct{}{
 	ah.RelationName("focuses_on"):      {},
 	ah.RelationName("involves_actor"):  {},
-	ah.RelationName("about"):          {},
+	ah.RelationName("about"):           {},
 	ah.RelationName("related_domain"):  {},
 	ah.RelationName("domain_relation"): {},
 	ah.RelationName("broadens_to"):     {},
 	ah.RelationName("narrows_to"):      {},
-	ah.RelationName("surfaces"):       {},
+	ah.RelationName("surfaces"):        {},
 }
 
 var legacyPromptReplacements = map[ah.RelationName]string{
 	ah.RelationName("audited_by"):           "ASSURES",
 	ah.RelationName("has_submarket"):        "HAS_MARKET_SEGMENT",
 	ah.RelationName("works_for"):            "EMPLOYED_BY",
-	ah.RelationName("has_key_person"):        "KEY_PERSON",
+	ah.RelationName("has_key_person"):       "KEY_PERSON",
 	ah.RelationName("corporate_transition"): "RENAMED_TO / REBRANDED_TO / LEGAL_SUCCESSOR_OF / MERGED_INTO / SPUN_OFF_FROM / ACQUIRED_BY",
 	ah.RelationName("domain_relation"):      "RELATED_DOMAIN / BROADENS_TO / NARROWS_TO",
 }
@@ -187,14 +187,14 @@ var relationPromptAnnotations = map[ah.RelationName]relationPromptAnnotation{
 	ah.RelationName("depends_on"): {
 		extra: []string{
 			"Use when the source requires the target to operate or deliver outcomes.",
-			"Do NOT use when the source is the supplier and the target is the customer; use SUPPLIES_TO.",
+			"Do NOT use when the source is the supplier and the target is the customer; use supplies.",
 			"For actor↔actor dependencies include qualifiers.source_role=dependent and qualifiers.target_role=dependency.",
 		},
 	},
 	ah.RelationNameSupplies: {
 		extra: []string{
 			"Commercial flow from supplier -> customer/recipient; not ownership or control.",
-			"MARKET MUST NOT be source or target for SUPPLIES_TO.",
+			"market MUST NOT be source or target for supplies.",
 			"For ORG/FACILITY -> ORG/FACILITY supply links include qualifiers.source_role=supplier and qualifiers.target_role=customer.",
 		},
 	},
@@ -212,26 +212,26 @@ var relationPromptAnnotations = map[ah.RelationName]relationPromptAnnotation{
 	ah.RelationNameRegulates: {
 		extra: []string{
 			`JURISDICTION RULE: REGULATES means ongoing domestic oversight within the regulator's own jurisdiction.`,
-			"Do NOT use REGULATES for sanctions, trade restrictions, or extra-territorial enforcement. Use CONTROLS_ACCESS or IMPOSES_CONDITION instead.",
+			"Do NOT use regulates for sanctions, trade restrictions, or extra-territorial enforcement. Use controls_access or imposes instead.",
 		},
 	},
 	ah.RelationNameBeneficiallyOwns: {
 		extra: []string{
-			"Use OWNS only for legal, beneficial, or controlling ownership of the target.",
-			"NEVER output OWNS where targetType=PERSON.",
+			"Use beneficially_owns only for legal, beneficial, or controlling ownership of the target.",
+			"NEVER output beneficially_owns where targetType=person.",
 			"Facilities/products/deposits do not own organizations.",
-			`NEVER output OWNS from ORGANIZATION to COMMUNITY if target canonicalPath is /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}. Dynasties and tribes own organizations, not the reverse.`,
+			`NEVER output beneficially_owns from org to community if target canonicalPath is /community/{geo}/dynasty/{slug} or /community/{geo}/tribe/{slug}. Dynasties and tribes own organizations, not the reverse.`,
 		},
 	},
 	ah.RelationNameSubsidiaryOf: {
 		extra: []string{
-			"Inverse ownership form (child -> parent). Runtime normalizes it into OWNS.",
+			"Inverse ownership form (child -> parent). Runtime preserves subsidiary_of as canonical direction.",
 		},
 	},
 	ah.RelationNameControlsVia: {
 		extra: []string{
 			"Use for voting, state, contractual, or indirect control when ownership is unclear.",
-			"Do NOT use CONTROLS for external audit/certification/inspection oversight; use ASSURES with qualifiers.assurance_type.",
+			"Do NOT use controls_via for external audit/certification/inspection oversight; use assures with qualifiers.assurance_type.",
 		},
 	},
 	ah.RelationName("manages"): {
@@ -313,12 +313,12 @@ var relationPromptAnnotations = map[ah.RelationName]relationPromptAnnotation{
 	},
 	ah.RelationNameGatekeeps: {
 		extra: []string{
-			"When THIS FRAGMENT is DECISION_POINT, use explicit sourceCanonicalPath for the gatekeeper.",
+			"When THIS FRAGMENT is decision, use explicit sourceCanonicalPath for the gatekeeper.",
 		},
 	},
 	ah.RelationNameWields: {
 		extra: []string{
-			"When THIS FRAGMENT is MECHANISM, use explicit sourceCanonicalPath for the actor or decision that uses it.",
+			"When THIS FRAGMENT is mechanism, use explicit sourceCanonicalPath for the actor or decision that uses it.",
 		},
 	},
 	ah.RelationName("applies_to"): {
@@ -353,20 +353,20 @@ var explicitSourcePromptSpecs = []explicitSourcePromptSpec{
 		edgeType: ah.RelationNameBeneficiallyOwns,
 		lines: []string{
 			`If THIS FRAGMENT is owned by X, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.`,
-			`Never emit reversed OWNS (THIS FRAGMENT -> its owner).`,
+			`Never emit reversed beneficially_owns (THIS FRAGMENT -> its owner).`,
 		},
 	},
 	{
 		edgeType: ah.RelationNameInvestedIn,
 		lines: []string{
 			`If THIS FRAGMENT is invested in by X, set sourceCanonicalPath/sourceType/sourceName = X and keep targetCanonicalPath = THIS FRAGMENT.`,
-			`Never emit reversed INVESTS_IN (THIS FRAGMENT -> its investor).`,
+			`Never emit reversed invested_in (THIS FRAGMENT -> its investor).`,
 		},
 	},
 	{
 		edgeType: ah.RelationNameAssures,
 		lines: []string{
-			`If THIS FRAGMENT is audited/certified/inspected by X, keep relationType=ASSURES and set sourceCanonicalPath/sourceType/sourceName = X.`,
+			`If THIS FRAGMENT is audited/certified/inspected by X, keep relationType=assures and set sourceCanonicalPath/sourceType/sourceName = X.`,
 		},
 	},
 	{
@@ -379,14 +379,14 @@ var explicitSourcePromptSpecs = []explicitSourcePromptSpec{
 	{
 		edgeType: ah.RelationNameGatekeeps,
 		lines: []string{
-			`If THIS FRAGMENT is DECISION_POINT and you are answering "Who gatekeeps this decision?", set sourceCanonicalPath/sourceType/sourceName to the gatekeeper.`,
+			`If THIS FRAGMENT is decision and you are answering "Who gatekeeps this decision?", set sourceCanonicalPath/sourceType/sourceName to the gatekeeper.`,
 		},
 	},
 	{
 		edgeType: ah.RelationNameWields,
 		lines: []string{
-			`If THIS FRAGMENT is MECHANISM and you are answering "Who uses this mechanism?", set sourceCanonicalPath/sourceType/sourceName to the user.`,
-			`If THIS FRAGMENT is DECISION_POINT and you are answering "What mechanism does this decision use?", THIS FRAGMENT remains the source.`,
+			`If THIS FRAGMENT is mechanism and you are answering "Who uses this mechanism?", set sourceCanonicalPath/sourceType/sourceName to the user.`,
+			`If THIS FRAGMENT is decision and you are answering "What mechanism does this decision use?", THIS FRAGMENT remains the source.`,
 		},
 	},
 	{
@@ -436,7 +436,7 @@ func relationTypesPromptForDomainMode(mode string) string {
 
 func orderedPromptEdgeTypes(includeDomain bool) []ah.RelationName {
 	seen := make(map[ah.RelationName]struct{})
-	out := make([]ah.RelationName, 0, len(edgesemantics.EdgeDirectionPolicies)+len(legacyPromptOnlyDirectionPolicies))
+	out := make([]ah.RelationName, 0, len(edgesemantics.EdgeDirectionPolicies))
 	appendType := func(dt ah.RelationName) {
 		if _, ok := seen[dt]; ok {
 			return
@@ -447,9 +447,7 @@ func orderedPromptEdgeTypes(includeDomain bool) []ah.RelationName {
 			}
 		}
 		if _, hasAH := edgesemantics.EdgeDirectionPolicies[dt]; !hasAH {
-			if _, hasLegacy := legacyPromptOnlyDirectionPolicies[dt]; !hasLegacy {
-				return
-			}
+			return
 		}
 		seen[dt] = struct{}{}
 		out = append(out, dt)
@@ -490,43 +488,10 @@ func orderedPromptEdgeTypes(includeDomain bool) []ah.RelationName {
 func renderEdgePromptEntry(dt ah.RelationName, indent string) string {
 	rule, ok := edgesemantics.EdgeDirectionPolicies[dt]
 	if !ok {
-		// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
-		// fall back to the prompt-only legacy overlay so RelationName
-		// values whose AH disposition is Dropped/fold_to_attributes
-		// (RELATIVE_OF, RENAMED_TO, EMPLOYED_BY, …) still surface in the
-		// scout extraction prompt vocabulary; without this fallback the
-		// LLM stops emitting the legacy wire labels mid-migration even
-		// though the graph_intent decoder still folds them through
-		// relation normalization at parse time.
-		legacyRule, legacyOK := legacyPromptOnlyDirectionPolicies[dt]
-		if !legacyOK {
-			return ""
-		}
-		rule = legacyRule
+		return ""
 	}
-	// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml +
-	// AGENTS.md): the LLM-facing scout extraction prompts pin on the
-	// pre-migration UPPER_SNAKE wire labels (OWNS, RELATIVE_OF,
-	// RENAMED_TO, …). Render via wireLabelForDependencyType so AH
-	// RelationName values like "beneficially_owns" surface as "OWNS"
-	// in the prompt body; the graph_intent decoder folds the LLM's
-	// answers back through relation normalization at parse time.
-	wireLabel := wireLabelForDependencyType(dt)
 	var b strings.Builder
-	// Emit "WIRE_LABEL (canonical_ah_name)" so prompts pin on the
-	// LLM-facing UPPER_SNAKE form while the AH canonical slug stays
-	// visible to anyone (or any test) that scans the block for the
-	// exact AH RelationName key. When the wire label and the AH slug
-	// coincide (e.g. legacy literals like FOCUSES_ON/focuses_on)
-	// only the wire label is rendered.
-	header := wireLabel
-	if canonical := strings.TrimSpace(string(dt)); canonical != "" && canonical != wireLabel {
-		header = fmt.Sprintf("%s (%s)", wireLabel, canonical)
-	}
-	b.WriteString(fmt.Sprintf("%s- %s: %s. Source MUST be %s. Target MUST be %s.\n", indent, header, strings.TrimSpace(rule.Description), promptFragmentTypes(rule.ValidSourceClasses), promptFragmentTypes(rule.ValidTargetClasses)))
-	if replacement := strings.TrimSpace(legacyPromptReplacements[dt]); replacement != "" {
-		b.WriteString(fmt.Sprintf("%s  - Legacy compatibility only. Do NOT emit it for new data; prefer %s.\n", indent, replacement))
-	}
+	b.WriteString(fmt.Sprintf("%s- %s: %s. Source MUST be %s. Target MUST be %s.\n", indent, dt, strings.TrimSpace(rule.Description), promptFragmentTypes(rule.ValidSourceClasses), promptFragmentTypes(rule.ValidTargetClasses)))
 	if ann, ok := relationPromptAnnotations[dt]; ok {
 		for _, extra := range ann.extra {
 			if strings.TrimSpace(extra) == "" {
@@ -561,7 +526,7 @@ func generatedResearchRelationDirectionRulesBlock() string {
 	var b strings.Builder
 	b.WriteString("RELATION DIRECTION RULES (STRICT):\n")
 	b.WriteString("Use ROLE-FIRST semantics for direction:\n")
-	b.WriteString("- For directed ORG<->ORG relations (OWNS, SUBSIDIARY_OF, INVESTS_IN, ASSURES, CONTROLS), determine source by semantic role first (owner/investor/assurer/controller), not by CURRENT FRAGMENT.\n")
+	b.WriteString("- For directed org<->org relations (beneficially_owns, subsidiary_of, invested_in, assures, controls_via), determine source by semantic role first (owner/investor/assurer/controller), not by CURRENT FRAGMENT.\n")
 	b.WriteString("- If CURRENT FRAGMENT is the semantic target, sourceCanonicalPath/sourceType/sourceName is REQUIRED.\n")
 	b.WriteString("- For STRATEGIC edge types, use EXPLICIT SOURCE (sourceCanonicalPath) when THIS FRAGMENT would be wrong as source.\n")
 	b.WriteString("Choose relationType to match the CORRECT semantic direction:\n\n")
@@ -575,7 +540,7 @@ func generatedResearchRelationDirectionRulesBlock() string {
 		b.WriteString(renderEdgePromptEntry(dt, ""))
 		b.WriteString("\n")
 	}
-	b.WriteString("- ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight only), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.\n")
+	b.WriteString("- org ↔ market: participates_in (org -> market). gov entities (/gov/...) may also use regulates (domestic oversight only), controls_access (sanctions/restrictions), or influences.\n")
 	b.WriteString("- Domain is config, not a graph node: targetCanonicalPath MUST NOT start with /domain/.\n")
 	b.WriteString("  DOMAIN targets are allowed only for DOMAIN scaffold relations (")
 	b.WriteString(domainScaffoldRelationTypesPromptString())
@@ -601,25 +566,25 @@ func generatedExplicitSourceRulesBlock() string {
 		}
 	}
 	b.WriteString("\nWHEN NOT TO USE sourceCanonicalPath:\n")
-	b.WriteString("- For most Phase 1 relations (DEPENDS_ON, SUPPLIES_TO, LOCATED_IN, etc.) the default FROM THIS FRAGMENT is correct.\n")
-	b.WriteString("- Exception: use explicit source whenever THIS FRAGMENT is the semantic target for OWNS / INVESTS_IN / ASSURES / CONTROLS.\n")
-	b.WriteString("- GEO_REGION exception: when CURRENT FRAGMENT is /loc/... and you discover an organization, community, deposit, program, facility, or person that is in this region, that discovered entity is usually the SOURCE and CURRENT FRAGMENT is the TARGET via LOCATED_IN/OPERATES_IN.\n")
-	b.WriteString("- For GEO_REGION tasks, never express regional presence as CURRENT FRAGMENT -> entity with OWNS, MEMBER_OF, HAS_SUBGROUP, or similar social/governance edges.\n")
+	b.WriteString("- For most Phase 1 relations (depends_on, supplies, incorporated_in, etc.) the default FROM THIS FRAGMENT is correct.\n")
+	b.WriteString("- Exception: use explicit source whenever THIS FRAGMENT is the semantic target for beneficially_owns / invested_in / assures / controls_via.\n")
+	b.WriteString("- geo exception: when CURRENT FRAGMENT is /loc/... and you discover an organization, community, deposit, project, facility, or person that is in this region, that discovered entity is usually the SOURCE and CURRENT FRAGMENT is the TARGET via incorporated_in/operates.\n")
+	b.WriteString("- For geo tasks, never express regional presence as CURRENT FRAGMENT -> entity with beneficially_owns, member_of, has_subgroup, or similar social/governance edges.\n")
 	return strings.TrimRight(b.String(), "\n")
 }
 
 func generatedRoleQualifierRulesBlock() string {
 	return `ROLE QUALIFIERS (REQUIRED for directed ORG<->ORG):
-- For OWNS / SUBSIDIARY_OF / INVESTS_IN / ASSURES / CONTROLS between ORGANIZATION nodes, include qualifiers.source_role and qualifiers.target_role.
-- For directional actor↔actor DEPENDS_ON / SUPPLIES_TO, include source_role/target_role as well.
+- For beneficially_owns / subsidiary_of / invested_in / assures / controls_via between organization nodes, include qualifiers.source_role and qualifiers.target_role.
+- For directional actor↔actor depends_on / supplies, include source_role/target_role as well.
 - Allowed examples:
-  - OWNS: owner -> owned_entity
-  - SUBSIDIARY_OF: subsidiary -> parent_owner
-  - INVESTS_IN: investor -> investee
-  - ASSURES: assurer -> assuree
-  - CONTROLS: controller -> controlled_entity
-  - DEPENDS_ON: dependent -> dependency
-  - SUPPLIES_TO: supplier -> customer
+  - beneficially_owns: owner -> owned_entity
+  - subsidiary_of: subsidiary -> parent_owner
+  - invested_in: investor -> investee
+  - assures: assurer -> assuree
+  - controls_via: controller -> controlled_entity
+  - depends_on: dependent -> dependency
+  - supplies: supplier -> customer
 
 CRITICAL: Always verify that the resulting edge direction matches EDGE DIRECTION VALIDATION RULES below.`
 }
@@ -663,27 +628,6 @@ func generatedIntentDecomposerRelationRulesBlock(domainModes []string) string {
 		seenFiltered[dt] = struct{}{}
 		filtered = append(filtered, dt)
 	}
-	// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml):
-	// edgesemantics.EdgeAllowlistByDomainModes is the AH-canonical
-	// projection (snake_case AH RelationName). It silently drops
-	// legacy supply-chain literals whose disposition is `Dropped: true`
-	// or `fold_to_attributes` (transforms_into, has_market_segment,
-	// competes_with, …) even though they remain part of the
-	// supply-chain LLM contract during the migration window. Layer
-	// them in here from a hardcoded table so the decomposer prompt
-	// (and the test pinning the contract) keeps surfacing them; the
-	// graph_intent decoder folds the LLM's answers back to canonical
-	// AH at parse time via relation normalization.
-	if isSupplyChain {
-		for _, legacy := range supplyChainLegacyDecomposerEdges {
-			if _, ok := seenFiltered[legacy]; ok {
-				continue
-			}
-			seenFiltered[legacy] = struct{}{}
-			filtered = append(filtered, legacy)
-		}
-	}
-
 	var b strings.Builder
 	if isSupplyChain {
 		b.WriteString("RELATION DIRECTION RULES (STRICT — supply-chain contract only):\n")
@@ -700,18 +644,18 @@ func generatedIntentDecomposerRelationRulesBlock(domainModes []string) string {
 		b.WriteString(fmt.Sprintf("Allowed relationType values ONLY: %s.\n", strings.Join(names, ", ")))
 	}
 	if isSupplyChain {
-		b.WriteString("Do NOT use DEPENDS_ON, SUBSIDIARY_OF, OWNS, or other non-supply-chain types. COMPETES_WITH is allowed only for explicit direct competitor relationships. PARTNERS_WITH and OPERATES_VIA are allowed only for explicit operational/ecosystem overlays. INVESTS_IN and MEMBER_OF are allowed only for explicit institutional/structural overlays.\n")
+		b.WriteString("Do NOT use depends_on, subsidiary_of, beneficially_owns, or other non-supply-chain types. alternate_to is allowed only for explicit direct substitution/competition relationships. joint_venture_with and wields are allowed only for explicit operational/ecosystem overlays. invested_in and member_of are allowed only for explicit institutional/structural overlays.\n")
 	} else {
-		b.WriteString("If TARGET is not the semantic source for OWNS / INVESTS_IN / ASSURES / CONTROLS / GATEKEEPS_DECISION / USES_MECHANISM / APPLIES_TO / CONTROLS_ACCESS / IMPOSES_CONDITION, omit the relation in decomposition.\n")
+		b.WriteString("If TARGET is not the semantic source for beneficially_owns / invested_in / assures / controls_via / gatekeeps / wields / applies_to / controls_access / imposes, omit the relation in decomposition.\n")
 	}
 	for _, dt := range filtered {
 		b.WriteString(renderEdgePromptEntry(dt, ""))
 		b.WriteString("\n")
 	}
 	if !isSupplyChain {
-		b.WriteString("  - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.\n")
+		b.WriteString("  - org ↔ market: participates_in (org -> market). gov entities (/gov/...) may also use regulates (domestic oversight), controls_access (sanctions/restrictions), or influences.\n")
 	} else {
-		b.WriteString("  - In supply_chain mode, MARKET source may emit only PARTICIPATES_IN or HAS_MARKET_SEGMENT. PRODUCT -> MARKET uses TRADED_IN only for explicit trading/pricing context.\n")
+		b.WriteString("  - In supply_chain mode, market source may emit only participates_in. product -> market uses listed_on only for explicit trading/pricing context.\n")
 	}
 	return strings.TrimRight(b.String(), "\n")
 }

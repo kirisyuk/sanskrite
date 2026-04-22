@@ -25,14 +25,14 @@ type IntentResolution struct {
 	Domains []DomainResolution `json:"domains,omitempty"`
 	Anchors []struct {
 		CanonicalPath string `json:"canonicalPath"`
-		Type          string `json:"type"` // ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET|MEDIA_CHANNEL (best-effort)
+		Type          string `json:"type"` // ORG|PRODUCT|SITE|GEO|PERSON|EVIDENCE|PROJECT|MARKET|MEDIA_CHANNEL|GOV|COMMUNITY|ZONE (best-effort)
 		// Name is the preferred English display name for this anchor (NOT a slug, NOT a URL).
 		// If the original name is non-English and no established English name exists, transliteration is acceptable.
 		Name       string  `json:"name,omitempty"`
 		Confidence float64 `json:"confidence"`
 		Reason     string  `json:"reason"`
 	} `json:"anchors"`
-	// DecompositionHints describe how abstract anchors (MARKET, PROGRAM) should be decomposed.
+	// DecompositionHints describe how abstract anchors (MARKET, PROJECT) should be decomposed.
 	// These are synthesized by the LLM and passed to downstream research to guide exploration.
 	DecompositionHints []DecompositionHint `json:"decompositionHints,omitempty"`
 }
@@ -152,12 +152,12 @@ type AffectedZoneQuery struct {
 	Title  string `json:"title,omitempty" firestore:"title,omitempty"`
 }
 
-// DecompositionHint describes how to decompose an abstract anchor (MARKET, PROGRAM, etc.)
+// DecompositionHint describes how to decompose an abstract anchor (MARKET, PROJECT, etc.)
 // into more concrete entities for research and scouting.
 type DecompositionHint struct {
 	// AnchorPath is the canonicalPath of the anchor this hint applies to.
 	AnchorPath string `json:"anchorPath" firestore:"anchorPath"`
-	// EntityTypes suggest what types of entities should be discovered (e.g., ["ORGANIZATION", "PRODUCT"]).
+	// EntityTypes suggest what types of entities should be discovered (e.g., ["ORG", "PRODUCT"]).
 	EntityTypes []string `json:"entityTypes" firestore:"entityTypes"`
 	// SubMarkets suggest market segmentations to explore (e.g., ["upstream", "midstream", "downstream"] for energy; ["commercial", "retail"] for finance).
 	SubMarkets []string `json:"subMarkets,omitempty" firestore:"subMarkets,omitempty"`
@@ -453,7 +453,7 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 							Title:         "Bilateral Relations",
 							Description:   "Map and analyze mutual relationships: diplomacy, security, trade, agreements, conflicts, key actors, and risks.",
 							Facets:        map[string][]string{"geo": ccs[:2]},
-							Projections:   []string{"GOV", "ORGANIZATION", "EVENT", "MARKET", "GEO_REGION"},
+							Projections:   []string{"GOV", "ORG", "EVIDENCE", "MARKET", "GEO"},
 							Confidence:    0.75,
 							Reason:        "policy: preserve bilateral meaning as a single primary domain",
 						}
@@ -598,7 +598,7 @@ USER QUERY:
       "title": "string (English human-readable Title Case; NOT a slug; 6-10 words max)",
       "description": "string (actionable: Map X, identify Y, highlight Z...)",
       "facets": { "geo": ["us"], "material": ["lithium"], "application": ["ev"] },
-      "projections": ["ORGANIZATION", "MARKET", "FACILITY", "GEO_REGION", "PRODUCT"],
+      "projections": ["ORG", "MARKET", "SITE", "GEO", "PRODUCT"],
       "relatedDomains": ["string (/domain/v1/... optional)"],
       "affectedDomains": ["string (/domain/v1/... optional)"],
       "firstOrderEntities": ["string (canonical paths to add to Lens scope)"],
@@ -632,7 +632,7 @@ USER QUERY:
       },
       "ecosystemExecutionPlan": {
         "queries": [
-          { "focus": "/market/semiconductor", "focusType": "sector", "depth": 4, "actorTypes": ["ORGANIZATION","GOV","FACILITY"], "sectorFilter": ["semiconductors"], "geoFilter": [], "reason": "..." }
+          { "focus": "/market/semiconductor", "focusType": "sector", "depth": 4, "actorTypes": ["ORG","GOV","SITE"], "sectorFilter": ["semiconductors"], "geoFilter": [], "reason": "..." }
         ]
       }
     }
@@ -640,7 +640,7 @@ USER QUERY:
   "anchors": [
     {
       "canonicalPath": "string (must match ANCHOR TAXONOMY below)",
-      "type": "ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET|MEDIA_CHANNEL",
+      "type": "ORG|PRODUCT|SITE|GEO|PERSON|EVIDENCE|PROJECT|MARKET|MEDIA_CHANNEL|GOV|COMMUNITY|ZONE",
       "name": "string (preferred English display name; NOT a slug; translate when possible)",
       "confidence": 0.0,
       "reason": "short reason"
@@ -649,7 +649,7 @@ USER QUERY:
   "decompositionHints": [
     {
       "anchorPath": "string (must match one anchor's canonicalPath)",
-      "entityTypes": ["ORGANIZATION", "PRODUCT", ...],
+      "entityTypes": ["ORG", "PRODUCT", ...],
       "subMarkets": ["segment1", ...],
       "playerCategories": ["category1", ...],
       "searchQueries": ["concrete English search query 1", ...]
@@ -684,10 +684,10 @@ DOMAIN RULES
 - SERVICE CHAIN PLAN: When contractType is service-chain, you MUST include serviceChainExecutionPlan with 1-10 queries. Treat service-chain as a distinct operational contract for service delivery lifecycle, not as value analysis. The FIRST queries should prefer provider organizations or concrete delivery facilities. Focus on provider→capability→facility/control-gate→recipient paths, not profit pools or margin capture. Use direction "upstream" for dependencies, control gates, required providers, support vendors, or access prerequisites; "downstream" for customers, tenants, recipients, and exposed services; "both" for full delivery mapping. Use canonical /org/... or /fac/... anchors when possible. Each query: anchor (single) or anchors (array), anchorType (org|fac|product), direction (upstream|downstream|both), depth (3-6), productFilter/geoFilter from facets, reason. overlayQueries optional. graphBuildMode MUST be "hot_path_only" or "hot_path_plus_graph"; default to "hot_path_plus_graph" when unsure.
 - ROUTE-SENSITIVE SUPPLY CHAIN: If the query mentions chokepoints, shipping routes, sea lanes, ports, terminals, pipelines, carriers, rerouting, "through/via", LNG/LPG shipping, or "from production to end-users", structure the intent for path execution. Include 3-8 anchors when evidence exists across these roles: producer org, upstream deposit/field, export facility, chokepoint/route geo, import terminal or market hub, downstream industrial consumer.
 - SERVICE VS VALUE CHAIN: Use service-chain for service delivery topology, dependencies, access/control gates, service facilities, coverage, and downstream recipients. Use value-chain for economic value creation/capture, profit pools, bargaining power, and margin structure. Do not substitute one for the other.
-- REGULATORY IMPACT PLAN: When contractType is policy-impact or regulatory-impact, you MUST include regulatoryImpactExecutionPlan with 1-5 queries. Each query: instrument (canonical path /mechanism/... or /program/...), jurisdiction (ISO2), parameters (rate_from, rate_to, effective_date when applicable), impactScope (economy-wide|sector-specific|entity-specific), depth (3-5), sectorFilter from facets, reason.
+- REGULATORY IMPACT PLAN: When contractType is policy-impact or regulatory-impact, you MUST include regulatoryImpactExecutionPlan with 1-5 queries. Each query: instrument (canonical path /mechanism/... or /project/...), jurisdiction (ISO2), parameters (rate_from, rate_to, effective_date when applicable), impactScope (economy-wide|sector-specific|entity-specific), depth (3-5), sectorFilter from facets, reason.
 - POLICY / REGULATORY TRANSMISSION: If the query asks what happens when a tax, tariff, VAT, CBAM-like cost, export control, sanctions measure, subsidy, capital rule, customs rule, licensing requirement, or compliance burden changes, include both the policy side and the exposed operational side. Do not return only the regulator/mechanism anchor.
 	- GOVERNANCE PLAN: When contractType is ownership-structure or control-map, you MUST include governanceExecutionPlan with 1-5 queries. Each query: target (canonical path /org/... or /gov/... or /community/... for dynasty/tribe/family ownership), targetType (org|gov|person|community), direction (upward|downward|both), depth (3-6), includeBoard (true/false), geoFilter, reason.
-	- ECOSYSTEM PLAN: When contractType is ecosystem-mapping or influence-network, you MUST include ecosystemExecutionPlan with 1-5 queries. Each query: focus (canonical path or description), focusType (geo|sector|market|org|community), depth (3-5), actorTypes (subset of [ORGANIZATION, GOV, PERSON, FACILITY, COMMUNITY]), sectorFilter, geoFilter, reason.
+	- ECOSYSTEM PLAN: When contractType is ecosystem-mapping or influence-network, you MUST include ecosystemExecutionPlan with 1-5 queries. Each query: focus (canonical path or description), focusType (geo|sector|market|org|community), depth (3-5), actorTypes (subset of [ORG, GOV, PERSON, SITE, COMMUNITY]), sectorFilter, geoFilter, reason.
 - AFFECTED-ZONE / EXPOSURE: For conflict, disaster, earthquake, flood, tension, humanitarian, and security-zone queries, include anchors for zone geography plus exposed operators, facilities, markets, routes, or chokepoints when inferable. Do not reduce the intent to only /loc/... if the query implies operational exposure.
 - FINANCE / MARKET INFRASTRUCTURE: For banking, payments, insurance, exchanges, clearing, custody, portfolio exposure, or trade-finance questions, include anchors across the transmission chain when inferable: institutions, market infrastructure, regulators, sectors, and exposed corporate endpoints.
 - INDUSTRY ANALYSIS: For industry-analysis and competitive-landscape queries, include anchors across the chain when inferable: producers, facilities, markets, logistics hubs, major downstream consumers, and relevant regulators.
@@ -697,29 +697,29 @@ DOMAIN RULES
 - COMMONALITY: If query asks what connects/unifies X and Y → contractType commonality-analysis, facets subject.
 - title: Title Case, specific to query (BAD: "Market Landscape", GOOD: "EV Lithium Batteries Market Landscape"), Latin-script only, 6-10 words.
 - description: actionable ("Map X, identify Y, highlight Z...").
-- projections: ORGANIZATION, MARKET, FACILITY, GEO_REGION, PRODUCT, PERSON, EVENT, PROGRAM, GOV.
+- projections: org, market, site, geo, product, person, evidence, project, gov.
 
 ═══════════════════════════════════════════
 ANCHOR TAXONOMY
 ═══════════════════════════════════════════
 - Anchors are concrete real-world entities. Do NOT create domains as anchors.
-- canonicalPath namespaces: /gov, /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media
+- canonicalPath namespaces: /gov, /org, /person, /product, /project, /market, /fac, /loc, /sphere, /evidence, /media
 - ALL path segments MUST be lowercase slugs (hyphens, no spaces).
 %s
 
-ORGANIZATION: /org/{geo}/{slug} (e.g., /org/sa/saudi-aramco). GOV bodies: /gov/{geo}/{slug}. Use concrete evidence-backed geo whenever possible. /org/na/{slug} or /gov/na/{slug} is allowed ONLY as an exceptional last-resort when neither context nor the entity name provides a defensible jurisdiction clue.
-FACILITY: /fac/{geo}/{facilitySlug}. geo like org/gov (ISO2, na, or regional). /fac/na is LAST-RESORT ONLY after checking facility name, site/city mention, operator context, and source text for geography. If the name contains a clear place clue, infer the ISO2 instead of using na.
-GEO_REGION: /loc/{countryAlpha2}[/{level1}[/{level2}]] — omit unknown trailing levels. Country-only: /loc/{cc}. Regional: /loc/gcc.
+ORG: /org/{geo}/{slug} (e.g., /org/sa/saudi-aramco). GOV bodies: /gov/{geo}/{slug}. Use concrete evidence-backed geo whenever possible. /org/na/{slug} or /gov/na/{slug} is allowed ONLY as an exceptional last-resort when neither context nor the entity name provides a defensible jurisdiction clue.
+SITE: /fac/{geo}/{facilitySlug}. geo like org/gov (ISO2, na, or regional). /fac/na is LAST-RESORT ONLY after checking facility name, site/city mention, operator context, and source text for geography. If the name contains a clear place clue, infer the ISO2 instead of using na.
+GEO: /loc/{countryAlpha2}[/{level1}[/{level2}]] — omit unknown trailing levels. Country-only: /loc/{cc}. Regional: /loc/gcc.
 PRODUCT: /product/{category}/{type}/{stage}/{slug} — category: raw|component|finished|service. For services, use category=service and map service domain/subdomain into {type}/{stage}.
 MARKET: /market/{geo}/{domain}/{vertical} — geo: " + taxonomy.ISO2GeoDescriptionForPrompts() + ". Inherit country ISO2 from query when geographic context is present.
-PROGRAM: /program/{jurisdictionSlug}/{programSlug}. If jurisdiction is unknown, use /program/global/{programSlug}
+PROJECT: /project/{jurisdictionSlug}/{projectSlug}. If jurisdiction is unknown, use /project/global/{projectSlug}
 PERSON: /person/{slug}
-EVENT: /event/{slug}
+EVIDENCE: /evidence/{slug}
 MEDIA_CHANNEL: /media/{platform}/{slug}
 
 MARKET GEOGRAPHY: When query mentions a specific country AND a market → MARKET anchor MUST use that country's ISO2 as geo (NOT "global").
 
-DECOMPOSITION HINTS (REQUIRED for MARKET/PROGRAM anchors):
+DECOMPOSITION HINTS (REQUIRED for MARKET/PROJECT anchors):
 - entityTypes: what to discover. subMarkets: segments. playerCategories: player types.
 - searchQueries: 3-5 concrete English web search queries designed to yield real-world entity names (NOT abstract "market size" queries).
 
@@ -1081,7 +1081,7 @@ func applySupplyChainDomainQuality(
 		return
 	}
 	d.Projections = dedupStrings(append(d.Projections,
-		"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "GEO_REGION", "deposit"), 12)
+		"ORG", "SITE", "PRODUCT", "MARKET", "GEO", "deposit"), 12)
 	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
 		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/deposit/", "/market/", "/loc/")...), 16)
 	if d.SupplyChainExecutionPlan == nil || len(d.SupplyChainExecutionPlan.Queries) == 0 {
@@ -1130,9 +1130,9 @@ func applyServiceChainDomainQuality(
 		return
 	}
 	d.Projections = dedupStrings(append(d.Projections,
-		"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "GEO_REGION", "PROGRAM", "GOV"), 12)
+		"ORG", "SITE", "PRODUCT", "MARKET", "GEO", "PROJECT", "GOV"), 12)
 	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
-		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/product/", "/market/", "/program/", "/gov/", "/loc/")...), 16)
+		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/fac/", "/product/", "/market/", "/project/", "/gov/", "/loc/")...), 16)
 	if d.ServiceChainExecutionPlan == nil || len(d.ServiceChainExecutionPlan.Queries) == 0 {
 		if plan := synthesizeServiceChainExecutionPlan(query, d, anchors, profile); plan != nil {
 			d.ServiceChainExecutionPlan = plan
@@ -1179,9 +1179,9 @@ func applyPolicyImpactDomainQuality(
 		return
 	}
 	d.Projections = dedupStrings(append(d.Projections,
-		"GOV", "ORGANIZATION", "MARKET", "FACILITY", "PRODUCT", "PROGRAM"), 12)
+		"GOV", "ORG", "MARKET", "SITE", "PRODUCT", "PROJECT"), 12)
 	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
-		collectIntentAnchorPathsByPrefix(anchors, "/gov/", "/org/", "/market/", "/product/", "/program/", "/loc/")...), 16)
+		collectIntentAnchorPathsByPrefix(anchors, "/gov/", "/org/", "/market/", "/product/", "/project/", "/loc/")...), 16)
 	if d.RegulatoryImpactExecutionPlan == nil || len(d.RegulatoryImpactExecutionPlan.Queries) == 0 {
 		if plan := synthesizeRegulatoryImpactExecutionPlan(query, d, anchors, profile); plan != nil {
 			d.RegulatoryImpactExecutionPlan = plan
@@ -1204,7 +1204,7 @@ func applyGovernanceDomainQuality(
 		return
 	}
 	d.Projections = dedupStrings(append(d.Projections,
-		"ORGANIZATION", "GOV", "PERSON", "FACILITY", "PROGRAM", "COMMUNITY"), 12)
+		"ORG", "GOV", "PERSON", "SITE", "PROJECT", "COMMUNITY"), 12)
 	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
 		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/gov/", "/person/", "/fac/", "/community/")...), 16)
 	if d.GovernanceExecutionPlan == nil || len(d.GovernanceExecutionPlan.Queries) == 0 {
@@ -1230,7 +1230,7 @@ func applyEcosystemDomainQuality(
 		return
 	}
 	d.Projections = dedupStrings(append(d.Projections,
-		"ORGANIZATION", "GOV", "FACILITY", "MARKET", "PRODUCT", "GEO_REGION", "COMMUNITY"), 12)
+		"ORG", "GOV", "SITE", "MARKET", "PRODUCT", "GEO", "COMMUNITY"), 12)
 	d.FirstOrderEntities = normalizeCanonicalPathsList(append(d.FirstOrderEntities,
 		collectIntentAnchorPathsByPrefix(anchors, "/org/", "/gov/", "/fac/", "/market/", "/product/", "/loc/", "/community/")...), 16)
 	if d.EcosystemExecutionPlan == nil || len(d.EcosystemExecutionPlan.Queries) == 0 {
@@ -1255,7 +1255,7 @@ func applyAffectedZoneDomainQuality(
 		return
 	}
 	d.Projections = dedupStrings(append(d.Projections,
-		"GEO_REGION", "FACILITY", "ORGANIZATION", "MARKET", "TRACK", "EVENT"), 12)
+		"GEO", "SITE", "ORG", "MARKET", "ROUTE", "EVIDENCE"), 12)
 	prefixes := []string{"/loc/", "/zone/", "/fac/", "/org/", "/market/", "/track/"}
 	if profile.routeSensitive {
 		prefixes = append(prefixes, "/deposit/")
@@ -1468,7 +1468,7 @@ func synthesizeRegulatoryImpactExecutionPlan(
 	profile intentScenarioProfile,
 ) *RegulatoryImpactExecutionPlan {
 	instrument := ""
-	for _, cp := range collectIntentAnchorPathsByPrefix(anchors, "/mechanism/", "/program/") {
+	for _, cp := range collectIntentAnchorPathsByPrefix(anchors, "/mechanism/", "/project/") {
 		instrument = cp
 		break
 	}
@@ -1592,7 +1592,7 @@ func synthesizeEcosystemExecutionPlan(
 	if focus == "" {
 		return nil
 	}
-	actorTypes := []string{"ORGANIZATION", "GOV", "FACILITY", "COMMUNITY"}
+	actorTypes := []string{"ORG", "GOV", "SITE", "COMMUNITY"}
 	if profile.ecosystem || profile.investment {
 		actorTypes = append(actorTypes, "PERSON")
 	}
@@ -2169,7 +2169,7 @@ func bestEffortInferDomainsFromQuery(
 			Title:              title,
 			Description:        desc,
 			Facets:             map[string][]string{"geo": {cc1, cc2}},
-			Projections:        []string{"GOV", "ORGANIZATION", "EVENT", "MARKET", "GEO_REGION"},
+			Projections:        []string{"GOV", "ORG", "EVIDENCE", "MARKET", "GEO"},
 			FirstOrderEntities: firstOrder,
 			Confidence:         0.85,
 			Reason:             "deterministic: bilateral relations query with geo anchors",
@@ -2360,7 +2360,7 @@ OUTPUT JSON SCHEMA:
       "title": "string (English human-readable title; NOT a slug)",
       "description": "string (actionable contract describing what the system should reveal/show)",
       "facets": { "geo": ["us"], "material": ["lithium"], "application": ["ev"] },
-      "projections": ["ORGANIZATION", "MARKET", "FACILITY", "GEO_REGION", "PRODUCT"],
+      "projections": ["ORG", "MARKET", "SITE", "GEO", "PRODUCT"],
       "relatedDomains": ["string (/domain/v1/... optional)"],
       "affectedDomains": ["string (/domain/v1/... optional)"],
       "firstOrderEntities": ["string (canonical paths to add to the Lens scope)"],
@@ -2385,7 +2385,7 @@ OUTPUT JSON SCHEMA:
   "anchors": [
     {
       "canonicalPath": "string (canonicalPath, must match the taxonomy rules below)",
-      "type": "ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET|MEDIA_CHANNEL",
+      "type": "ORG|PRODUCT|SITE|GEO|PERSON|EVIDENCE|PROJECT|MARKET|MEDIA_CHANNEL|GOV|COMMUNITY|ZONE",
       "name": "string (preferred English display name; NOT a slug; translate to English when possible)",
       "confidence": 0.0,
       "reason": "short reason"
@@ -2394,7 +2394,7 @@ OUTPUT JSON SCHEMA:
   "decompositionHints": [
     {
       "anchorPath": "string (must match one of the anchors' canonicalPath)",
-      "entityTypes": ["ORGANIZATION", "PRODUCT", ...],
+      "entityTypes": ["ORG", "PRODUCT", ...],
       "subMarkets": ["segment1", "segment2", ...],
       "playerCategories": ["category1", "category2", ...],
       "searchQueries": ["concrete search query 1", "concrete search query 2", ...]
@@ -2481,19 +2481,19 @@ RULES:
   - Examples:
     - "Ibrahim Al Rashid Social Development Bank" → anchors:
       - PERSON: /person/ibrahim-al-rashid
-      - ORGANIZATION: /org/{iso2}/social-development-bank
+      - ORG: /org/{iso2}/social-development-bank
       - If jurisdiction is still genuinely unknowable after checking context and the name itself, /org/na/social-development-bank is the exceptional last-resort fallback
     - "Apple and Microsoft cloud partnership" → anchors:
-      - ORGANIZATION: /org/us/apple-inc
-      - ORGANIZATION: /org/us/microsoft-corp
+      - ORG: /org/us/apple-inc
+      - ORG: /org/us/microsoft-corp
       - (optional) MARKET: /market/global/technology/cloud-computing
     - "Tesla Gigafactory Texas Austin" → anchors:
-      - ORGANIZATION: /org/us/tesla-inc
-      - FACILITY: /fac/us/gigafactory-texas
-      - GEO_REGION: /loc/us/tx/austin
+      - ORG: /org/us/tesla-inc
+      - SITE: /fac/us/gigafactory-texas
+      - GEO: /loc/us/tx/austin
 - canonicalPath MUST be a valid canonical path with allowed namespaces:
-  /gov, /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media, /domain, /zone
-- If the query refers to a media brand/channel (e.g. a Telegram channel), do NOT collapse it to a GEO_REGION just because it contains a city name.
+  /gov, /org, /person, /product, /project, /market, /fac, /loc, /sphere, /evidence, /media, /domain, /zone
+- If the query refers to a media brand/channel (e.g. a Telegram channel), do NOT collapse it to a GEO just because it contains a city name.
   - Example: Telegram channel "В казани поймут" should be anchored as a MEDIA_CHANNEL: /media/telegram/{channel-slug}, not as /loc/... for Kazan.
   - Prefer using a stable handle/username if present; otherwise use the quoted title as the slug source.
   - Add keyword "telegram" and consider /sphere/social/information.
@@ -2502,19 +2502,20 @@ RULES:
   - WRONG: /loc/UAE, /org/Tesla Inc, /product/Lithium Carbonate
 
 - The anchor type MUST match the canonicalPath namespace:
-  - ORGANIZATION -> /org/... OR /gov/... (for government bodies)
-  - FACILITY     -> /fac/...
-  - GEO_REGION   -> /loc/...
+  - ORG          -> /org/...
+  - GOV          -> /gov/...
+  - SITE         -> /fac/...
+  - GEO          -> /loc/...
   - PERSON       -> /person/...
   - PRODUCT      -> /product/...
   - MEDIA_CHANNEL -> /media/{platform}/{slug}
-  - PROGRAM      -> /program/...
+  - PROJECT      -> /project/...
   - MARKET       -> /market/...
-  - EVENT        -> /event/...
-  - AFFECTED_ZONE -> /zone/{geo}/{condition_type}/{slug}
+  - EVIDENCE     -> /evidence/...
+  - ZONE         -> /zone/{geo}/{condition_type}/{slug}
     - slug: descriptive place/region name (northern-rakhine, gaza-strip, donbas). NEVER "na".
 
-- GEO_REGION canonicalPath MUST be strict: /loc/{countryAlpha2}[/{level1}[/{level2}]]
+- GEO canonicalPath MUST be strict: /loc/{countryAlpha2}[/{level1}[/{level2}]]
   - countryAlpha2: %s
   - Regional tokens ALWAYS go in the countryAlpha2 slot (2nd segment), never at the end.
     - Example: GCC → /loc/gcc (NOT /loc/global/gcc)
@@ -2530,11 +2531,11 @@ RULES:
   - stage: extraction|refining|processing|manufacturing|assembly (best-effort)
   - If classification is uncertain, still keep this 5-segment format with your best taxonomy estimate
 
-- FACILITY canonicalPath:
+- SITE canonicalPath:
   - use /fac/{geo}/{facilitySlug} — geo: %s
   - infer the best concrete geo from facility name, site/city mention, operator context, and source text instead of falling back to /fac/na
 
-- ORGANIZATION canonicalPath:
+- ORG canonicalPath:
   - Organizations: /org/{iso2|regional}/{slug}
     - iso2: country of origin / primary jurisdiction (%s). Use your best evidence-backed jurisdiction instead of falling back to /org/na.
     - Regional tokens go in the geo slot (2nd segment): /org/gcc/{slug}.
@@ -2544,12 +2545,12 @@ RULES:
     - Resolve the best jurisdiction from the source, official name, and place clues instead of falling back to /gov/na.
     - Regional tokens go in the geo slot (2nd segment): /gov/gcc/{slug}.
 
-- PROGRAM/MARKET/EVENT/PERSON canonicalPath:
-  - /program/{jurisdictionSlug}/{programSlug}, /event/{slug}, /person/{slug}
-  - PROGRAM:
+- PROJECT/MARKET/EVIDENCE/PERSON canonicalPath:
+  - /project/{jurisdictionSlug}/{projectSlug}, /evidence/{slug}, /person/{slug}
+  - PROJECT:
     - jurisdictionSlug: %s
     - If jurisdiction is unknown, use "global"
-    - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
+    - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /project/gcc/{slug} (NOT /project/na/gcc/{slug})
   - MARKET (segment-first):
     - HIERARCHY LEVELS:
       - L1 (domain): /market/{geo}/{domain} — entire sector
@@ -2780,7 +2781,7 @@ func normalizeCanonicalPathForTools(raw string) string {
 	}
 	// Path does not start with / — likely MSYS corruption. Find first canonical namespace.
 	// Order matters: /domain/ first — domain paths contain other ns as facets (e.g. .../product/fruits, .../org/partners).
-	candidates := []string{"/domain/", "/zone/", "/gov/", "/org/", "/person/", "/product/", "/fac/", "/loc/", "/event/", "/sphere/", "/program/", "/market/", "/segment/", "/media/"}
+	candidates := []string{"/domain/", "/zone/", "/gov/", "/org/", "/person/", "/product/", "/fac/", "/loc/", "/evidence/", "/sphere/", "/project/", "/market/", "/segment/", "/media/", "/community/"}
 	for _, c := range candidates {
 		if idx := strings.Index(s, c); idx >= 0 {
 			s = s[idx:]

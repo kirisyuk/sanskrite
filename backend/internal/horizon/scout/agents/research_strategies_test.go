@@ -258,9 +258,9 @@ func TestGovernanceEnrichmentPrompt_OwnsDirectionGuardrails(t *testing.T) {
 func TestGeneralResearchExplicitSourceRulesBlock_GeoAnchorGuardrails(t *testing.T) {
 	block := generalResearchExplicitSourceRulesBlock()
 	for _, want := range []string{
-		"GEO_REGION exception: when CURRENT FRAGMENT is /loc/...",
-		"that discovered entity is usually the SOURCE and CURRENT FRAGMENT is the TARGET via LOCATED_IN/OPERATES_IN",
-		"never express regional presence as CURRENT FRAGMENT -> entity with OWNS, MEMBER_OF, HAS_SUBGROUP",
+		"geo exception: when CURRENT FRAGMENT is /loc/...",
+		"that discovered entity is usually the SOURCE and CURRENT FRAGMENT is the TARGET via incorporated_in/operates",
+		"never express regional presence as CURRENT FRAGMENT -> entity with beneficially_owns, member_of, has_subgroup",
 	} {
 		if !strings.Contains(block, want) {
 			t.Fatalf("explicit source rules block missing geo guardrail %q", want)
@@ -439,7 +439,7 @@ func TestGeneralEnrichmentPrompt_ModularContract(t *testing.T) {
 	input := ResearchStrategyInput{
 		Fragment: &models.HorizonFragment{
 			CanonicalPath: "/fac/global/red-sea-corridor",
-			Class:          ah.FragmentClassSite,
+			Class:         ah.FragmentClassSite,
 			Qualifiers:    map[string]interface{}{"route": true},
 		},
 		MissingInfo:      []string{"Find key logistics operators"},
@@ -477,7 +477,7 @@ func TestGeneralEnrichmentPrompt_OwnsDirectionGuardrails(t *testing.T) {
 	for _, want := range []string{
 		"THIS FRAGMENT is owned by X",
 		"THIS FRAGMENT is invested in by X",
-		"Never emit reversed OWNS (THIS FRAGMENT -> its owner).",
+		"Never emit reversed beneficially_owns (THIS FRAGMENT -> its owner).",
 		"use explicit source whenever THIS FRAGMENT is the semantic target",
 		"qualifiers.source_role and qualifiers.target_role",
 		"dependent->dependency, supplier->customer",

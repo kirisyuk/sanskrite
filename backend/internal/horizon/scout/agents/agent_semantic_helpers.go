@@ -33,21 +33,38 @@ func SemanticGroupForEdgeType(t ah.RelationName) string {
 	return SemanticGroupOther
 }
 
+func normalizeAgentRelationToken(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if rel, ok := ah.NormalizeRelation(raw); ok {
+		return string(rel)
+	}
+	if dec, ok := models.NormalizeRelationName(raw); ok {
+		if dec.Dropped || dec.Relation == "" {
+			return ""
+		}
+		return string(dec.Relation)
+	}
+	return ""
+}
+
 var edgeTypeToSemanticGroup = map[ah.RelationName]string{
-	ah.RelationNameProduces:         SemanticGroupSupplyChain,
-	ah.RelationNameSupplies:         SemanticGroupSupplyChain,
-	ah.RelationNameIncorporatedIn:   SemanticGroupSupplyChain,
-	ah.RelationNameOperates:         SemanticGroupSupplyChain,
+	ah.RelationNameProduces:       SemanticGroupSupplyChain,
+	ah.RelationNameSupplies:       SemanticGroupSupplyChain,
+	ah.RelationNameIncorporatedIn: SemanticGroupSupplyChain,
+	ah.RelationNameOperates:       SemanticGroupSupplyChain,
 
 	ah.RelationNameBeneficiallyOwns: SemanticGroupGovernance,
 	ah.RelationNameSubsidiaryOf:     SemanticGroupGovernance,
 	ah.RelationNameControlsVia:      SemanticGroupGovernance,
 	ah.RelationNameInvestedIn:       SemanticGroupGovernance,
-	ah.RelationNameHoldsBoardSeat:  SemanticGroupGovernance,
+	ah.RelationNameHoldsBoardSeat:   SemanticGroupGovernance,
 	ah.RelationNameMemberOf:         SemanticGroupGovernance,
 	ah.RelationNameInfluences:       SemanticGroupGovernance,
 
-	ah.RelationNameAssures:  SemanticGroupAssurance,
+	ah.RelationNameAssures:   SemanticGroupAssurance,
 	ah.RelationNameRegulates: SemanticGroupAssurance,
 
 	ah.RelationNameListedOn: SemanticGroupMarket,
@@ -366,102 +383,19 @@ func AllObjectQualifierStrings() []string {
 	return out
 }
 
-// Category B — LLM prompt boundary: everything below feeds scout system/user
-// prompts and must stay aligned with historical UPPER_SNAKE enumerations.
-//
-// dependencyTypeWireLabelOverrides maps scout DependencyType values
-// (which under AH point at canonical RelationName slugs like
-// "beneficially_owns", "joint_venture_with", "operates", …) back to
-// the pre-migration UPPER_SNAKE wire label that the LLM-facing scout
-// agent prompts pin on. Without this map the prompt would emit
-// "BENEFICIALLY_OWNS" / "JOINT_VENTURE_WITH" / "OPERATES" instead of
-// "OWNS" / "PARTNERS_WITH" / "ADMINISTERS", breaking back-compat with
-// historical agent prompts and downstream scout tests.
-//
-// MIGRATION NOTE (AH taxonomy / docs/archive/taxonomy-migration-2026/migration_map.yaml +
-// AGENTS.md): the prompt is an LLM contract; per the AGENTS.md
-// "agent emits human-readable names" rule we keep the legacy
-// UPPER_SNAKE wire labels in the relation enumeration and rely on the
-// graph_intent / relation normalization to fold the LLM's
-// answers back to canonical AH RelationName slugs at parse time.
-var dependencyTypeWireLabelOverrides = map[ah.RelationName]string{
-	ah.RelationNameBeneficiallyOwns:              "OWNS",
-	ah.RelationNameSubsidiaryOf:      "SUBSIDIARY_OF",
-	ah.RelationNameControlsVia:          "CONTROLS",
-	ah.RelationNameInvestedIn:         "INVESTS_IN",
-	ah.RelationNameHoldsBoardSeat:     "BOARD_MEMBER_OF",
-	ah.RelationNameOperates:       "ADMINISTERS",
-	ah.RelationNameJointVentureWith:      "PARTNERS_WITH",
-	ah.RelationNameMergedInto:        "MERGED_INTO",
-	ah.RelationNameSupplies:        "SUPPLIES_TO",
-	ah.RelationNameProduces:          "PRODUCES",
-	ah.RelationNameRegulates:         "REGULATES",
-	ah.RelationNameAssures:           "ASSURES",
-	ah.RelationNameImposes:  "IMPOSES_CONDITION",
-	ah.RelationNameGatekeeps: "GATEKEEPS_DECISION",
-	ah.RelationNameWields:     "USES_MECHANISM",
-	ah.RelationNameDisrupts:           "AFFECTS",
-	ah.RelationNameMemberOf:          "MEMBER_OF",
-	ah.RelationNameListedOn:          "TRADED_IN",
-	ah.RelationNameInfluences:        "INFLUENCES",
-}
+// Category B — LLM prompt boundary: Scout prompts emit the canonical AH
+// snake_case relation alphabet directly.
 
-// wireLabelForDependencyType returns the UPPER_SNAKE wire label that
-// scout LLM prompts use to advertise a DependencyType. Falls back to
-// strings.ToUpper(string(rel)) for legacy snake_case literals that have
-// no AH RelationName indirection (e.g. focuses_on, has_market_segment,
-// extracts_from).
-func wireLabelForDependencyType(rel ah.RelationName) string {
-	if label, ok := dependencyTypeWireLabelOverrides[rel]; ok {
-		return label
-	}
-	return strings.ToUpper(string(rel))
-}
-
-// AllEdgeTypesForPromptList returns the legacy AGENTHORDE edge-type vocabulary
-// as a sorted slice of upper-case wire labels.
+// AllEdgeTypesForPromptList returns the canonical AH relation vocabulary as a
+// sorted slice of snake_case relation names.
 func AllEdgeTypesForPromptList() []string {
-	rels := []ah.RelationName{
-		ah.RelationNameBeneficiallyOwns, ah.RelationNameSubsidiaryOf, ah.RelationNameControlsVia,
-		ah.RelationNameInvestedIn, ah.RelationNameHoldsBoardSeat, ah.RelationNameMemberOf,
-		ah.RelationNameInfluences, ah.RelationNameOperates, ah.RelationNameManagedBy,
-		ah.RelationNameMemberOf, ah.RelationNameJointVentureWith, ah.RelationNameJointVentureWith,
-		ah.RelationNameJointVentureWith, ah.RelationNameInfluences, ah.RelationNameInfluences,
-		ah.RelationNameInfluences, ah.RelationNameMemberOf, ah.RelationNameInfluences,
-
-		ah.RelationNameSupplies, ah.RelationNameProduces, ah.RelationNameProduces,
-		ah.RelationNameProduces, ah.RelationNameSupplies, ah.RelationNameProduces,
-		ah.RelationNameOperates, ah.RelationNameWields, ah.RelationNameIncorporatedIn,
-		ah.RelationNameSupplies,
-
-		ah.RelationNameRegulates, ah.RelationNameAssures, ah.RelationNameAssures,
-		ah.RelationNameImposes, ah.RelationNameGatekeeps,
-		ah.RelationNameWields, ah.RelationNameImposes, ah.RelationNameImposes,
-
-		ah.RelationNameListedOn, ah.RelationNameMemberOf, ah.RelationNameInfluences,
-		ah.RelationNameInfluences, ah.RelationNameInfluences, ah.RelationNameAlternateTo,
-
-		ah.RelationNameInfluences, ah.RelationNameInfluences, ah.RelationNameInfluences,
-		ah.RelationNameInfluences, ah.RelationNameInfluences,
-		ah.RelationNameDisrupts, ah.RelationNameInfluences, ah.RelationNameInfluences,
-		ah.RelationNameInfluences, ah.RelationNameConstrainedBy, ah.RelationNameInfluences,
-
-		ah.RelationNameMergedInto, ah.RelationNameInfluences, ah.RelationNameInfluences,
-		ah.RelationNameMergedInto, ah.RelationNameMergedInto, ah.RelationNameSpunOut,
-		ah.RelationNameAcquiredStakeFrom,
-	}
-	seen := map[string]struct{}{}
-	out := make([]string, 0, len(rels))
-	for _, r := range rels {
-		label := wireLabelForDependencyType(r)
-		if label == "" {
+	out := make([]string, 0, len(ah.RelationNames))
+	for _, r := range ah.RelationNames {
+		name := strings.TrimSpace(string(r))
+		if name == "" {
 			continue
 		}
-		if _, ok := seen[label]; ok {
-			continue
-		}
-		seen[label] = struct{}{}
-		out = append(out, label)
+		out = append(out, name)
 	}
 	sort.Strings(out)
 	return out
@@ -478,13 +412,12 @@ func AllEdgeTypesForPrompt() string {
 	return strings.Join(quoted, " | ")
 }
 
-// DomainScaffoldRelationTypesString returns the closed list of "scaffold"
-// relations (DEPENDS_ON family) as a quoted pipe-separated enum.
-// Category B — LLM prompt boundary (domain scaffold prompts).
+// DomainScaffoldRelationTypesString returns the closed AH relation subset used
+// when a DOMAIN contract is expanded into evidence-/regime-like overlays.
 func DomainScaffoldRelationTypesString() string {
 	rels := []string{
-		"DEPENDS_ON", "INFLUENCES", "RELATED_TO", "ASSOCIATED_WITH",
-		"AFFECTS", "ABOUT", "SURFACES", "INVOLVES_ACTOR", "IN_GEO_SCOPE",
+		"influences", "disrupts", "subject_to", "exposes_to",
+		"supported_by", "asserted_by",
 	}
 	out := make([]string, 0, len(rels))
 	for _, r := range rels {
@@ -493,7 +426,7 @@ func DomainScaffoldRelationTypesString() string {
 	return strings.Join(out, " | ")
 }
 
-// AllEdgeTypesList returns the closed list of upper-case relation labels.
+// AllEdgeTypesList returns the closed list of canonical prompt relation labels.
 func AllEdgeTypesList() []string { return AllEdgeTypesForPromptList() }
 
 // AllowedObjectQualifierStringsForType returns the qualifier slugs that

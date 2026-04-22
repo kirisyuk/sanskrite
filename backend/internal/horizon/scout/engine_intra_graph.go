@@ -11,7 +11,6 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/intra_graph"
 	"github.com/igorkirisyuk/sanskrite/internal/realtime"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 )
 
 // runIntraGraphInference runs intra-graph link inference for the lens scope,
@@ -226,7 +225,7 @@ func (e *ScoutEngine) materializeIntraGraphRelations(ctx context.Context, job *m
 			targetType = InferFragmentTypeFromCanonicalPath(tgtPath)
 		}
 		rawRelationType := strings.TrimSpace(rel.RelationType)
-		rel.RelationType = strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
+		rel.RelationType = normalizeRelationToken(rel.RelationType)
 		normalizedRelationType := strings.TrimSpace(rel.RelationType)
 		if normalizedRelationType == "" {
 			continue

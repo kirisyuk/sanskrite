@@ -110,11 +110,11 @@ func buildAnchorResolverPrompt(query string, domains []DomainResolution) string 
 - Examples:
   - "Ibrahim Al Rashid Social Development Bank" → anchors:
     - PERSON: /person/ibrahim-al-rashid
-    - ORGANIZATION: /org/{iso2}/social-development-bank
+    - ORG: /org/{iso2}/social-development-bank
     - If jurisdiction is still genuinely unknowable after checking context and the name itself, /org/na/social-development-bank is the exceptional last-resort fallback
   - "Apple and Microsoft cloud partnership" → anchors:
-    - ORGANIZATION: /org/us/apple-inc
-    - ORGANIZATION: /org/us/microsoft-corp
+    - ORG: /org/us/apple-inc
+    - ORG: /org/us/microsoft-corp
 
 `
 	}
@@ -128,7 +128,7 @@ USER QUERY:
   "anchors": [
     {
       "canonicalPath": "string (canonicalPath; must match taxonomy rules below)",
-      "type": "ORGANIZATION|PRODUCT|FACILITY|GEO_REGION|PERSON|EVENT|PROGRAM|MARKET|MEDIA_CHANNEL",
+      "type": "ORG|PRODUCT|SITE|GEO|PERSON|EVIDENCE|PROJECT|MARKET|MEDIA_CHANNEL|GOV|COMMUNITY|ZONE",
       "name": "string (preferred English display name; NOT a slug; translate to English when possible)",
       "confidence": 0.0,
       "reason": "short reason"
@@ -137,7 +137,7 @@ USER QUERY:
   "decompositionHints": [
     {
       "anchorPath": "string (must match one of the anchors' canonicalPath)",
-      "entityTypes": ["ORGANIZATION", "PRODUCT", ...],
+      "entityTypes": ["ORG", "PRODUCT", ...],
       "subMarkets": ["segment1", "segment2", ...],
       "playerCategories": ["category1", "category2", ...],
       "searchQueries": ["concrete search query 1", "concrete search query 2", ...]
@@ -149,23 +149,26 @@ TAXONOMY RULES:
 
 - Do NOT create domains. Domains are provided in context.
 - canonicalPath MUST be a valid canonical path with allowed namespaces:
-  /gov, /org, /person, /product, /program, /market, /fac, /loc, /sphere, /event, /media
+  /gov, /org, /person, /product, /project, /market, /fac, /loc, /sphere, /evidence, /media, /community, /zone
 - ALL path segments MUST be lowercase slugs (use hyphens instead of spaces):
   - CORRECT: /org/sa/saudi-aramco, /fac/sa/ras-tanura-refinery, /loc/ae
   - WRONG: /loc/UAE, /org/Tesla Inc, /product/Lithium Carbonate
 
 - The anchor type MUST match the canonicalPath namespace:
-  - ORGANIZATION -> /org/... OR /gov/... (for government bodies)
-  - FACILITY     -> /fac/...
-  - GEO_REGION   -> /loc/...
+  - ORG          -> /org/...
+  - GOV          -> /gov/...
+  - SITE         -> /fac/...
+  - GEO          -> /loc/...
   - PERSON       -> /person/...
   - PRODUCT      -> /product/...
   - MEDIA_CHANNEL -> /media/{platform}/{slug}
-  - PROGRAM      -> /program/...
+  - COMMUNITY    -> /community/{geo}/{type}/{slug}
+  - PROJECT      -> /project/...
   - MARKET       -> /market/...
-  - EVENT        -> /event/...
+  - EVIDENCE     -> /evidence/...
+  - ZONE         -> /zone/{geo}/{condition_type}/{slug}
 
-GEO_REGION (CRITICAL):
+GEO (CRITICAL):
 - canonicalPath MUST be strict: /loc/{countryAlpha2}[/{level1}[/{level2}]]
   - countryAlpha2: `+taxonomy.ISO2GeoDescriptionForPrompts()+`
   - Regional tokens ALWAYS go in the countryAlpha2 slot (2nd segment), never at the end.
@@ -185,11 +188,11 @@ PRODUCT (CRITICAL):
   - If classification is uncertain, still keep this 5-segment format with your best taxonomy estimate
   - Example: /product/raw/chemical/refining/lithium-carbonate
 
-FACILITY:
+SITE:
 - use /fac/{geo}/{facilitySlug}; infer the best concrete geo from facility/site/place clues in the name and source instead of falling back to /fac/na
 - Example: /fac/sa/ras-tanura-refinery, /fac/us/gigafactory-texas
 
-ORGANIZATION:
+ORG / GOV:
 - Organizations: /org/{iso2|regional}/{slug}
   - iso2: country of origin / primary jurisdiction (`+taxonomy.ISO2GeoDescriptionForPrompts()+`). Use your best evidence-backed jurisdiction instead of falling back to /org/na.
   - Regional tokens go in the geo slot (2nd segment): /org/gcc/{slug}.
@@ -205,12 +208,12 @@ GOV HIERARCHY (best-effort):
 - When anchoring government bodies, prefer specific agencies over generic ministry references when the query is specific.
 - Example: "Saudi FDA" → /gov/sa/sfda (type: authority/regulator), parent would be /gov/sa/ministry-of-health
 
-PROGRAM/PERSON/EVENT:
-- /program/{jurisdictionSlug}/{programSlug}, /event/{slug}, /person/{slug}
-- PROGRAM:
+PROJECT/PERSON/EVIDENCE:
+- /project/{jurisdictionSlug}/{projectSlug}, /evidence/{slug}, /person/{slug}
+- PROJECT:
   - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
   - If jurisdiction is unknown, use "global"
-  - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug}
+  - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /project/gcc/{slug}
 - PERSON: /person/{slug} (e.g., /person/ibrahim-al-rashid)
 
 MARKET (CRITICAL):
@@ -232,7 +235,7 @@ MARKET (CRITICAL):
 %s
 
 MEDIA_CHANNEL:
-- If the query refers to a media brand/channel (e.g., a Telegram channel), do NOT collapse it to a GEO_REGION just because it contains a city name.
+- If the query refers to a media brand/channel (e.g., a Telegram channel), do NOT collapse it to a GEO just because it contains a city name.
   - Example: Telegram channel "В казани поймут" should be anchored as /media/telegram/{channel-slug}, not as /loc/... for Kazan.
   - Prefer using a stable handle/username if present; otherwise use the quoted title as the slug source.
 

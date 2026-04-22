@@ -6,7 +6,7 @@ import (
 	"time"
 
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
-	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // RegulatoryLayerCoverage describes reachability from GOV seeds through policy-impact edges.
@@ -45,17 +45,17 @@ func ValidateRegulatoryImpactLayerCoverage(rels []agents.DiscoveredRelation) Reg
 		if src == "" || tgt == "" {
 			continue
 		}
-		rt := strings.ToUpper(strings.TrimSpace(taxonomy.NormalizeRelationType(r.RelationType)))
+		rt := normalizeRelationToken(r.RelationType)
 		if strings.HasPrefix(src, "/gov/") {
 			seeds[src] = struct{}{}
 		}
 		// Forward traversal along regulatory causal direction
 		switch rt {
-		case "GATEKEEPS_DECISION", "REGULATES", "ADMINISTERS":
+		case string(ah.RelationNameGatekeeps), string(ah.RelationNameRegulates), string(ah.RelationNameOperates):
 			adj[src] = append(adj[src], regulatoryAdj{to: tgt, kind: rt})
-		case "USES_MECHANISM":
+		case string(ah.RelationNameWields):
 			adj[src] = append(adj[src], regulatoryAdj{to: tgt, kind: rt})
-		case "APPLIES_TO", "IMPOSES_CONDITION", "CONTROLS_ACCESS", "INFLUENCES", "IN_GEO_SCOPE", "AFFECTS", "PARTICIPATES_IN", "TRADED_IN", "HAS_SUBGROUP", "MEMBER_OF", "AFFILIATED_WITH", "OPERATES_VIA":
+		case "applies_to", string(ah.RelationNameImposes), "controls_access", string(ah.RelationNameInfluences), "in_geo_scope", string(ah.RelationNameDisrupts), "participates_in", string(ah.RelationNameListedOn), "has_subgroup", string(ah.RelationNameMemberOf), "affiliated_with", "operates_via":
 			adj[src] = append(adj[src], regulatoryAdj{to: tgt, kind: rt})
 		}
 	}
@@ -257,8 +257,8 @@ func ComputeRegulatoryGraphSufficiency(rels []agents.DiscoveredRelation) Regulat
 	mechWithDate := 0
 	mechTotal := 0
 	for _, r := range rels {
-		rt := strings.ToUpper(strings.TrimSpace(taxonomy.NormalizeRelationType(r.RelationType)))
-		if rt == "REGULATES" || rt == "IMPOSES_CONDITION" {
+		rt := normalizeRelationToken(r.RelationType)
+		if rt == string(ah.RelationNameRegulates) || rt == string(ah.RelationNameImposes) {
 			regCond++
 			if q := r.Qualifiers; q != nil {
 				if _, ok := q["rate_from"]; ok {
@@ -355,13 +355,13 @@ func ValidateRegulatoryTemporalConsistency(rels []agents.DiscoveredRelation) []R
 		if src == "" || tgt == "" || r.Qualifiers == nil {
 			continue
 		}
-		rt := strings.ToUpper(strings.TrimSpace(taxonomy.NormalizeRelationType(r.RelationType)))
+		rt := normalizeRelationToken(r.RelationType)
 		if strings.HasPrefix(src, "/mechanism/") {
 			if t := parseDateish(r.Qualifiers, "effective_date", "effectiveDate"); !t.IsZero() {
 				mechEffective[src] = t
 			}
 		}
-		if rt == "IMPOSES_CONDITION" && strings.HasPrefix(src, "/mechanism/") {
+		if rt == string(ah.RelationNameImposes) && strings.HasPrefix(src, "/mechanism/") {
 			if t := parseDateish(r.Qualifiers, "effective_date", "effectiveDate"); !t.IsZero() {
 				condEffective[tgt] = struct {
 					mechHint string

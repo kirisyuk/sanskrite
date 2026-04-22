@@ -9,6 +9,7 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/regstress"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/scout/agents"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
+	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
 // dedupeDiscoveredRelations collapses duplicate edges (same source, target, relation type).
@@ -25,7 +26,7 @@ func dedupeDiscoveredRelations(rels []agents.DiscoveredRelation) []agents.Discov
 	for _, rel := range rels {
 		src := strings.TrimSpace(rel.SourceCanonicalPath)
 		tgt := strings.TrimSpace(rel.TargetCanonicalPath)
-		rt := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
+		rt := normalizeRelationToken(rel.RelationType)
 		k := key{src: src, tgt: tgt, rel: rt}
 		if ex, ok := best[k]; ok {
 			if rel.Confidence > ex.Confidence {
@@ -123,11 +124,13 @@ func filterPolicyImpactRelations(all []agents.DiscoveredRelation) []agents.Disco
 	}
 	allow := make(map[string]struct{}, len(taxonomy.PolicyImpactEdgeTypes))
 	for _, t := range taxonomy.PolicyImpactEdgeTypes {
-		allow[strings.ToUpper(strings.TrimSpace(t))] = struct{}{}
+		if normalized := normalizeRelationToken(t); normalized != "" {
+			allow[normalized] = struct{}{}
+		}
 	}
 	var out []agents.DiscoveredRelation
 	for _, r := range all {
-		rt := strings.ToUpper(strings.TrimSpace(taxonomy.NormalizeRelationType(r.RelationType)))
+		rt := normalizeRelationToken(r.RelationType)
 		if _, ok := allow[rt]; ok {
 			out = append(out, r)
 		}
@@ -139,8 +142,13 @@ func filterPolicyImpactRelations(all []agents.DiscoveredRelation) []agents.Disco
 func regulatoryCascadeDirectAffectedPaths(rels []agents.DiscoveredRelation) []string {
 	seen := map[string]struct{}{}
 	for _, r := range rels {
-		rt := strings.ToUpper(strings.TrimSpace(taxonomy.NormalizeRelationType(r.RelationType)))
-		if rt != "APPLIES_TO" && rt != "IMPOSES_CONDITION" && rt != "REGULATES" && rt != "CONTROLS_ACCESS" && rt != "AFFECTS" && rt != "IN_GEO_SCOPE" {
+		rt := normalizeRelationToken(r.RelationType)
+		if rt != "applies_to" &&
+			rt != string(ah.RelationNameImposes) &&
+			rt != string(ah.RelationNameRegulates) &&
+			rt != "controls_access" &&
+			rt != string(ah.RelationNameDisrupts) &&
+			rt != "in_geo_scope" {
 			continue
 		}
 		src := strings.TrimSpace(r.SourceCanonicalPath)

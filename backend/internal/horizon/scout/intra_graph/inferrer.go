@@ -577,7 +577,12 @@ Return ONLY valid JSON. No markdown.`,
 		allowedSet[strings.TrimSpace(a)] = struct{}{}
 	}
 	for _, r := range res.Relations {
-		rt := strings.TrimSpace(taxonomy.NormalizeRelationType(r.RelationType))
+		rt := strings.TrimSpace(r.RelationType)
+		if rel, ok := ah.NormalizeRelation(rt); ok {
+			rt = string(rel)
+		} else if dec, ok := models.NormalizeRelationName(rt); ok && !dec.Dropped && dec.Relation != "" {
+			rt = string(dec.Relation)
+		}
 		if _, ok := allowedSet[rt]; !ok {
 			continue
 		}

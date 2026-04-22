@@ -279,12 +279,24 @@ func ProfileForDomainMode(mode string) DomainModeProfile {
 	}
 }
 
-// AllowedEdgeStringsForDomainMode returns the wire-format strings
-// (UPPER_SNAKE legacy DependencyType) of allowed edges for a domain
-// mode. This is the stable boundary used by LLM prompts and the
-// frontend that has not yet migrated to the AH wire vocabulary.
+// AllowedEdgeStringsForDomainMode returns the canonical AH relation names
+// allowed for a domain mode. Prompt surfaces should think in the same
+// snake_case relation alphabet as the runtime.
 func AllowedEdgeStringsForDomainMode(mode string) []string {
-	return taxonomy.AllowedEdgeTypesForDomainMode(normalizeMode(mode))
+	profile := ProfileForDomainMode(mode)
+	if len(profile.AllowedEdges) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(profile.AllowedEdges))
+	for _, rel := range profile.AllowedEdges {
+		name := strings.TrimSpace(string(rel))
+		if name == "" {
+			continue
+		}
+		out = append(out, name)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // ComposeDomainModes unions multiple domain profiles into a single

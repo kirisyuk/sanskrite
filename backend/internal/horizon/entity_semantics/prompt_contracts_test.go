@@ -10,7 +10,7 @@ func TestPromptRelationTargetTypesPipeList(t *testing.T) {
 	if got == "" {
 		t.Fatalf("PromptRelationTargetTypesPipeList() should not be empty")
 	}
-	for _, want := range []string{"\"ORGANIZATION\"", "\"FACILITY\"", "\"MARKET\"", "\"MECHANISM\""} {
+	for _, want := range []string{"\"org\"", "\"site\"", "\"market\"", "\"mechanism\""} {
 		if !strings.Contains(got, want) {
 			t.Fatalf("PromptRelationTargetTypesPipeList() missing %s", want)
 		}

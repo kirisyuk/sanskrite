@@ -986,7 +986,7 @@ func filterDiscoveredRelationsByDomainModesWithDomainAnchorAndLog(sourceFragment
 	out := make([]agents.DiscoveredRelation, 0, len(in))
 	dropped := make([]string, 0, len(in))
 	for _, rel := range in {
-		normalized := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
+		normalized := normalizeRelationToken(rel.RelationType)
 		if normalized == "" {
 			continue
 		}
@@ -1530,11 +1530,14 @@ func normalizeAndSetFragmentObjectQualifier(frag *models.HorizonFragment, fallba
 }
 
 func parseRelationTargetType(raw string) FragmentType {
-	raw = strings.TrimSpace(strings.ToUpper(raw))
+	raw = strings.TrimSpace(raw)
 	if raw == "" {
 		return ""
 	}
-	return FragmentType(raw)
+	if class, _, ok := models.NormalizeFragmentClassName(raw, ""); ok && class != "" {
+		return FragmentType(class)
+	}
+	return normalizeFragmentTypeHardcoded(raw)
 }
 
 func (e *ScoutEngine) sanitizeRelationsByDirectionPolicy(
@@ -1563,7 +1566,7 @@ func (e *ScoutEngine) sanitizeRelationsByDirectionPolicy(
 	dropped := 0
 	autoReversed := 0
 	for _, rel := range rels {
-		normalizedType := strings.TrimSpace(taxonomy.NormalizeRelationType(rel.RelationType))
+		normalizedType := normalizeRelationToken(rel.RelationType)
 		if normalizedType == "" {
 			normalizedType = strings.TrimSpace(rel.RelationType)
 		}
@@ -5176,7 +5179,7 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 				if allowlist != nil {
 					filtered := make([]agents.DiscoveredRelation, 0, len(newRelations))
 					for _, r := range newRelations {
-						normalized := strings.TrimSpace(taxonomy.NormalizeRelationType(r.RelationType))
+						normalized := normalizeRelationToken(r.RelationType)
 						if normalized == "" {
 							continue
 						}
@@ -6479,7 +6482,10 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 			if targetCP == "" {
 				continue
 			}
-			rt := strings.TrimSpace(taxonomy.NormalizeRelationType(r.RelationType))
+			rt := normalizeRelationToken(r.RelationType)
+			if rt == "" {
+				continue
+			}
 			title := fmt.Sprintf("%s %s %s", strings.TrimSpace(job.TargetCanonicalPath), rt, targetCP)
 			f := &coreModels.OntologyFact{
 				BaseOntologyFields: coreModels.BaseOntologyFields{

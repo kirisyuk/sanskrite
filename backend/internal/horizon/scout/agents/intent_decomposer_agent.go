@@ -29,7 +29,7 @@ type intentDecompositionResult struct {
 
 // DecomposeOptions contains additional options for intent decomposition.
 type DecomposeOptions struct {
-	// IsAbstractAnchor indicates the target is a MARKET/PROGRAM/abstract entity
+	// IsAbstractAnchor indicates the target is a MARKET/PROJECT/abstract entity
 	// that should be decomposed into concrete entities with higher confidence.
 	IsAbstractAnchor bool
 	// DecompositionHints provide structured guidance for decomposition.
@@ -81,7 +81,7 @@ func (a *IntentDecomposerAgent) DecomposeWithGrounding(
 	// Auto-detect abstract anchor from path prefix
 	isAbstract := opts.IsAbstractAnchor ||
 		strings.HasPrefix(targetCanonicalPath, "/market/") ||
-		strings.HasPrefix(targetCanonicalPath, "/program/")
+		strings.HasPrefix(targetCanonicalPath, "/project/")
 
 	prompt := a.buildPromptWithOptions(targetCanonicalPath, focus, spherePaths, keywords, opts)
 	verifier := ai.NewSimpleJSONVerifier()
@@ -129,7 +129,7 @@ func (a *IntentDecomposerAgent) DecomposeWithGrounding(
 			continue
 		}
 		if isAbstract {
-			// For MARKET/PROGRAM decomposition, use higher confidence (0.60..0.75)
+			// For MARKET/PROJECT decomposition, use higher confidence (0.60..0.75)
 			// to ensure discovered relations trigger recursive scouting (threshold >= 0.55).
 			if r.Confidence <= 0 || r.Confidence > 0.85 {
 				r.Confidence = 0.65
@@ -175,13 +175,13 @@ func (a *IntentDecomposerAgent) buildPromptWithOptions(targetCanonicalPath strin
 		ctxBlock += "\n"
 	}
 
-	// Add MARKET/PROGRAM decomposition guidance if applicable
+	// Add MARKET/PROJECT decomposition guidance if applicable
 	decompositionBlock := ""
 	isAbstract := opts.IsAbstractAnchor ||
 		strings.HasPrefix(targetCanonicalPath, "/market/") ||
-		strings.HasPrefix(targetCanonicalPath, "/program/")
+		strings.HasPrefix(targetCanonicalPath, "/project/")
 	if isAbstract {
-		decompositionBlock = "MARKET/PROGRAM DECOMPOSITION MODE:\n"
+		decompositionBlock = "MARKET/PROJECT DECOMPOSITION MODE:\n"
 		decompositionBlock += "This is an ABSTRACT anchor. Your PRIMARY goal is to discover CONCRETE entities.\n"
 		decompositionBlock += "Output relations to:\n"
 		decompositionBlock += "- Major players (organizations, banks, companies, service providers)\n"
@@ -214,9 +214,9 @@ func (a *IntentDecomposerAgent) buildPromptWithOptions(targetCanonicalPath strin
 		}
 	} else if strings.HasPrefix(targetCanonicalPath, "/product/") {
 		decompositionBlock = "PRODUCT DECOMPOSITION MODE:\n"
-		decompositionBlock += "TARGET is a product. Output relations to ORGANIZATIONS and FACILITIES that produce this product, and org-recipients that receive it.\n"
-		decompositionBlock += "Focus on: producing orgs, their facilities, org-recipients. Use targetType ORGANIZATION or FACILITY. targetCanonicalPath: /org/... or /fac/...\n"
-		decompositionBlock += "Use PRODUCES (producer→product) or SUPPLIES_TO (supplier→customer flow). Output concrete /org/ and /fac/ paths only. Do NOT use DEPENDS_ON.\n\n"
+		decompositionBlock += "TARGET is a product. Output relations to ORG and SITE entities that produce this product, and org-recipients that receive it.\n"
+		decompositionBlock += "Focus on: producing orgs, their sites, org-recipients. Use targetType ORG or SITE. targetCanonicalPath: /org/... or /fac/...\n"
+		decompositionBlock += "Use produces (producer->product) or supplies (supplier->customer flow). Output concrete /org/ and /fac/ paths only. Do NOT use depends_on.\n\n"
 	}
 
 	isSupplyChainMode := taxonomy.HasDomainMode(opts.DomainModes, taxonomy.DomainModeSupplyChain) ||
@@ -241,7 +241,7 @@ Example: { "relationType": "DEPENDS_ON", "qualifiers": { "facet": "communication
 	if isSupplyChainMode {
 		relationEnum = taxonomy.SupplyChainEdgeTypesForPrompt()
 		validationSuffix = validationSuffixSupplyChain
-		dependsOnBlock = `SUPPLY CHAIN: Do NOT use DEPENDS_ON. Use PRODUCES, SUPPLIES_TO, transforms_into, assembles_into, USED_IN, EXTRACTS_FROM, PARTICIPATES_IN for supply chain links. Use TRADED_IN only for explicit product↔market trading context, not for operational flow.
+		dependsOnBlock = `SUPPLY CHAIN: Do NOT use depends_on. Use produces, supplies, transforms_into, assembles_into, used_in, extracts_from, participates_in for supply chain links. Use listed_on only for explicit market-listing context, not for operational flow.
 `
 	}
 
@@ -277,7 +277,7 @@ Return ONLY JSON with this schema:
       "targetName": "string",
       "targetLegalName": "string",
       "targetShortName": "string",
-      "targetType": "ORGANIZATION" | "FACILITY" | "GEO_REGION" | "PRODUCT" | "PROGRAM" | "MARKET" | "EVENT" | "PERSON" | "MEDIA_CHANNEL" | "COMMUNITY",
+      "targetType": "ORG" | "SITE" | "GEO" | "PRODUCT" | "PROJECT" | "MARKET" | "EVIDENCE" | "PERSON" | "MEDIA_CHANNEL" | "COMMUNITY" | "GOV" | "ZONE",
       "relationType": %s,
       "reason": "string",
       "confidence": 0.0,
@@ -309,7 +309,7 @@ RULES:
       - "Pashtun tribes" -> /community/af/tribe/pashtun
       - "Senior Zhuz (Kazakhstan)" -> /community/kz/tribe/senior-zhuz
     - CRITICAL: COMMUNITY is for INFORMAL groups WITHOUT legal structure.
-      - If the entity has legal registration → use ORGANIZATION (/org/)
+      - If the entity has legal registration → use ORG (/org/)
       - If the entity is a media endpoint (channel/group) → use MEDIA_CHANNEL (/media/)
     - COMMUNITY HIERARCHY: Use HAS_SUBGROUP to link parent community → narrower sub-community
       - dynasties: broader family → branch (house-of-saud → sudairi-seven)
@@ -344,10 +344,10 @@ RULES:
     - MARKET HIERARCHY: Use HAS_MARKET_SEGMENT to link parent market → narrower segment (child path = parent path + one segment)
       - Example: /market/sa/marketing HAS_MARKET_SEGMENT /market/sa/marketing/event-marketing
       - Direction: broader → narrower
-  - PROGRAM: /program/{jurisdictionSlug}/{programSlug}
+  - PROJECT: /project/{jurisdictionSlug}/{projectSlug}
     - jurisdictionSlug: %s
-    - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
-    - If TARGET is a regional program, new related entities should reflect that jurisdiction context
+    - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /project/gcc/{slug} (NOT /project/global/gcc/{slug})
+    - If TARGET is a regional project, new related entities should reflect that jurisdiction context
   - GOV: /gov/{iso2}/{slug}
     - GOV HIERARCHY: Use ADMINISTERS to link superior gov body → subordinate body
       - Example: /gov/sa/ministry-of-health ADMINISTERS /gov/sa/sfda
@@ -356,7 +356,7 @@ RULES:
 - VALIDATION POLICY RULES (MUST comply or output will be REJECTED):
   - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
   - canonicalPath MUST match expected prefix for targetType
-  - GEO_REGION paths MUST match /loc/{country}[/{level1}[/{level2}]] with valid country code
+  - GEO paths MUST match /loc/{country}[/{level1}[/{level2}]] with valid country code
 %s
 %s
 - NEVER use "/discovered/*".
@@ -367,11 +367,11 @@ RULES:
 }
 
 const (
-	validationSuffixGeneral = `  - ORGANIZATION ↔ MARKET: PARTICIPATES_IN (ORG -> MARKET). GOV entities (/gov/...) may also use REGULATES (domestic oversight), CONTROLS_ACCESS (sanctions/restrictions), or INFLUENCES.
-  - For PRODUCT -> PRODUCT steps, use transforms_into for processing/refining, assembles_into for direct assembly, and USED_IN for strong operational input semantics (not PRODUCES).
+	validationSuffixGeneral = `  - ORG ↔ MARKET: participates_in (org -> market). GOV entities (/gov/...) may also use regulates (domestic oversight), controls_access (sanctions/restrictions), or influences.
+  - For PRODUCT -> PRODUCT steps, use transforms_into for processing/refining, assembles_into for direct assembly, and used_in for strong operational input semantics (not produces).
 `
 
-	validationSuffixSupplyChain = `  - For PRODUCT -> PRODUCT steps, use transforms_into for processing/refining, assembles_into for direct assembly, and USED_IN for strong operational input semantics (not PRODUCES).
-  - In supply_chain mode, MARKET source may emit only PARTICIPATES_IN or HAS_MARKET_SEGMENT. PRODUCT -> MARKET uses TRADED_IN only when explicit trading/pricing context exists.
+	validationSuffixSupplyChain = `  - For PRODUCT -> PRODUCT steps, use transforms_into for processing/refining, assembles_into for direct assembly, and used_in for strong operational input semantics (not produces).
+  - In supply_chain mode, MARKET source may emit only participates_in or has_market_segment. PRODUCT -> MARKET uses listed_on only when explicit market-listing context exists.
 `
 )
