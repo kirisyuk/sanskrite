@@ -24,6 +24,7 @@ func main() {
 		tenantID    = flag.String("tenant", "", "Tenant ID (optional, if not set processes all tenants)")
 		credentials = flag.String("credentials", "", "Path to GCP credentials JSON file (optional)")
 		dryRun      = flag.Bool("dry-run", false, "Dry run mode - only show what would be updated")
+		logFilePath = flag.String("log-file", "", "Optional path to a log file (stdout is always used)")
 	)
 	flag.Parse()
 
@@ -47,12 +48,16 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
 	defer cancel()
 
-	// Ensure output goes to stdout and file
-	logFile, err := os.OpenFile(`c:\Users\Mi\cursor-projects\sanskrite\execution_log.txt`, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Failed to create log file: %v\n", err)
+	var mw io.Writer = os.Stdout
+	if *logFilePath != "" {
+		logFile, err := os.OpenFile(*logFilePath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to open log file %q: %v\n", *logFilePath, err)
+		} else {
+			defer logFile.Close()
+			mw = io.MultiWriter(os.Stdout, logFile)
+		}
 	}
-	mw := io.MultiWriter(os.Stdout, logFile)
 	log.SetOutput(mw)
 	log.SetFlags(log.LstdFlags | log.Lshortfile)
 

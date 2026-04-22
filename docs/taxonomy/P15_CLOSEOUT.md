@@ -87,11 +87,11 @@ $ python3 -c "import json; d=json.load(open('web/firestore.indexes.json')); prin
 indexes: 219
 ```
 
-**Strict global duplicate check** (collectionGroup + ordered field tuple) still reports one **pre-existing** duplicate pair on `ontology_claims` (`tenantId` ASC, `createdAt` DESC) — present already at 218 total indexes (217 unique). P15 did not remove or merge that pair; do not treat a failing assert on the whole file as a P15 regression until that duplicate is cleaned up separately.
+**Strict global duplicate check** (collectionGroup + ordered field tuple) — clean after pre-bootstrap cleanup on 2026-04-19: the pre-existing duplicate pair on `ontology_claims` (`tenantId` ASC, `createdAt` DESC) was collapsed to a single entry. Now 0 duplicate index defs across all collection groups.
 
 ## Known gaps / follow-ups
 
-- **`ontology_claims` duplicate composite** — two identical `(tenantId, createdAt DESC)` definitions in `web/firestore.indexes.json` predate P15; global uniqueness assert over all `indexes` fails until one entry is dropped.
+- ~~**`ontology_claims` duplicate composite**~~ — **RESOLVED 2026-04-19** (pre-bootstrap cleanup): one of the two identical `(tenantId, createdAt DESC)` definitions removed from `web/firestore.indexes.json` before first `firebase deploy --only firestore:indexes` on the Prevalent Horizon fork.
 - **`horizon_path_cache` purge/GC job** — not in this phase; if added later, a composite such as `(tenant ASC, expiresAt ASC)` may be needed — track separately.
 - **Index deploy** to test/prod Firestore projects is operational; **not** part of this commit set. Owner: (TBD).
 - **Data re-ingestion** via scout pipeline remains a separate deferred todo.
