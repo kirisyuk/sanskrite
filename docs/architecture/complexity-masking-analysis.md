@@ -211,7 +211,7 @@ terraform apply
 
 SELECT 
   id,
-  sanskrite.analyze_document(storagePath, 'extract entities') as entities
+  horizon.analyze_document(storagePath, 'extract entities') as entities
 FROM documents_metadata
 ```
 

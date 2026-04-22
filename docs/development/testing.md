@@ -15,7 +15,7 @@ export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.config/gcloud/application_default_
 - Or place a service-account JSON locally and point to it:
 
 ```bash
-export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.secrets/sanskrite-sa.json"
+export GOOGLE_APPLICATION_CREDENTIALS="$HOME/.secrets/horizon-sa.json"
 ```
 
 No tests currently construct real Firestore/PubSub clients, so credentials are not required; the env setup above just ensures any accidental client construction stays local.

@@ -78,7 +78,7 @@
 
 ## 🚀 Развертывание
 
-См. файл `DEPLOYMENT_COMMANDS.md` для пошаговых инструкций.
+Актуальный SoT — `scripts/deploy` (и `docs/deployment/`). Ниже оставлен исторический снимок команд только для контекста этой сводки.
 
 ### Быстрое развертывание:
 
@@ -145,7 +145,6 @@ orchestrator: synthesis will use 1 profiles (out of 1 sources)
 ## 📁 Новые Файлы
 
 - **FIXES_SUMMARY.md** - Детальное описание исправлений
-- **DEPLOYMENT_COMMANDS.md** - Команды для развертывания
 - **CHANGES_SUMMARY.md** (этот файл) - Итоговая сводка
 
 ## 🔍 Debug Features

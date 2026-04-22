@@ -10,9 +10,6 @@
 |------|------|
 | `ANALYSIS_DUPLICATE_WORK.md` | Разбор дублирующейся работы |
 | `CHANGES_SUMMARY.md` | Сводка исправлений Discovery flow |
-| `DEPLOYMENT.md` | Пошаговый деплой (может устаревать относительно `scripts/deploy`) |
-| `DEPLOYMENT_COMMANDS.md` | Команды деплоя |
-| `DEPLOYMENT_STATUS.md` | Статус/заметки по деплою |
 | `FIXES_SUMMARY.md` | Сводка фиксов |
 | `HORIZON_INFRA_CHECK.md` | Проверки инфраструктуры Horizon |
 | `HORIZON_PIPELINE_ANALYSIS.md` | Разбор пайплайна Scout/engine |
