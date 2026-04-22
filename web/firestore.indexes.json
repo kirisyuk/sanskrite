@@ -225,16 +225,6 @@
       "queryScope": "COLLECTION",
       "fields": [
         {
-          "fieldPath": "code",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "vouchers",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
           "fieldPath": "tier",
           "order": "ASCENDING"
         },
@@ -2484,16 +2474,6 @@
         },
         {
           "fieldPath": "edgeId",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
-      "collectionGroup": "horizon_lens_artifacts",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "fragmentId",
           "order": "ASCENDING"
         }
       ]
