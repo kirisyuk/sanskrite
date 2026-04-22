@@ -179,6 +179,7 @@ var ValidCanonicalPathNamespace = map[string]bool{
 	"person":   true,
 	"product":  true,
 	"program":  true,
+	"project":  true,
 	"market":   true,
 	"industry": true,
 	// Executable “knowledge contract” nodes (domain/inquiry focus).
@@ -342,6 +343,11 @@ func ValidateCanonicalPath(path string) error {
 		// Strict: /program/{jurisdiction}/{slug}
 		if len(parts) != 3 {
 			return fmt.Errorf("program canonical path must have exactly 3 segments: /program/{jurisdiction}/{slug}: %s", path)
+		}
+	case "project":
+		// Strict: /project/{jurisdiction}/{slug}
+		if len(parts) != 3 {
+			return fmt.Errorf("project canonical path must have exactly 3 segments: /project/{jurisdiction}/{slug}: %s", path)
 		}
 	case "market":
 		// Strict: /market/{geo}/{domain}[/{vertical}...]
@@ -1214,6 +1220,26 @@ func ProgramCanonicalPath(jurisdiction string, programLabel string) string {
 		return ""
 	}
 	return JoinPath("program", jSlug, pSlug)
+}
+
+// ProjectCanonicalPath returns a Horizon-canonical project path:
+// /project/{jurisdictionSlug}/{projectSlug}
+//
+// jurisdictionSlug accepts ISO2 or regional/global tokens ("int", "global", "eu", ...).
+// If jurisdiction is unknown/invalid, "global" is used as a deterministic placeholder.
+func ProjectCanonicalPath(jurisdiction string, projectLabel string) string {
+	jSlug := strings.ToLower(strings.TrimSpace(jurisdiction))
+	if jSlug == "" {
+		jSlug = "global"
+	}
+	if jSlug != "global" && jSlug != "int" && !reCountryAlpha2.MatchString(jSlug) && !IsRegionalGeoToken(jSlug) {
+		jSlug = "global"
+	}
+	pSlug := Slugify(projectLabel)
+	if pSlug == "" {
+		return ""
+	}
+	return JoinPath("project", jSlug, pSlug)
 }
 
 // MarketCanonicalPath returns a Horizon-canonical L1 (domain-level) market path.

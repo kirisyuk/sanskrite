@@ -2,16 +2,16 @@ package scout
 
 import (
 	"context"
-	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"fmt"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/canonical"
+	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/naming"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/policy"
 	"github.com/igorkirisyuk/sanskrite/internal/horizon/repo"
+	coreontology "github.com/igorkirisyuk/sanskrite/internal/ontology"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
-	henrich "github.com/igorkirisyuk/sanskrite/internal/horizon/enrich"
 	"log"
 	"strconv"
 	"strings"
@@ -811,6 +811,8 @@ func repairInvalidCanonicalPath(fragment *models.HorizonFragment) (string, bool)
 		candidate = taxonomy.JoinPath("mechanism", "political", slug)
 	case fragment.Class == ah.FragmentClassCommunity:
 		candidate = taxonomy.JoinPath("community", "global", "interest", slug)
+	case fragment.Class == ah.FragmentClassProject:
+		candidate = taxonomy.ProjectCanonicalPath("", slug)
 	case fragment.Class == ah.FragmentClassEvidence:
 		candidate = taxonomy.JoinPath("event", slug)
 	default:

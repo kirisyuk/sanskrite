@@ -6,11 +6,8 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
-// canonicalPrefixToClass enumerates every legacy + AH canonical-path
-// prefix and the (Class, Subtype) it implies. Both legacy prefixes
-// (/fac/, /loc/, /program/, /event/, /zone/, /supply-link/, /track/,
-// /media/) and the new AH prefixes are accepted to keep the migration
-// safe across read paths during the transition.
+// canonicalPrefixToClass enumerates the canonical-path prefixes the runtime
+// recognizes when reconciling a path back to an AH (Class, Subtype) tuple.
 var canonicalPrefixToClass = []struct {
 	prefix  string
 	class   ah.FragmentClass
@@ -42,16 +39,8 @@ var canonicalPrefixToClass = []struct {
 	{"/region/", ah.FragmentClassGeo, ""},
 	{"/zone/", ah.FragmentClassGeo, "affected_zone"},
 	{"/deposit/", ah.FragmentClassSite, "deposit"},
-	{"/event/", ah.FragmentClassEvidence, "event"},
 	{"/track/", ah.FragmentClassMobileAsset, ""},
 	{"/supply-link/", ah.FragmentClassSite, "supply_link"},
-
-	// Strategic overlays whose graph identity is folded into attributes
-	// (DOMAIN/SPHERE) — kept here so paths recovered from legacy data
-	// don't trip the "unknown prefix" guard. They map to evidence so the
-	// data survives until migrate-cli rewrites the canonical_path.
-	{"/domain/", ah.FragmentClassEvidence, "domain_legacy"},
-	{"/sphere/", ah.FragmentClassEvidence, "sphere_legacy"},
 }
 
 // ExpectedClassFromCanonicalPath returns the AH FragmentClass and

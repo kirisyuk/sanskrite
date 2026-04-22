@@ -4,8 +4,8 @@ import (
 	"context"
 	"testing"
 
+	horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
-horizonmodels "github.com/igorkirisyuk/sanskrite/internal/horizon/models"
 )
 
 type testValidationRulesRepo struct{}
@@ -122,8 +122,8 @@ func TestValidationPolicy_HasDomainStrategicDirectionRules(t *testing.T) {
 }
 
 func TestValidationPolicy_ExpectedPathPrefix_ExtendedTypes(t *testing.T) {
-	if got := ExpectedCanonicalPathPrefix(classDomain, "domain_legacy"); got != "/domain/" {
-		t.Fatalf("expected DOMAIN prefix /domain/, got %q", got)
+	if got := ExpectedCanonicalPathPrefix(classEvidence, ""); got != "/evidence/" {
+		t.Fatalf("expected EVIDENCE prefix /evidence/, got %q", got)
 	}
 	if got := ExpectedCanonicalPathPrefix(classDecisionPoint, ""); got != "/decision/" {
 		t.Fatalf("expected DECISION_POINT prefix /decision/, got %q", got)
@@ -230,7 +230,7 @@ func TestValidationPolicy_InfluencesPersonToSphereAllowed(t *testing.T) {
 		Context: map[string]interface{}{
 			"validationKind": "edge",
 			"sourceType":     string(classPerson),
-			"targetType":     string(classSphere),
+			"targetType":     string(classEvidence),
 			"relationType":   string(relInfluences),
 		},
 	})
@@ -249,7 +249,7 @@ func TestValidationPolicy_InfluencesOrgToSphereGetsPenaltyPotential(t *testing.T
 		Context: map[string]interface{}{
 			"validationKind": "edge",
 			"sourceType":     string(classOrganization),
-			"targetType":     string(classSphere),
+			"targetType":     string(classEvidence),
 			"relationType":   string(relInfluences),
 		},
 	})
@@ -512,7 +512,7 @@ func TestValidationPolicy_GovPathOrgWhitelist(t *testing.T) {
 	decision, err := p.Decide(context.Background(), PolicyInput{
 		Kind: "fragment",
 		Fragment: &horizonmodels.HorizonFragment{
-			Class: classOrganization,
+			Class:         classOrganization,
 			CanonicalPath: "/gov/sa/ministry-of-finance",
 		},
 	})
@@ -656,7 +656,7 @@ func TestValidationPolicy_FragmentLegacyPathRejectedByContract(t *testing.T) {
 			decision, err := p.Decide(context.Background(), PolicyInput{
 				Kind: "fragment",
 				Fragment: &horizonmodels.HorizonFragment{
-					Class: tt.fragmentType,
+					Class:         tt.fragmentType,
 					CanonicalPath: tt.path,
 				},
 			})

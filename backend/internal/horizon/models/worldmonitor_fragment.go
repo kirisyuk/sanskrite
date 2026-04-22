@@ -169,7 +169,7 @@ func IsHorizonMonitorGeoUpdatableFragment(f *HorizonFragment) bool {
 	}
 	switch f.Class {
 	case ah.FragmentClassEvidence:
-		return f.Subtype == "" || f.Subtype == "event"
+		return f.Subtype == "" || IsKnownSubtype(f.Class, f.Subtype)
 	case ah.FragmentClassMobileAsset:
 		return true
 	}

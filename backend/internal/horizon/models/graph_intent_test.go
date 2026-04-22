@@ -17,7 +17,7 @@ func TestGraphIntentPlanResponseNormalizeAndValidate_MechanismTaxMapping(t *test
 				{
 					TempID:            "n1",
 					Label:             "VAT Rate Increase",
-					Type:              "MECHANISM",
+					Type:              "mechanism",
 					CanonicalPathHint: "/mechanism/tax/vat-increase",
 				},
 			},
@@ -65,7 +65,7 @@ func TestGraphIntentPlanResponseNormalizeAndValidate_RejectsPolicyNamespace(t *t
 				{
 					TempID:            "n1",
 					Label:             "Tax reform program",
-					Type:              "PROGRAM",
+					Type:              "project",
 					CanonicalPathHint: "/policy/kz/tax-reform-2025",
 				},
 			},
@@ -91,7 +91,7 @@ func TestGraphIntentPlanResponseNormalizeAndValidate_RejectsOrgGovPath(t *testin
 				{
 					TempID:            "n1",
 					Label:             "Ministry of Finance",
-					Type:              "GOVERNMENT_AGENCY",
+					Type:              "org",
 					CanonicalPathHint: "/org/gov/minfin-ru",
 				},
 			},
@@ -107,10 +107,10 @@ func TestGraphIntentPlanResponseNormalizeAndValidate_RejectsOrgGovPath(t *testin
 }
 
 func TestGraphIntentPlanResponseMapToActions(t *testing.T) {
-	renameTo := "MERGED_INTO"
+	renameTo := "merged_into"
 	forward := "forward"
 	newLabel := "Renamed Entity"
-	newType := "ORGANIZATION"
+	newType := "org"
 	plan := GraphIntentPlanResponse{
 		Version:                GraphIntentVersionV1,
 		NormalizedEnglishQuery: "Build and adjust the graph",
@@ -123,11 +123,11 @@ func TestGraphIntentPlanResponseMapToActions(t *testing.T) {
 					GroupingKind: GraphIntentGroupingSocietalStructure,
 					Title:        "Societal map",
 					Entities: []GraphIntentNodeSpec{
-						{TempID: "n1", Label: "Group A", Type: "COMMUNITY", CanonicalPathHint: "/community/global/interest/group-a"},
-						{TempID: "n2", Label: "Person B", Type: "PERSON", CanonicalPathHint: "/person/person-b"},
+						{TempID: "n1", Label: "Group A", Type: "community", CanonicalPathHint: "/community/global/interest/group-a"},
+						{TempID: "n2", Label: "Person B", Type: "person", CanonicalPathHint: "/person/person-b"},
 					},
 					Relations: []GraphIntentEdgeSpec{
-						{TempID: "e1", FromTempID: "n2", ToTempID: "n1", RelationType: "MEMBER_OF", Direction: forward},
+						{TempID: "e1", FromTempID: "n2", ToTempID: "n1", RelationType: "member_of", Direction: forward},
 					},
 				},
 			},
@@ -152,10 +152,10 @@ func TestGraphIntentPlanResponseMapToActions(t *testing.T) {
 				{
 					RewriteID: "rw1",
 					Match: GraphIntentRelationMatch{
-						RelationType: "INFLUENCES",
+						RelationType: "influences",
 					},
 					ReplaceWith: GraphIntentRelationReplacement{
-						RelationType: "SUPPLIES",
+						RelationType: "supplies",
 						Direction:    forward,
 					},
 				},
@@ -168,7 +168,7 @@ func TestGraphIntentPlanResponseMapToActions(t *testing.T) {
 					FromNodeID: "A",
 					ToNodeID:   "B",
 					Constraints: GraphIntentChainConstraints{
-						AllowedRelationTypes: []string{"SUPPLIES"},
+						AllowedRelationTypes: []string{"supplies"},
 						MaxHops:              4,
 					},
 				},
@@ -252,11 +252,11 @@ func TestGraphIntentSchemasDraft07_ContainSocietalAndRelationEnums(t *testing.T)
 	if !ok {
 		t.Fatalf("edgeSpec relationType schema is missing")
 	}
-	if !stringInAnySlice("REGULATES", relationType["enum"]) {
-		t.Fatalf("REGULATES is missing from relationType enum")
+	if !stringInAnySlice("regulates", relationType["enum"]) {
+		t.Fatalf("regulates is missing from relationType enum")
 	}
-	if !stringInAnySlice(GraphIntentRelationTypeAlignsWith, relationType["enum"]) {
-		t.Fatalf("ALIGNS_WITH is missing from relationType enum")
+	if stringInAnySlice(GraphIntentRelationTypeAlignsWith, relationType["enum"]) {
+		t.Fatalf("ALIGNS_WITH must not be present in relationType enum")
 	}
 
 	nodeSpec, ok := defs["nodeSpec"].(map[string]interface{})

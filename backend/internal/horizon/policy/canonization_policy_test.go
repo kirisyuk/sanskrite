@@ -23,27 +23,22 @@ func TestCanonizationPolicy_NormalizeFragmentType_MatrixCoverage(t *testing.T) {
 		in   string
 		want ah.FragmentClass
 	}{
-		{in: "ORGANIZATION", want: classOrganization},
 		{in: "ORG", want: classOrganization},
 		{in: "GOV", want: classOrganization},
 		{in: "GOVERNMENT", want: classOrganization},
-		{in: "FACILITY", want: classFacility},
 		{in: "FAC", want: classFacility},
 		{in: "GEO_REGION", want: classGeoRegion},
 		{in: "region", want: classGeoRegion},
 		{in: "LOCATION", want: classGeoRegion},
 		{in: "PRODUCT", want: classProduct},
-		{in: "PROGRAM", want: classProgram},
 		{in: "MARKET", want: classMarket},
-		{in: "EVENT", want: classEvent},
+		{in: "EVIDENCE", want: classEvidence},
 		{in: "PERSON", want: classPerson},
 		{in: "INDIVIDUAL", want: classPerson},
 		{in: "MEDIA_CHANNEL", want: classMediaChannel},
 		{in: "MEDIA", want: classMediaChannel},
 		{in: "deposit", want: classDeposit},
 		{in: "MINE", want: classDeposit},
-		{in: "DOMAIN", want: classDomain},
-		{in: "SPHERE", want: classSphere},
 		{in: "DECISION_POINT", want: classDecisionPoint},
 		{in: "DECISION", want: classDecisionPoint},
 		{in: "MECHANISM", want: classMechanism},
@@ -51,6 +46,7 @@ func TestCanonizationPolicy_NormalizeFragmentType_MatrixCoverage(t *testing.T) {
 		{in: "SUPPLYLINK", want: classSupplyLink},
 		{in: "COMMUNITY", want: classCommunity},
 		{in: "NETWORK", want: classCommunity},
+		{in: "PROJECT", want: classProject},
 	}
 
 	for _, tt := range tests {
@@ -80,6 +76,16 @@ func TestCanonizationPolicy_NormalizeFragmentType_UnknownFallsBackToOrganization
 	}
 	if got != classOrganization {
 		t.Fatalf("unknown type should fall back to ORGANIZATION, got %q", got)
+	}
+}
+
+func TestCanonizationPolicy_NormalizeFragmentType_RejectsRemovedLegacyAliases(t *testing.T) {
+	p := NewCanonizationPolicy(canonRulesRepoStub{})
+
+	for _, in := range []string{"PROGRAM", "EVENT", "DOMAIN", "SPHERE", "ORGANIZATION", "FACILITY"} {
+		if got := p.normalizeFragmentType(in); got != classOrganization {
+			t.Fatalf("normalizeFragmentType(%q) = %q, want fallback %q", in, got, classOrganization)
+		}
 	}
 }
 

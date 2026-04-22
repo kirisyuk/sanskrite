@@ -164,6 +164,8 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 		return []string{"/media/" + slug}
 	case t == ah.FragmentClassOrg:
 		return []string{"/org/na/" + slug}
+	case t == ah.FragmentClassProject:
+		return []string{"/project/global/" + slug}
 	case t == ah.FragmentClassSite && subtype == "deposit":
 		return []string{"/deposit/other/" + slug}
 	case t == ah.FragmentClassSite:

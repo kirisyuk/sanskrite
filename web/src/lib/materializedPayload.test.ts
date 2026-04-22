@@ -11,8 +11,8 @@ test('pathPayloadEdgeRelation prefers relation (AH snake_case)', () => {
 
 test('pathPayloadEdgeRelation maps legacy supply_link and logistics', () => {
   assert.equal(pathPayloadEdgeRelation({ type: 'supply_link', from: 0, to: 1 }), RELATION.Supplies);
-  assert.equal(pathPayloadEdgeRelation({ type: 'LOGISTICS', role: 'x', from: 0, to: 1 }), RELATION.Wields);
-  assert.equal(pathPayloadEdgeRelation({ role: 'logistics_leg', from: 0, to: 1 }), RELATION.Wields);
+  assert.equal(pathPayloadEdgeRelation({ type: 'LOGISTICS', role: 'x', from: 0, to: 1 }), RELATION.LegConnects);
+  assert.equal(pathPayloadEdgeRelation({ role: 'logistics_leg', from: 0, to: 1 }), RELATION.LegConnects);
 });
 
 test('pathPayloadNodeFragmentClass reads class or legacy type', () => {

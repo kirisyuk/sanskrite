@@ -156,6 +156,11 @@ func TestValidateCanonicalPath(t *testing.T) {
 			wantErr: false,
 		},
 		{
+			name:    "valid project path",
+			path:    "/project/kazakhstan/alem-ai",
+			wantErr: false,
+		},
+		{
 			name:    "valid market path",
 			path:    "/market/global/energy/secondary-liquidity",
 			wantErr: false,
@@ -355,6 +360,25 @@ func TestProgramCanonicalPath_JurisdictionNormalization(t *testing.T) {
 		got := ProgramCanonicalPath(c.jurisdiction, "Alem AI")
 		if len(got) == 0 || got[:len(c.wantPrefix)] != c.wantPrefix {
 			t.Errorf("ProgramCanonicalPath(%q) = %q, want prefix %q", c.jurisdiction, got, c.wantPrefix)
+		}
+	}
+}
+
+func TestProjectCanonicalPath_JurisdictionNormalization(t *testing.T) {
+	cases := []struct {
+		jurisdiction string
+		wantPrefix   string
+	}{
+		{jurisdiction: "us", wantPrefix: "/project/us/"},
+		{jurisdiction: "int", wantPrefix: "/project/int/"},
+		{jurisdiction: "global", wantPrefix: "/project/global/"},
+		{jurisdiction: "eu", wantPrefix: "/project/eu/"},
+		{jurisdiction: "kazakhstan", wantPrefix: "/project/global/"},
+	}
+	for _, c := range cases {
+		got := ProjectCanonicalPath(c.jurisdiction, "Alem AI")
+		if len(got) == 0 || got[:len(c.wantPrefix)] != c.wantPrefix {
+			t.Errorf("ProjectCanonicalPath(%q) = %q, want prefix %q", c.jurisdiction, got, c.wantPrefix)
 		}
 	}
 }

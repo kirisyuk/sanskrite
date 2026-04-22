@@ -17,9 +17,6 @@ func TestNormalizeFragmentClassToken_ExtendedTypesAndAliases(t *testing.T) {
 		{in: "FAC", wantClass: ah.FragmentClassSite},
 		{in: "LOC", wantClass: ah.FragmentClassGeo},
 		{in: "MEDIA", wantClass: ah.FragmentClassOrg, wantSubtype: "media_channel"},
-		// Legacy DOMAIN/SPHERE fold into evidence per docs/archive/taxonomy-migration-2026/migration_map.yaml.
-		{in: "DOMAIN", wantClass: ah.FragmentClassEvidence, wantSubtype: "domain_legacy"},
-		{in: "SPHERE", wantClass: ah.FragmentClassEvidence, wantSubtype: "sphere_legacy"},
 		{in: "DECISION", wantClass: ah.FragmentClassDecision},
 		{in: "MECHANISM", wantClass: ah.FragmentClassMechanism},
 		{in: "SUPPLYLINK", wantClass: ah.FragmentClassSite, wantSubtype: "supply_link"},
@@ -52,5 +49,12 @@ func TestNormalizeFragmentClassToken_PathInferenceAndUnknownFallback(t *testing.
 	}
 	if gotUnknown != ah.FragmentClassOrg {
 		t.Fatalf("unknown type fallback should be FragmentClassOrg, got %q", gotUnknown)
+	}
+
+	if _, _, ok := NormalizeFragmentClassToken("DOMAIN"); ok {
+		t.Fatalf("NormalizeFragmentClassToken(DOMAIN) ok=true, want false")
+	}
+	if _, _, ok := NormalizeFragmentClassToken("EVENT"); ok {
+		t.Fatalf("NormalizeFragmentClassToken(EVENT) ok=true, want false")
 	}
 }

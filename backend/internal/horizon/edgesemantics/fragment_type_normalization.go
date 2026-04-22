@@ -7,10 +7,8 @@ import (
 	"github.com/igorkirisyuk/sanskrite/internal/taxonomy/ah"
 )
 
-// NormalizeFragmentClassToken maps assorted type labels (modern AH
-// classes, legacy UPPER_SNAKE FragmentType values, and human shorthands
-// like "FAC" / "PLANT") onto an AH FragmentClass, plus an optional
-// subtype hint when the legacy alias collapses into (class, subtype).
+// NormalizeFragmentClassToken maps canonical AH class labels plus a small set
+// of human-readable shorthands onto an AH FragmentClass.
 //
 // The function NEVER returns an empty class: when nothing matches it
 // falls back to ah.FragmentClassOrg with ok=false so callers can warn.
@@ -48,12 +46,9 @@ type fragmentClassAlias struct {
 	subtype string
 }
 
-// fragmentClassAliases is the closed set of human-shorthand aliases.
-// Every legacy UPPER_SNAKE FragmentType is normalised via the
-// migration-map-derived models.NormalizeFragmentClassName fallback
-// (see relation_alias.go); this map only adds the colloquial aliases
-// (FAC / PLANT / NETWORK / etc.) that aren't part of the legacy enum
-// but appear in LLM output and tool input.
+// fragmentClassAliases is the closed set of human-readable non-wire aliases we
+// still accept in helper surfaces. Stored plans and APIs must use the
+// canonical AH fragment classes directly.
 var fragmentClassAliases = map[string]fragmentClassAlias{
 	"ORG":             {ah.FragmentClassOrg, ""},
 	"ORGANISATION":    {ah.FragmentClassOrg, ""},
@@ -75,26 +70,27 @@ var fragmentClassAliases = map[string]fragmentClassAlias{
 
 	"PRODUCT": {ah.FragmentClassProduct, ""},
 
-	"PROGRAM": {ah.FragmentClassOrg, "program"},
-	"MARKET":  {ah.FragmentClassMarket, ""},
+	"MARKET": {ah.FragmentClassMarket, ""},
 
-	"EVENT":    {ah.FragmentClassEvidence, "event"},
 	"EVIDENCE": {ah.FragmentClassEvidence, ""},
 
 	"PERSON":     {ah.FragmentClassPerson, ""},
 	"HUMAN":      {ah.FragmentClassPerson, ""},
 	"INDIVIDUAL": {ah.FragmentClassPerson, ""},
 
-	"MEDIA":   {ah.FragmentClassOrg, "media_channel"},
-	"CHANNEL": {ah.FragmentClassOrg, "media_channel"},
+	"MEDIA":         {ah.FragmentClassOrg, "media_channel"},
+	"CHANNEL":       {ah.FragmentClassOrg, "media_channel"},
+	"MEDIA_CHANNEL": {ah.FragmentClassOrg, "media_channel"},
 
+	"DEPOSIT":   {ah.FragmentClassSite, "deposit"},
 	"MINE":      {ah.FragmentClassSite, "deposit"},
 	"FIELD":     {ah.FragmentClassSite, "deposit"},
 	"BASIN":     {ah.FragmentClassSite, "deposit"},
 	"RESERVOIR": {ah.FragmentClassSite, "deposit"},
 
-	"DECISION":      {ah.FragmentClassDecision, ""},
-	"DECISIONPOINT": {ah.FragmentClassDecision, ""},
+	"DECISION":       {ah.FragmentClassDecision, ""},
+	"DECISIONPOINT":  {ah.FragmentClassDecision, ""},
+	"DECISION_POINT": {ah.FragmentClassDecision, ""},
 
 	"COMMUNITY":  {ah.FragmentClassCommunity, ""},
 	"NETWORK":    {ah.FragmentClassCommunity, ""},
@@ -118,10 +114,6 @@ var fragmentClassAliases = map[string]fragmentClassAlias{
 	"TRACK":        {ah.FragmentClassMobileAsset, ""},
 
 	// Legacy supply-link overlay (no underscore in some LLM/tool outputs).
-	"SUPPLYLINK": {ah.FragmentClassSite, "supply_link"},
-
-	// Legacy strategic overlays — folded but recognised so legacy LLM
-	// output still resolves to a valid class for normalisation.
-	"DOMAIN": {ah.FragmentClassEvidence, "domain_legacy"},
-	"SPHERE": {ah.FragmentClassEvidence, "sphere_legacy"},
+	"SUPPLY_LINK": {ah.FragmentClassSite, "supply_link"},
+	"SUPPLYLINK":  {ah.FragmentClassSite, "supply_link"},
 }

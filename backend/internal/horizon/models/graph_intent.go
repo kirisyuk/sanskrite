@@ -410,6 +410,9 @@ func (p *GraphIntentPlanResponse) NormalizeAndValidate() error {
 			if !IsGraphIntentNodeTypeAllowed(n.Type) {
 				return fmt.Errorf("invalid grouping entity type: %s", n.Type)
 			}
+			if class, ok := ah.NormalizeFragmentClass(n.Type); ok {
+				n.Type = string(class)
+			}
 			cp := strings.TrimSpace(n.CanonicalPathHint)
 			if cp == "" {
 				return fmt.Errorf("create.groupings.entities.canonicalPathHint is required for %q", n.Label)
@@ -425,9 +428,13 @@ func (p *GraphIntentPlanResponse) NormalizeAndValidate() error {
 				return fmt.Errorf("create.groupings.entities.canonicalPathHint invalid for %q: %w", n.Label, err)
 			}
 		}
-		for _, rel := range g.Relations {
+		for j := range g.Relations {
+			rel := &g.Relations[j]
 			if !IsGraphIntentRelationTypeAllowed(rel.RelationType) {
 				return fmt.Errorf("invalid grouping relationType: %s", rel.RelationType)
+			}
+			if dec, ok := NormalizeGraphIntentRelationType(rel.RelationType); ok {
+				rel.RelationType = string(dec.Relation)
 			}
 		}
 	}
@@ -438,6 +445,9 @@ func (p *GraphIntentPlanResponse) NormalizeAndValidate() error {
 		}
 		if !IsGraphIntentNodeTypeAllowed(n.Type) {
 			return fmt.Errorf("invalid create.nodes.type: %s", n.Type)
+		}
+		if class, ok := ah.NormalizeFragmentClass(n.Type); ok {
+			n.Type = string(class)
 		}
 		cp := strings.TrimSpace(n.CanonicalPathHint)
 		if cp == "" {
@@ -454,33 +464,64 @@ func (p *GraphIntentPlanResponse) NormalizeAndValidate() error {
 			return fmt.Errorf("create.nodes.canonicalPathHint invalid for %q: %w", n.Label, err)
 		}
 	}
-	for _, e := range p.Create.Edges {
+	for i := range p.Create.Edges {
+		e := &p.Create.Edges[i]
 		if !IsGraphIntentRelationTypeAllowed(e.RelationType) {
 			return fmt.Errorf("invalid create edge relationType: %s", e.RelationType)
 		}
+		if dec, ok := NormalizeGraphIntentRelationType(e.RelationType); ok {
+			e.RelationType = string(dec.Relation)
+		}
 	}
-	for _, ep := range p.Update.EdgePatches {
+	for i := range p.Update.EdgePatches {
+		ep := &p.Update.EdgePatches[i]
 		if ep.RelationType != nil && strings.TrimSpace(*ep.RelationType) != "" && !IsGraphIntentRelationTypeAllowed(*ep.RelationType) {
 			return fmt.Errorf("invalid edge patch relationType: %s", strings.TrimSpace(*ep.RelationType))
 		}
+		if ep.RelationType != nil {
+			if dec, ok := NormalizeGraphIntentRelationType(*ep.RelationType); ok {
+				canonical := string(dec.Relation)
+				ep.RelationType = &canonical
+			}
+		}
 	}
-	for _, np := range p.Update.NodePatches {
+	for i := range p.Update.NodePatches {
+		np := &p.Update.NodePatches[i]
 		if np.Type != nil && strings.TrimSpace(*np.Type) != "" && !IsGraphIntentNodeTypeAllowed(*np.Type) {
 			return fmt.Errorf("invalid node patch type: %s", strings.TrimSpace(*np.Type))
 		}
+		if np.Type != nil {
+			if class, ok := ah.NormalizeFragmentClass(*np.Type); ok {
+				canonical := string(class)
+				np.Type = &canonical
+			}
+		}
 	}
-	for _, rw := range p.Update.RelationRewrite {
+	for i := range p.Update.RelationRewrite {
+		rw := &p.Update.RelationRewrite[i]
 		if strings.TrimSpace(rw.Match.RelationType) != "" && !IsGraphIntentRelationTypeAllowed(rw.Match.RelationType) {
 			return fmt.Errorf("invalid relationRewrite.match.relationType: %s", rw.Match.RelationType)
 		}
 		if !IsGraphIntentRelationTypeAllowed(rw.ReplaceWith.RelationType) {
 			return fmt.Errorf("invalid relationRewrite.replaceWith.relationType: %s", rw.ReplaceWith.RelationType)
 		}
+		if strings.TrimSpace(rw.Match.RelationType) != "" {
+			if dec, ok := NormalizeGraphIntentRelationType(rw.Match.RelationType); ok {
+				rw.Match.RelationType = string(dec.Relation)
+			}
+		}
+		if dec, ok := NormalizeGraphIntentRelationType(rw.ReplaceWith.RelationType); ok {
+			rw.ReplaceWith.RelationType = string(dec.Relation)
+		}
 	}
-	for _, ch := range p.Transform.DeriveChains {
-		for _, rt := range ch.Constraints.AllowedRelationTypes {
+	for i := range p.Transform.DeriveChains {
+		ch := &p.Transform.DeriveChains[i]
+		for j, rt := range ch.Constraints.AllowedRelationTypes {
 			if !IsGraphIntentRelationTypeAllowed(rt) {
 				return fmt.Errorf("invalid deriveChains.constraints.allowedRelationTypes item: %s", rt)
+			}
+			if dec, ok := NormalizeGraphIntentRelationType(rt); ok {
+				ch.Constraints.AllowedRelationTypes[j] = string(dec.Relation)
 			}
 		}
 	}
@@ -592,7 +633,7 @@ func (p *GraphIntentPlanResponse) MapToActions() *GraphIntentActionPlan {
 			push("create_edge", "create", ref, map[string]interface{}{
 				"fromTempId":   e.FromTempID,
 				"toTempId":     e.ToTempID,
-				"relationType": strings.ToUpper(strings.TrimSpace(e.RelationType)),
+				"relationType": strings.TrimSpace(e.RelationType),
 				"direction":    strings.ToLower(strings.TrimSpace(e.Direction)),
 			})
 		}
@@ -616,7 +657,7 @@ func (p *GraphIntentPlanResponse) MapToActions() *GraphIntentActionPlan {
 		push("create_edge", "create", ref, map[string]interface{}{
 			"fromTempId":   e.FromTempID,
 			"toTempId":     e.ToTempID,
-			"relationType": strings.ToUpper(strings.TrimSpace(e.RelationType)),
+			"relationType": strings.TrimSpace(e.RelationType),
 			"direction":    strings.ToLower(strings.TrimSpace(e.Direction)),
 		})
 	}
@@ -707,12 +748,12 @@ func IsGraphIntentGroupingKindAllowed(kind string) bool {
 }
 
 func IsGraphIntentRelationTypeAllowed(relationType string) bool {
-	_, ok := graphIntentAllowedRelationTypes[strings.ToUpper(strings.TrimSpace(relationType))]
+	_, ok := NormalizeGraphIntentRelationType(relationType)
 	return ok
 }
 
 func IsGraphIntentNodeTypeAllowed(nodeType string) bool {
-	_, ok := graphIntentAllowedNodeTypes[strings.ToUpper(strings.TrimSpace(nodeType))]
+	_, ok := ah.NormalizeFragmentClass(strings.TrimSpace(nodeType))
 	return ok
 }
 
@@ -738,92 +779,29 @@ type graphIntentRelationDecode struct {
 }
 
 // NormalizeGraphIntentRelationType maps a graph-intent wire relationType to the
-// AgentHorde RelationName SoT. Accepts:
-//
-//  1. Canonical AH RelationName (any case, e.g. "supplies", "SUPPLIES");
-//  2. Graph-intent affective alias (ALIGNS_WITH/OPPOSES/COOPERATES_WITH/
-//     CONFLICTS_WITH) — folded onto influences / joint_venture_with /
-//     contradicts with attribute payload where applicable.
-//
-// UPPER_SNAKE tokens that are not AH relation names (e.g. historical
-// DependencyType spellings) are rejected — wire must use taxonomy SoT.
+// AgentHorde RelationName SoT. Only canonical AH relation names are accepted;
+// graph-intent plans must use the same lowercase snake_case alphabet as the
+// rest of the runtime.
 func NormalizeGraphIntentRelationType(relationType string) (graphIntentRelationDecode, bool) {
 	raw := strings.TrimSpace(relationType)
 	if raw == "" {
 		return graphIntentRelationDecode{}, false
 	}
-	upper := strings.ToUpper(raw)
-
-	if rel, ok := graphIntentAffectiveAliases[upper]; ok {
-		return rel, true
-	}
-	if rel, ok := ah.NormalizeRelation(strings.ToLower(raw)); ok {
+	if rel, ok := ah.NormalizeRelation(raw); ok {
 		return graphIntentRelationDecode{Relation: rel}, true
-	}
-	if strings.Contains(raw, "_") && raw == upper {
-		if rel, ok := ah.NormalizeRelation(strings.ToLower(raw)); ok {
-			return graphIntentRelationDecode{Relation: rel}, true
-		}
 	}
 	return graphIntentRelationDecode{}, false
 }
 
 // MapGraphIntentNodeTypeToClass maps a graph-intent wire nodeType to the
-// AgentHorde (FragmentClass, subtype) tuple. Accepts:
-//
-//  1. Modern AH class name (lower or upper-case): "site", "org", …;
-//  2. Path-shape inference from canonicalPathHint when nothing else
-//     matches (/fac/* → site, /gov/* → org, …).
-//
-// The third return value is true when the mapping is confident; false
-// when the function fell back to ah.FragmentClassOrg as the historical
-// default (callers should warn).
+// AgentHorde (FragmentClass, subtype) tuple. Graph-intent is AH-only now, so
+// nodeType itself must be a canonical fragment class; the path hint is used
+// only to refine subtype for still-supported namespaces.
 func MapGraphIntentNodeTypeToClass(nodeType, canonicalPathHint string) (ah.FragmentClass, string, bool) {
 	raw := strings.TrimSpace(nodeType)
 	if raw != "" {
-		if class, ok := ah.NormalizeFragmentClass(strings.ToLower(raw)); ok {
+		if class, ok := ah.NormalizeFragmentClass(raw); ok {
 			return class, "", true
-		}
-		upper := strings.ToUpper(raw)
-		switch upper {
-		case "GOVERNMENT_AGENCY":
-			return ah.FragmentClassOrg, "gov", true
-		case "COMMUNITY_DYNASTY":
-			return ah.FragmentClassCommunity, "ethnic", true
-		case "COMMUNITY_TRIBE":
-			return ah.FragmentClassCommunity, "ethnic", true
-		case "ORGANIZATION":
-			return ah.FragmentClassOrg, "", true
-		case "FACILITY":
-			return ah.FragmentClassSite, "", true
-		case "PROGRAM":
-			return ah.FragmentClassOrg, "program", true
-		case "PERSON":
-			return ah.FragmentClassPerson, "", true
-		case "PRODUCT":
-			return ah.FragmentClassProduct, "", true
-		case "MARKET":
-			return ah.FragmentClassMarket, "", true
-		case "COMMUNITY":
-			return ah.FragmentClassCommunity, "", true
-		case "GEO_REGION":
-			return ah.FragmentClassGeo, "", true
-		case "TRACK":
-			return ah.FragmentClassMobileAsset, "", true
-		case "EVENT":
-			return ah.FragmentClassEvidence, string(ah.EvidenceSubtypeEntity), true
-		case "MEDIA" + "_CHANNEL":
-			return ah.FragmentClassOrg, "media_channel", true
-		case "DEP" + "OSIT":
-			return ah.FragmentClassSite, "deposit", true
-		case "AFFECTED" + "_ZONE":
-			return ah.FragmentClassGeo, "affected_zone", true
-		case "DECISION" + "_POINT":
-			return ah.FragmentClassDecision, "", true
-		case "MECH" + "ANISM":
-			return ah.FragmentClassMechanism, "", true
-		case "SUPPLY" + "_LINK":
-			return ah.FragmentClassSite, "supply_link", true
 		}
 	}
 
@@ -833,18 +811,10 @@ func MapGraphIntentNodeTypeToClass(nodeType, canonicalPathHint string) (ah.Fragm
 		return ah.FragmentClassOrg, "", true
 	case strings.HasPrefix(cp, "/gov/"):
 		return ah.FragmentClassOrg, "gov", true
-	case strings.HasPrefix(cp, "/program/"):
-		return ah.FragmentClassOrg, "program", true
-	case strings.HasPrefix(cp, "/media/"):
-		return ah.FragmentClassOrg, "media_channel", true
-	case strings.HasPrefix(cp, "/site/"), strings.HasPrefix(cp, "/fac/"):
+	case strings.HasPrefix(cp, "/site/"):
 		return ah.FragmentClassSite, "", true
-	case strings.HasPrefix(cp, "/deposit/"):
-		return ah.FragmentClassSite, "deposit", true
-	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/geo/"), strings.HasPrefix(cp, "/region/"):
+	case strings.HasPrefix(cp, "/geo/"):
 		return ah.FragmentClassGeo, "", true
-	case strings.HasPrefix(cp, "/zone/"):
-		return ah.FragmentClassGeo, "affected_zone", true
 	case strings.HasPrefix(cp, "/product/"):
 		return ah.FragmentClassProduct, "", true
 	case strings.HasPrefix(cp, "/market/"):
@@ -857,11 +827,9 @@ func MapGraphIntentNodeTypeToClass(nodeType, canonicalPathHint string) (ah.Fragm
 		return ah.FragmentClassDecision, "", true
 	case strings.HasPrefix(cp, "/mechanism/"):
 		return ah.FragmentClassMechanism, "", true
-	case strings.HasPrefix(cp, "/event/"):
-		return ah.FragmentClassEvidence, "event", true
 	case strings.HasPrefix(cp, "/evidence/"):
 		return ah.FragmentClassEvidence, "", true
-	case strings.HasPrefix(cp, "/mobile_asset/"), strings.HasPrefix(cp, "/track/"):
+	case strings.HasPrefix(cp, "/mobile_asset/"):
 		return ah.FragmentClassMobileAsset, "", true
 	case strings.HasPrefix(cp, "/regime/"):
 		return ah.FragmentClassRegime, "", true
@@ -875,9 +843,8 @@ func MapGraphIntentNodeTypeToClass(nodeType, canonicalPathHint string) (ah.Fragm
 	return ah.FragmentClassOrg, "", false
 }
 
-// GraphIntentAllowedRelationTypesSorted returns the wire-level relation
-// alphabet accepted on graph-intent endpoints: AH RelationNames (all
-// casings) plus the four graph-intent affective aliases.
+// GraphIntentAllowedRelationTypesSorted returns the canonical AH relation
+// alphabet accepted on graph-intent endpoints.
 func GraphIntentAllowedRelationTypesSorted() []string {
 	out := make([]string, 0, len(graphIntentAllowedRelationTypes))
 	for t := range graphIntentAllowedRelationTypes {
@@ -925,11 +892,8 @@ var graphIntentAllowedGroupingKinds = map[string]struct{}{
 	GraphIntentGroupingSocietalStructure:   {},
 }
 
-// graphIntentAffectiveAliases maps the four graph-intent affective
-// labels onto the AH influences relation with the relevant
-// influence_kind / influence_polarity attribute payload. Listed
-// separately from legacy UPPER_SNAKE relation folding / AH relation
-// normalization because these are GRAPH-INTENT-SPECIFIC inventions.
+// graphIntentAffectiveAliases is kept only for backwards inspection of stored
+// plans created before graph-intent was tightened to the AH alphabet.
 var graphIntentAffectiveAliases = map[string]graphIntentRelationDecode{
 	GraphIntentRelationTypeAlignsWith: {
 		Relation:        ah.RelationNameInfluences,
@@ -937,8 +901,8 @@ var graphIntentAffectiveAliases = map[string]graphIntentRelationDecode{
 		Note:            "ALIGNS_WITH -> influences (positive, advisory)",
 	},
 	GraphIntentRelationTypeCooperates: {
-		Relation:        ah.RelationNameJointVentureWith,
-		Note:            "COOPERATES_WITH -> joint_venture_with (structural cooperation)",
+		Relation: ah.RelationNameJointVentureWith,
+		Note:     "COOPERATES_WITH -> joint_venture_with (structural cooperation)",
 	},
 	GraphIntentRelationTypeOpposes: {
 		Relation:        ah.RelationNameInfluences,
@@ -946,49 +910,25 @@ var graphIntentAffectiveAliases = map[string]graphIntentRelationDecode{
 		Note:            "OPPOSES -> influences (negative)",
 	},
 	GraphIntentRelationTypeConflictsWith: {
-		Relation:        ah.RelationNameContradicts,
-		Note:            "CONFLICTS_WITH -> contradicts (decision-layer)",
+		Relation: ah.RelationNameContradicts,
+		Note:     "CONFLICTS_WITH -> contradicts (decision-layer)",
 	},
 }
 
 var graphIntentAllowedRelationTypes = func() map[string]struct{} {
-	out := make(map[string]struct{}, len(ah.RelationNames)+len(graphIntentAffectiveAliases))
+	out := make(map[string]struct{}, len(ah.RelationNames))
 	for _, r := range ah.RelationNames {
-		out[strings.ToUpper(string(r))] = struct{}{}
 		out[string(r)] = struct{}{}
-	}
-	for k := range graphIntentAffectiveAliases {
-		out[k] = struct{}{}
 	}
 	return out
 }()
 
-// graphIntentAllowedNodeTypes is the wire alphabet for fragment classes:
-// AH FragmentClasses plus graph-intent synonyms.
+// graphIntentAllowedNodeTypes is the graph-intent node alphabet: canonical AH
+// fragment classes only.
 var graphIntentAllowedNodeTypes = func() map[string]struct{} {
-	out := make(map[string]struct{}, len(ah.FragmentClasses)*2+16)
+	out := make(map[string]struct{}, len(ah.FragmentClasses))
 	for _, c := range ah.FragmentClasses {
-		out[strings.ToUpper(string(c))] = struct{}{}
 		out[string(c)] = struct{}{}
 	}
-	out["GOVERNMENT_AGENCY"] = struct{}{}
-	out["COMMUNITY_DYNASTY"] = struct{}{}
-	out["COMMUNITY_TRIBE"] = struct{}{}
-	// Category B — LLM graph-intent JSON wire alphabet: legacy graph-intent /
-	// prompt labels (UPPER_SNAKE + split DEP*OSIT / SUPPLY*_LINK tokens) that
-	// still map to AH classes via MapGraphIntentNodeTypeToClass. Keep them
-	// allowed here so validation can reach path/namespace rules; removal
-	// requires coordinated prompt + snapshot updates.
-	legacyUpper := []string{
-		"ORGANIZATION", "FACILITY", "PROGRAM", "PRODUCT", "MARKET", "COMMUNITY",
-		"PERSON", "GEO_REGION", "TRACK", "EVENT", "DOMAIN", "SPHERE",
-		"MEDIA_CHANNEL", "AFFECTED_ZONE", "DECISION_POINT", "MECHANISM",
-	}
-	for _, k := range legacyUpper {
-		out[k] = struct{}{}
-		out[strings.ToLower(k)] = struct{}{}
-	}
-	out["DEP"+"OSIT"] = struct{}{}
-	out["SUPPLY"+"_LINK"] = struct{}{}
 	return out
 }()

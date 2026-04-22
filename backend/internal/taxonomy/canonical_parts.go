@@ -31,6 +31,7 @@ type CanonicalPathParts struct {
 	Market    *MarketPathParts
 	Fac       *FacilityPathParts
 	Program   *ProgramPathParts
+	Project   *ProgramPathParts
 	Person    *PersonPathParts
 	Media     *MediaPathParts
 	Deposit   *DepositPathParts
@@ -363,6 +364,19 @@ func ParseCanonicalPathParts(path string) (*CanonicalPathParts, error) {
 		}
 		return nil, fmt.Errorf("program path must be /program/{jurisdiction}/{slug}: %q", path)
 
+	case "project":
+		// Canonical: /project/{jurisdiction}/{slug}.
+		// Transitional normalization: /project/{slug} -> /project/global/{slug}.
+		if len(parts) == 2 {
+			out.Project = &ProgramPathParts{Jurisdiction: "global", Slug: parts[1], Legacy: true}
+			return out, nil
+		}
+		if len(parts) == 3 {
+			out.Project = &ProgramPathParts{Jurisdiction: parts[1], Slug: parts[2], Legacy: false}
+			return out, nil
+		}
+		return nil, fmt.Errorf("project path must be /project/{jurisdiction}/{slug}: %q", path)
+
 	case "person":
 		if len(parts) != 2 {
 			return nil, fmt.Errorf("person path must be /person/{slug}: %q", path)
@@ -574,6 +588,16 @@ func (p *CanonicalPathParts) BuildCanonicalPath() (string, bool) {
 			j = "global"
 		}
 		return JoinPath("program", j, p.Program.Slug), true
+
+	case "project":
+		if p.Project == nil || p.Project.Slug == "" {
+			return "", false
+		}
+		j := strings.TrimSpace(p.Project.Jurisdiction)
+		if j == "" {
+			j = "global"
+		}
+		return JoinPath("project", j, p.Project.Slug), true
 
 	case "person":
 		if p.Person == nil || p.Person.Slug == "" {
