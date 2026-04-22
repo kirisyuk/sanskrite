@@ -686,9 +686,9 @@ func TestParseSupplyChains_ProgramAndMarketNodesCreateFragments(t *testing.T) {
 					Type:          "FACILITY",
 				},
 				{
-					CanonicalPath: "/program/int/titr-middle-corridor",
+					CanonicalPath: "/project/int/titr-middle-corridor",
 					Name:          "TITR Middle Corridor",
-					Type:          "PROGRAM",
+					Type:          "PROJECT",
 				},
 				{
 					CanonicalPath: "/market/eu/all/logistics",
@@ -704,14 +704,12 @@ func TestParseSupplyChains_ProgramAndMarketNodesCreateFragments(t *testing.T) {
 		t.Fatalf("ParseSupplyChains() error = %v", err)
 	}
 
-	programFrag, ok := result.Fragments["/program/int/titr-middle-corridor"]
-	if !ok || programFrag == nil {
-		t.Fatalf("expected PROGRAM fragment to be materialized")
+	projectFrag, ok := result.Fragments["/project/int/titr-middle-corridor"]
+	if !ok || projectFrag == nil {
+		t.Fatalf("expected PROJECT fragment to be materialized")
 	}
-	// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassOrg folds onto
-	// (org, program); assert on the (Class, Subtype) tuple.
-	if programFrag.Class != ah.FragmentClassOrg || programFrag.Subtype != "program" {
-		t.Fatalf("program fragment class=%s subtype=%s, want (org, program)", programFrag.Class, programFrag.Subtype)
+	if projectFrag.Class != ah.FragmentClassProject || projectFrag.Subtype != "" {
+		t.Fatalf("project fragment class=%s subtype=%s, want (project, \"\")", projectFrag.Class, projectFrag.Subtype)
 	}
 
 	marketFrag, ok := result.Fragments["/market/eu/all/logistics"]

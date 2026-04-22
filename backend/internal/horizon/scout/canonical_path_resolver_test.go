@@ -69,7 +69,7 @@ func TestInferFragmentTypeFromCanonicalPath(t *testing.T) {
 		{in: "/fac/us/gigafactory-texas", want: ah.FragmentClassSite},
 		{in: "/loc/us/tx/austin", want: ah.FragmentClassGeo},
 		{in: "/region/na/us/tx/austin", want: ah.FragmentClassGeo},
-		{in: "/event/ces-2026", want: ah.FragmentClassEvidence},
+		{in: "/evidence/ces-2026", want: ah.FragmentClassEvidence},
 		{in: "/person/elon-musk", want: ah.FragmentClassPerson},
 		// Legacy collapsed types fold to parent class. Subtype info is checked
 		// via InferClassSubtypeFromCanonicalPath in canonical_path_utils_domain_test.go.

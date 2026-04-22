@@ -84,21 +84,21 @@ var domainModeSynonyms = map[string]string{
 func EntityTypesForDomainMode(mode string) string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case DomainModeSupplyChain:
-		return "FACILITY (primary actor for supplies/produces), ORGANIZATION (OWNS, LOCATED_IN — supply flow endpoints are FACILITY), PRODUCT, GEO_REGION, deposit, COMMUNITY (informal trade), PROGRAM (procurement)"
+		return "site (/fac/; primary actor for produces/supplies), org (/org/ and /gov/), product, geo, deposit (site subtype), community (informal trade), project"
 	case DomainModeServiceChain:
-		return "FACILITY (service delivery site, data center, repair depot, network hub), ORGANIZATION (provider, reseller, managed-service operator), PRODUCT (including /product/service/... capabilities), MARKET, GEO_REGION, COMMUNITY (informal operators), PROGRAM (service contracts, procurement)"
+		return "site (/fac/ service delivery site, data center, repair depot, network hub), org (provider, reseller, managed-service operator), product (including service capabilities), market, geo, community (informal operators), project"
 	case DomainModeGovernance:
-		return "ORGANIZATION (including /gov/ government bodies), FACILITY, deposit, PERSON, COMMUNITY (dynasty/tribe can OWNS), PROGRAM (ADMINISTERS target), MEDIA_CHANNEL (community control/mobilization channel)"
+		return "org (including /gov/ government bodies), site, deposit, person, community (dynasty/tribe), project, media channel orgs"
 	case DomainModeAssurance:
-		return "ORGANIZATION (audit firms, certifiers, regulators as assurers), FACILITY, PRODUCT, PROGRAM (assurees)"
+		return "org (audit firms, certifiers, regulators as assurers), site, product, project"
 	case DomainModeMarket:
-		return "ORGANIZATION, FACILITY, COMMUNITY, PERSON, PROGRAM, MARKET, MEDIA_CHANNEL"
+		return "org, site, community, person, project, market, media-channel orgs"
 	case DomainModeStrategic:
-		return "ORGANIZATION (including /gov/), FACILITY, PRODUCT, MARKET, PROGRAM, PERSON, COMMUNITY, MEDIA_CHANNEL, DECISION_POINT, MECHANISM"
+		return "org (including /gov/), site, product, market, project, person, community, media-channel orgs, decision, mechanism"
 	case DomainModePolicyImpact:
-		return "ORGANIZATION (including /gov/), FACILITY, PRODUCT, PROGRAM, MARKET, COMMUNITY, PERSON, MEDIA_CHANNEL, GEO_REGION, DECISION_POINT, MECHANISM"
+		return "org (including /gov/), site, product, project, market, community, person, media-channel orgs, geo, decision, mechanism"
 	case DomainModeEcosystem:
-		return "ORGANIZATION (including /gov/), FACILITY, PERSON, COMMUNITY, PROGRAM, MARKET, GEO_REGION, PRODUCT, MEDIA_CHANNEL"
+		return "org (including /gov/), site, person, community, project, market, geo, product, media-channel orgs"
 	default:
 		return ""
 	}
@@ -109,21 +109,21 @@ func EntityTypesForDomainMode(mode string) string {
 func EntityActorTypesForDomainMode(mode string) string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case DomainModeSupplyChain:
-		return "ORGANIZATION, FACILITY, COMMUNITY (informal trade), PROGRAM (procurement)"
+		return "org, site, community (informal trade), project"
 	case DomainModeServiceChain:
-		return "ORGANIZATION, FACILITY, COMMUNITY (informal operators), PROGRAM (service contracts, procurement)"
+		return "org, site, community (informal operators), project"
 	case DomainModeGovernance:
-		return "ORGANIZATION, PERSON, COMMUNITY (dynasty/tribe)"
+		return "org, person, community (dynasty/tribe)"
 	case DomainModeAssurance:
-		return "ORGANIZATION (audit firms, certifiers, regulators)"
+		return "org (audit firms, certifiers, regulators)"
 	case DomainModeMarket:
-		return "ORGANIZATION, FACILITY, COMMUNITY, PERSON, PROGRAM"
+		return "org, site, community, person, project"
 	case DomainModePolicyImpact:
-		return "ORGANIZATION (including /gov/), PROGRAM, COMMUNITY, PERSON"
+		return "org (including /gov/), project, community, person"
 	case DomainModeStrategic:
-		return "ORGANIZATION (including /gov/), PROGRAM, COMMUNITY, PERSON, DECISION_POINT"
+		return "org (including /gov/), project, community, person, decision"
 	case DomainModeEcosystem:
-		return "ORGANIZATION, PERSON, COMMUNITY, PROGRAM"
+		return "org, person, community, project"
 	default:
 		return ""
 	}
@@ -299,21 +299,21 @@ func PolicyImpactEdgeTypesString() string {
 func AllowedEntityTypesForDomainMode(mode string) []string {
 	switch strings.TrimSpace(strings.ToLower(mode)) {
 	case DomainModeSupplyChain:
-		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "GEO_REGION", "deposit", "COMMUNITY", "PROGRAM"}
+		return []string{"org", "site", "product", "geo", "community", "project"}
 	case DomainModeServiceChain:
-		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "GEO_REGION", "COMMUNITY", "PROGRAM"}
+		return []string{"org", "site", "product", "market", "geo", "community", "project"}
 	case DomainModeGovernance:
-		return []string{"ORGANIZATION", "FACILITY", "deposit", "PERSON", "COMMUNITY", "PROGRAM", "MEDIA_CHANNEL"}
+		return []string{"org", "site", "person", "community", "project"}
 	case DomainModeAssurance:
-		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "PROGRAM"}
+		return []string{"org", "site", "product", "project"}
 	case DomainModeMarket:
-		return []string{"ORGANIZATION", "FACILITY", "COMMUNITY", "PERSON", "PROGRAM", "MARKET", "MEDIA_CHANNEL"}
+		return []string{"org", "site", "community", "person", "project", "market"}
 	case DomainModeStrategic:
-		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "MARKET", "PROGRAM", "PERSON", "COMMUNITY", "MEDIA_CHANNEL", "DECISION_POINT", "MECHANISM"}
+		return []string{"org", "site", "product", "market", "project", "person", "community", "decision", "mechanism"}
 	case DomainModePolicyImpact:
-		return []string{"ORGANIZATION", "FACILITY", "PRODUCT", "PROGRAM", "MARKET", "COMMUNITY", "PERSON", "MEDIA_CHANNEL", "GEO_REGION", "DECISION_POINT", "MECHANISM"}
+		return []string{"org", "site", "product", "project", "market", "community", "person", "geo", "decision", "mechanism"}
 	case DomainModeEcosystem:
-		return []string{"ORGANIZATION", "FACILITY", "PERSON", "COMMUNITY", "PROGRAM", "MARKET", "GEO_REGION", "PRODUCT", "MEDIA_CHANNEL"}
+		return []string{"org", "site", "person", "community", "project", "market", "geo", "product"}
 	default:
 		return nil
 	}

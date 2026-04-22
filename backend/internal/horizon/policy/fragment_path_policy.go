@@ -17,7 +17,7 @@ type classSubtypeKey struct {
 
 var fragmentPathPrefixes = map[classSubtypeKey]string{
 	{Class: ah.FragmentClassOrg}:                              "/org/",
-	{Class: ah.FragmentClassOrg, Subtype: subtypeProgram}:     "/program/",
+	{Class: ah.FragmentClassOrg, Subtype: subtypeProgram}:     "/project/",
 	{Class: ah.FragmentClassOrg, Subtype: "media_channel"}:    "/media/",
 	{Class: ah.FragmentClassSite}:                             "/fac/",
 	{Class: ah.FragmentClassSite, Subtype: subtypeDeposit}:    "/deposit/",

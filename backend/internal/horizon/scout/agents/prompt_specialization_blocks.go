@@ -36,19 +36,19 @@ func buildSpecializationModulesBlock(specialties []string, domainModes []string,
 	if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyManagement) {
 		b.WriteString("MODULE: management (executive leadership / board / founders)\n")
 		b.WriteString("- Extract leadership and governance actors: CEO/CFO/COO/CTO/CIO/CMO/CHRO, President/Managing Director, Chair, founders.\n")
-		b.WriteString("- Represent people as targetType=PERSON with canonicalPath /person/{slug}.\n")
-		b.WriteString("- Use relation types MANAGES / EMPLOYED_BY / BOARD_MEMBER_OF / FOUNDED with grounded evidence.\n\n")
+		b.WriteString("- Represent people as targetType=person with canonicalPath /person/{slug}.\n")
+		b.WriteString("- Use AH relation names only. Prefer holds_board_seat, member_of, managed_by, and invested_in where evidence supports them; do not emit legacy management tokens.\n\n")
 	}
 	if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyProductsAndServices) {
 		b.WriteString("MODULE: products_and_services (outputs + inputs + transformations)\n")
-		b.WriteString("- For ORG/FAC: outputs via PRODUCES, inputs via SUPPLIES_TO(product→org).\n")
+		b.WriteString("- For org/site: outputs via produces, commercial flow via supplies, and operator/site links via operates.\n")
 		b.WriteString("- For PRODUCT: upstream/downstream value-chain via transforms_into, plus direct final assembly via assembles_into.\n")
 		b.WriteString("- Use canonical /product/{category}/{type}/{stage}/{slug} paths consistently.\n")
 		b.WriteString("- Product/material names: prefer singular canonical terms; avoid brand prefixes unless officially part of the name.\n\n")
 	}
 	if taxonomy.HasSpecialty(specialties, taxonomy.SpecialtyEquity) {
 		b.WriteString("MODULE: equity (ownership & control)\n")
-		b.WriteString("- Prioritize ownership/control discovery: OWNS / SUBSIDIARY_OF / CONTROLS / INVESTS_IN.\n")
+		b.WriteString("- Prioritize ownership/control discovery: beneficially_owns / subsidiary_of / controls_via / invested_in.\n")
 		b.WriteString("- Capture stake/voting/investment evidence when available.\n\n")
 	}
 
@@ -101,8 +101,8 @@ func inferPromptFragmentType(canonicalPath string, fragmentType ah.FragmentClass
 		return ah.FragmentClassMarket
 	case strings.HasPrefix(cp, "/deposit/"):
 		return ah.FragmentClassSite
-	case strings.HasPrefix(cp, "/program/"):
-		return ah.FragmentClassOrg
+	case strings.HasPrefix(cp, "/project/"):
+		return ah.FragmentClassProject
 	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/region/"), strings.HasPrefix(cp, "/geo/"):
 		return ah.FragmentClassGeo
 	default:
@@ -159,20 +159,20 @@ func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragm
 	switch key {
 	case entity_semantics.EntityTypeGov:
 		b.WriteString("- Resolve govType + parentGovPath and enforce hierarchy edges via ADMINISTERS (superior -> subordinate).\n")
-		b.WriteString("- Prioritize regulatory perimeter and affected entities: REGULATES for domestic jurisdiction oversight, CONTROLS_ACCESS for sanctions/extra-territorial restrictions, APPLIES_TO via mechanism.\n")
+		b.WriteString("- Prioritize regulatory perimeter and affected entities: regulates for domestic jurisdiction oversight, imposes for mechanism-driven restrictions, and wields when the government body actively uses a mechanism.\n")
 	case entity_semantics.EntityTypeOrganization:
 		b.WriteString("- Separate operating business vs holding structure early; for holdings prioritize ownership map before product map.\n")
 		b.WriteString("- For operating orgs, prioritize products/services, child orgs + their facilities, org-recipients, and market participation.\n")
-	case entity_semantics.EntityTypeFacility:
-		b.WriteString("- Prioritize lifecycle, location validity, IO profile (SUPPLIES_TO -> PRODUCES), and throughput/capacity signals.\n")
+	case entity_semantics.EntityTypeSite:
+		b.WriteString("- Prioritize lifecycle, location validity, IO profile (supplies / produces), and throughput/capacity signals.\n")
 		switch detectFacilityTaskSemantic(canonicalPath, qualifiers, identifiers) {
 		case facilityTaskSemanticRoute:
 			b.WriteString("- Route-qualified FAC: resolve route regions and waypoint coordinates first (prefer Google geocoding-backed matches).\n")
 			b.WriteString("- Route-qualified FAC: prioritize suppliers/logistics operators/customers by business flow semantics (DEPENDS_ON facet=supply|logistics, SUPPLIES_TO when flow is explicit).\n")
 			b.WriteString("- Route-qualified FAC: avoid non-business detours (biography/family/person-centric discovery) and avoid route->route recursion by default.\n")
 		case facilityTaskSemanticSupply:
-			b.WriteString("- Supply-qualified FAC: prioritize producing facilities, org-recipients, products THIS fac produces, and transport chain constraints.\n")
-			b.WriteString("- Supply-qualified FAC: prioritize ORG/FAC/PRODUCT/GEO targets with flow evidence; avoid person-centric and social-noise entities.\n")
+			b.WriteString("- Supply-qualified SITE: prioritize producing sites, org-recipients, products this site produces, and transport chain constraints.\n")
+			b.WriteString("- Supply-qualified SITE: prioritize org/site/product/geo targets with flow evidence; avoid person-centric and social-noise entities.\n")
 		case facilityTaskSemanticProcurement:
 			b.WriteString("- Procurement-qualified FAC: prioritize vendors, sourcing channels, procurement service providers, and sourcing regions.\n")
 			b.WriteString("- Procurement-qualified FAC: prioritize business contract/dependency semantics (DEPENDS_ON/SUPPLIES_TO/PARTNERS_WITH) and supplier concentration signals.\n")
@@ -183,26 +183,26 @@ func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragm
 	case entity_semantics.EntityTypeProduct:
 		b.WriteString("- Prioritize canonical product taxonomy, then upstream/downstream transformations (transforms_into), direct assembly steps (assembles_into), and actor links.\n")
 	case entity_semantics.EntityTypeMarket:
-		b.WriteString("- Prioritize market hierarchy (HAS_MARKET_SEGMENT), key players (PARTICIPATES_IN), and concentration/sizing metrics.\n")
-	case entity_semantics.EntityTypeGeoRegion:
+		b.WriteString("- Prioritize market hierarchy via parentMarketPath/canonical path, key players via listed_on or member_of when grounded, and concentration/sizing metrics.\n")
+	case entity_semantics.EntityTypeGeo:
 		b.WriteString("- GEO anchor: treat THIS fragment as the semantic target for placement. Discover entities in the region, then emit entity -> LOCATED_IN/OPERATES_IN -> THIS GEO using explicit source fields when needed.\n")
-		b.WriteString("- Avoid expressing regional presence via OWNS, MEMBER_OF, HAS_SUBGROUP, or other social/governance edge types.\n")
+		b.WriteString("- Avoid expressing regional presence via beneficially_owns, member_of, or other social/governance edge types.\n")
 	case entity_semantics.EntityTypeCommunity, entity_semantics.EntityTypeCommunityDynasty, entity_semantics.EntityTypeCommunityTribe:
-		b.WriteString("- Prioritize community type, subgroup hierarchy (HAS_SUBGROUP), channels (OPERATES_VIA), and formal affiliations (AFFILIATED_WITH).\n")
+		b.WriteString("- Prioritize community type, subgroup hierarchy, channels, and formal affiliations.\n")
 	case entity_semantics.EntityTypeDeposit:
-		b.WriteString("- Prioritize extraction operators/facilities (EXTRACTS_FROM), resource metrics, and downstream transformation chain.\n")
-	case entity_semantics.EntityTypeProgram:
+		b.WriteString("- Prioritize extraction operators/sites, resource metrics, and downstream transformation chain.\n")
+	case entity_semantics.EntityTypeProject:
 		b.WriteString("- Prioritize administrator hierarchy, mechanism links, beneficiaries, and timeline/status/funding facts.\n")
-	case entity_semantics.EntityTypeDecisionPoint:
+	case entity_semantics.EntityTypeDecision:
 		b.WriteString("- Decision points must have gatekeepers, mechanisms, and downstream controlled targets.\n")
 	case entity_semantics.EntityTypeMechanism:
-		b.WriteString("- Mechanisms must have users (USES_MECHANISM) and affected entities (APPLIES_TO).\n")
+		b.WriteString("- Mechanisms must have users (wields) and affected entities (imposes or subject_to depending direction).\n")
 	case entity_semantics.EntityTypeDomain:
 		b.WriteString("- Expand domain into first-order concrete anchors before adding overlays.\n")
 	}
 	if len(spherePaths) > 0 {
 		b.WriteString(fmt.Sprintf("- Active spheres: %s\n", strings.Join(spherePaths, ", ")))
-		b.WriteString("- Prioritize discovery of DECISION_POINT and MECHANISM entities within these spheres.\n")
+		b.WriteString("- Prioritize discovery of decision and mechanism entities within these spheres.\n")
 		b.WriteString("- For subordinate entities (ADMINISTERS targets, subsidiaries), prefer those operating in the same spheres.\n")
 	}
 	return b.String() + "\n"
@@ -210,13 +210,12 @@ func buildObjectTypeTaskSpecializationBlockWithHints(canonicalPath string, fragm
 
 // GovEntityRelationRulesBlock returns composable prompt text explaining
 // GOV (/gov/...) vs non-GOV ORG relation type selection for MARKET/ORG targets.
-// Included in any domain mode prompt where REGULATES and PARTICIPATES_IN are both available.
 func GovEntityRelationRulesBlock() string {
 	return `   - GOV vs ORG distinction (CRITICAL): entities with canonicalPath /gov/... are government bodies.
-     For GOV -> MARKET (domestic): use REGULATES (not PARTICIPATES_IN, not DEPENDS_ON).
+     For GOV -> MARKET (domestic): use regulates (not listed_on, not depends_on).
      For GOV -> ORG (same jurisdiction, regulatory oversight): use REGULATES when regulatory, ADMINISTERS when hierarchical.
-     For GOV -> foreign ORG/MARKET (sanctions, trade restrictions, extra-territorial enforcement): use CONTROLS_ACCESS or IMPOSES_CONDITION, NOT REGULATES.
-     For ORG -> MARKET: use PARTICIPATES_IN.
+     For GOV -> foreign ORG/MARKET (sanctions, trade restrictions, extra-territorial enforcement): use imposes or wields, NOT regulates.
+     For ORG -> MARKET: use listed_on when the org is clearly active in that market.
 `
 }
 
@@ -230,7 +229,7 @@ func buildCoreBusinessTaxonomyBlock() string {
 	domainContract := graphenrich.SupportedMarketDomainsForPrompt()
 	verticalHints := graphenrich.DomainVerticalHintsForPrompt()
 	return `BUSINESS TAXONOMY CONTRACT (single source for typical business objects):
-- ORG/FAC/GOV:
+- ORG/SITE/GOV:
   - marketSegments: /segment/{domain}/{vertical}/{geo} (geo = ISO2 or global/regional token)
   - marketDomain must use graphenrich canonical domains: ` + domainContract + `
   - marketVertical should align with canonical graphenrich verticals where inferable. Hints: ` + verticalHints + `
@@ -245,7 +244,7 @@ func buildCoreBusinessTaxonomyBlock() string {
   - key metrics (when available): /metric/market/tam_usd, /metric/market/cagr_percent, /metric/market/cr4_percent, /metric/market/hhi
 - COMMUNITY:
   - communityType, communityPlatforms, communityEstimatedSize, affiliatedOrgPath
-  - hierarchy via HAS_SUBGROUP (broader -> narrower), channels via OPERATES_VIA, market links via PARTICIPATES_IN`
+  - hierarchy via parent/child community paths, channels via explicit media org links, market links via listed_on/member_of when grounded`
 }
 
 // PromptCoreBusinessTaxonomyBlock exposes the shared business taxonomy contract

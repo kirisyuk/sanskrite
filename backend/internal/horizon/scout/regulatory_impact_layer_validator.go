@@ -99,7 +99,7 @@ func ValidateRegulatoryImpactLayerCoverage(rels []agents.DiscoveredRelation) Reg
 				out.AffectedReachable[v] = struct{}{}
 			case strings.HasPrefix(v, "/community/"):
 				out.CommunityReachable[v] = struct{}{}
-			case strings.HasPrefix(v, "/program/"):
+			case strings.HasPrefix(v, "/project/"):
 				out.ProgramReachable[v] = struct{}{}
 			case strings.HasPrefix(v, "/media/"):
 				out.MediaReachable[v] = struct{}{}
@@ -118,7 +118,7 @@ func ValidateRegulatoryImpactLayerCoverage(rels []agents.DiscoveredRelation) Reg
 			if strings.HasPrefix(p, "/mechanism/") ||
 				strings.HasPrefix(p, "/decision/") ||
 				strings.HasPrefix(p, "/community/") ||
-				strings.HasPrefix(p, "/program/") ||
+				strings.HasPrefix(p, "/project/") ||
 				strings.HasPrefix(p, "/media/") ||
 				strings.HasPrefix(p, "/loc/") {
 				candidates[p] = struct{}{}
@@ -216,7 +216,7 @@ func ComputeRegulatoryGraphSufficiency(rels []agents.DiscoveredRelation) Regulat
 			if strings.HasPrefix(p, "/community/") {
 				hasCommunity = true
 			}
-			if strings.HasPrefix(p, "/program/") {
+			if strings.HasPrefix(p, "/project/") {
 				hasProgram = true
 			}
 			if strings.HasPrefix(p, "/media/") {

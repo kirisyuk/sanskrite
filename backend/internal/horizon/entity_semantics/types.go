@@ -9,33 +9,41 @@ import (
 type EntityTypeKey string
 
 const (
-	EntityTypeOrganization         EntityTypeKey = "ORGANIZATION"
-	EntityTypeGov                  EntityTypeKey = "GOV"
-	EntityTypePerson               EntityTypeKey = "PERSON"
-	EntityTypeMarket               EntityTypeKey = "MARKET"
-	EntityTypeProduct              EntityTypeKey = "PRODUCT"
-	EntityTypeFacility              EntityTypeKey = "FACILITY"
-	EntityTypeGeoRegion             EntityTypeKey = "GEO_REGION"
-	EntityTypeProgram               EntityTypeKey = "PROGRAM"
-	EntityTypeCommunity       EntityTypeKey = "COMMUNITY"
-	EntityTypeCommunityDynasty EntityTypeKey = "COMMUNITY_DYNASTY"
-	EntityTypeCommunityTribe  EntityTypeKey = "COMMUNITY_TRIBE"
-	EntityTypeDeposit               EntityTypeKey = "deposit"
-	EntityTypeDecisionPoint         EntityTypeKey = "DECISION_POINT"
-	EntityTypeMechanism             EntityTypeKey = "MECHANISM"
-	EntityTypeDomain                EntityTypeKey = "DOMAIN"
-	EntityTypeAffectedZone          EntityTypeKey = "AFFECTED_ZONE"
-	EntityTypeSupplyLink            EntityTypeKey = "supply_link"
-	EntityTypeTrack                 EntityTypeKey = "TRACK"
-	EntityTypeGeneral               EntityTypeKey = "GENERAL"
+	EntityTypeOrganization     EntityTypeKey = "org"
+	EntityTypeGov              EntityTypeKey = "gov"
+	EntityTypePerson           EntityTypeKey = "person"
+	EntityTypeMarket           EntityTypeKey = "market"
+	EntityTypeProduct          EntityTypeKey = "product"
+	EntityTypeSite             EntityTypeKey = "site"
+	EntityTypeGeo              EntityTypeKey = "geo"
+	EntityTypeProject          EntityTypeKey = "project"
+	EntityTypeCommunity        EntityTypeKey = "community"
+	EntityTypeCommunityDynasty EntityTypeKey = "community_dynasty"
+	EntityTypeCommunityTribe   EntityTypeKey = "community_tribe"
+	EntityTypeDeposit          EntityTypeKey = "deposit"
+	EntityTypeDecision         EntityTypeKey = "decision"
+	EntityTypeMechanism        EntityTypeKey = "mechanism"
+	EntityTypeDomain           EntityTypeKey = "domain"
+	EntityTypeAffectedZone     EntityTypeKey = "affected_zone"
+	EntityTypeSupplyLink       EntityTypeKey = "supply_link"
+	EntityTypeMobileAsset      EntityTypeKey = "mobile_asset"
+	EntityTypeGeneral          EntityTypeKey = "general"
+
+	// Back-compat aliases inside runtime code; prompts and new logic should use
+	// the AH-facing names above.
+	EntityTypeFacility      = EntityTypeSite
+	EntityTypeGeoRegion     = EntityTypeGeo
+	EntityTypeProgram       = EntityTypeProject
+	EntityTypeDecisionPoint = EntityTypeDecision
+	EntityTypeTrack         = EntityTypeMobileAsset
 )
 
 // MissingInfoTrigger defines when a MissingInfoRule fires.
 const (
-	TriggerRelationMissing   = "relation_missing"
-	TriggerFieldEmpty        = "field_empty"
+	TriggerRelationMissing    = "relation_missing"
+	TriggerFieldEmpty         = "field_empty"
 	TriggerRelationCountBelow = "relation_count_below"
-	TriggerSeed              = "seed"
+	TriggerSeed               = "seed"
 )
 
 // MissingInfoRule is a structured rule for generating missingInfo questions.

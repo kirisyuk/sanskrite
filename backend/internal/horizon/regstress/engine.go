@@ -163,7 +163,7 @@ func isRegulatoryTerminalPath(path string) bool {
 		strings.HasPrefix(path, "/market/") ||
 		strings.HasPrefix(path, "/product/") ||
 		strings.HasPrefix(path, "/community/") ||
-		strings.HasPrefix(path, "/program/") ||
+		strings.HasPrefix(path, "/project/") ||
 		strings.HasPrefix(path, "/media/") ||
 		strings.HasPrefix(path, "/loc/")
 }

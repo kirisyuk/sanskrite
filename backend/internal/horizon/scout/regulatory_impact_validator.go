@@ -48,29 +48,29 @@ func regulatoryImpactEdgeStructurallyValid(rel agents.DiscoveredRelation) (bool,
 	case ah.RelationNameRegulates:
 		return prefixAny(src, "/gov/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/"), "regulates"
 	case DependencyType("controls_access"):
-		return prefixAny(src, "/gov/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/", "/program/"), "controls_access"
+		return prefixAny(src, "/gov/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/", "/project/"), "controls_access"
 	case ah.RelationNameGatekeeps:
 		return prefixAny(src, "/gov/", "/org/") && strings.HasPrefix(tgt, "/decision/"), "gatekeeps_decision"
 	case ah.RelationNameWields:
 		return strings.HasPrefix(src, "/decision/") && strings.HasPrefix(tgt, "/mechanism/"), "uses_mechanism"
 	case DependencyType("applies_to"):
-		return strings.HasPrefix(src, "/mechanism/") && prefixAny(tgt, "/market/", "/org/", "/fac/", "/product/", "/community/", "/program/"), "applies_to"
+		return strings.HasPrefix(src, "/mechanism/") && prefixAny(tgt, "/market/", "/org/", "/fac/", "/product/", "/community/", "/project/"), "applies_to"
 	case ah.RelationNameImposes:
-		return prefixAny(src, "/mechanism/", "/gov/", "/program/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/", "/program/"), "imposes_condition"
+		return prefixAny(src, "/mechanism/", "/gov/", "/project/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/", "/project/"), "imposes_condition"
 	case DependencyType("in_geo_scope"):
-		return prefixAny(src, "/mechanism/", "/decision/", "/program/", "/gov/") && prefixAny(tgt, "/loc/"), "in_geo_scope"
+		return prefixAny(src, "/mechanism/", "/decision/", "/project/", "/gov/") && prefixAny(tgt, "/loc/"), "in_geo_scope"
 	case ah.RelationNameDisrupts:
-		return prefixAny(src, "/mechanism/", "/program/", "/gov/", "/community/", "/market/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/", "/program/", "/loc/", "/media/"), "affects"
+		return prefixAny(src, "/mechanism/", "/project/", "/gov/", "/community/", "/market/") && prefixAny(tgt, "/org/", "/fac/", "/market/", "/product/", "/community/", "/project/", "/loc/", "/media/"), "affects"
 	case ah.RelationNameInfluences:
 		return src != "" && tgt != "", "influences"
 	case ah.RelationNameOperates:
-		return prefixAny(src, "/gov/", "/org/") && prefixAny(tgt, "/program/", "/org/"), "administers"
+		return prefixAny(src, "/gov/", "/org/") && prefixAny(tgt, "/project/", "/org/"), "administers"
 	case DependencyType("has_subgroup"):
 		return strings.HasPrefix(src, "/community/") && strings.HasPrefix(tgt, "/community/"), "has_subgroup"
 	case ah.RelationNameMemberOf:
 		return strings.HasPrefix(src, "/person/") && strings.HasPrefix(tgt, "/community/"), "member_of"
 	case DependencyType("affiliated_with"):
-		return prefixAny(src, "/community/", "/person/") && prefixAny(tgt, "/org/", "/gov/", "/program/"), "affiliated_with"
+		return prefixAny(src, "/community/", "/person/") && prefixAny(tgt, "/org/", "/gov/", "/project/"), "affiliated_with"
 	case DependencyType("operates_via"):
 		return prefixAny(src, "/community/", "/org/") && prefixAny(tgt, "/media/"), "operates_via"
 	default:

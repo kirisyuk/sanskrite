@@ -133,7 +133,7 @@ func deriveBusinessTagPaths(fragmentType string, canonicalPath string, marketSeg
 	ft := strings.ToUpper(strings.TrimSpace(fragmentType))
 	cp := strings.TrimSpace(strings.ToLower(canonicalPath))
 	switch ft {
-	case "ORGANIZATION":
+	case "ORGANIZATION", "ORG":
 		add("/biz/function/operator")
 		add("/biz/economic-role/corporate-entity")
 		if strings.HasPrefix(cp, "/gov/") {
@@ -141,7 +141,7 @@ func deriveBusinessTagPaths(fragmentType string, canonicalPath string, marketSeg
 			add("/biz/economic-role/public-institution")
 			add("/biz/risk-exposure/policy-regulatory")
 		}
-	case "FACILITY":
+	case "FACILITY", "SITE":
 		add("/biz/function/production-node")
 		add("/biz/economic-role/infrastructure-asset")
 		add("/biz/risk-exposure/operational-disruption")
@@ -153,7 +153,7 @@ func deriveBusinessTagPaths(fragmentType string, canonicalPath string, marketSeg
 		add("/biz/function/demand-pool")
 		add("/biz/economic-role/market-space")
 		add("/biz/value-pool/market-liquidity")
-	case "PROGRAM":
+	case "PROGRAM", "PROJECT":
 		add("/biz/function/policy-instrument")
 		add("/biz/economic-role/public-program")
 	}

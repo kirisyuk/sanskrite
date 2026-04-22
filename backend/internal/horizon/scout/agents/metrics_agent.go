@@ -287,7 +287,7 @@ func (a *MetricsAgent) ComputeState(
 
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeContentAnalysis,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
 			MinCapabilityScore:       5,

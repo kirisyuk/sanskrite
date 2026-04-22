@@ -275,7 +275,7 @@ func isBusinessPath(path string) bool {
 	return strings.HasPrefix(path, "/fac/") ||
 		strings.HasPrefix(path, "/market/") ||
 		strings.HasPrefix(path, "/deposit/") ||
-		strings.HasPrefix(path, "/program/")
+		strings.HasPrefix(path, "/project/")
 }
 
 func isFacilityPath(path string) bool {

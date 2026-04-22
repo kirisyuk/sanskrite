@@ -28,9 +28,17 @@ func EvaluateMissingInfoRules(
 ) []string {
 	relSet := make(map[string]bool)
 	for _, rt := range relationTypes {
-		rt = strings.TrimSpace(strings.ToUpper(rt))
-		if rt != "" {
-			relSet[rt] = true
+		rt = strings.TrimSpace(rt)
+		if rt == "" {
+			continue
+		}
+		if rel, ok := ah.NormalizeRelation(rt); ok {
+			relSet[string(rel)] = true
+			continue
+		}
+		if dec, ok := models.NormalizeRelationName(rt); ok && !dec.Dropped && dec.Relation != "" {
+			relSet[string(dec.Relation)] = true
+			continue
 		}
 	}
 	domainModes = taxonomy.NormalizeDomainModes(domainModes)
@@ -60,17 +68,17 @@ func EvaluateMissingInfoRules(
 				// All must be missing
 				allMissing := true
 				for _, rt := range r.RelationTypes {
-					if relSet[strings.ToUpper(rt)] {
+					if relSet[normalizeRuleRelationType(rt)] {
 						allMissing = false
 						break
 					}
 				}
 				fires = allMissing
 			} else {
-				fires = !relSet[strings.ToUpper(r.RelationType)]
+				fires = !relSet[normalizeRuleRelationType(r.RelationType)]
 			}
 			// EXTRACTS_FROM for supply chain: only when path suggests extractive
-			if fires && r.RelationType == "EXTRACTS_FROM" && r.DomainMode == taxonomy.DomainModeSupplyChain {
+			if fires && normalizeRuleRelationType(r.RelationType) == "extracts_from" && r.DomainMode == taxonomy.DomainModeSupplyChain {
 				path := targetPath
 				if fragment != nil && fragment.CanonicalPath != "" {
 					path = fragment.CanonicalPath
@@ -103,6 +111,20 @@ func EvaluateMissingInfoRules(
 		out = append(out, q)
 	}
 	return out
+}
+
+func normalizeRuleRelationType(raw string) string {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return ""
+	}
+	if rel, ok := ah.NormalizeRelation(raw); ok {
+		return string(rel)
+	}
+	if dec, ok := models.NormalizeRelationName(raw); ok && !dec.Dropped && dec.Relation != "" {
+		return string(dec.Relation)
+	}
+	return strings.ToLower(raw)
 }
 
 // isFragmentFieldEmpty returns true if the field at fieldPath is empty.

@@ -32,10 +32,10 @@ func TestInferClassSubtypeFromCanonicalPath_Legacy(t *testing.T) {
 			wantSubtype: "",
 		},
 		{
-			name:        "program -> org/program",
-			path:        "/program/oil-for-food",
-			wantClass:   ah.FragmentClassOrg,
-			wantSubtype: "program",
+			name:        "project -> project",
+			path:        "/project/global/oil-for-food",
+			wantClass:   ah.FragmentClassProject,
+			wantSubtype: "",
 		},
 		{
 			name:        "media -> org/media_channel",
@@ -83,4 +83,3 @@ func TestInferClassSubtypeFromCanonicalPath_Legacy(t *testing.T) {
 		})
 	}
 }
-

@@ -541,7 +541,7 @@ func (p *SupplyChainParser) createTransportFacilityFragment(canonicalPath string
 	}
 	return &models.HorizonFragment{
 		CanonicalPath: canonicalPath,
-		Class:          ah.FragmentClassSite,
+		Class:         ah.FragmentClassSite,
 		Labels:        map[string]string{"en": name},
 		Identifiers:   identifiers,
 		State:         make(map[string]models.MetricValue),
@@ -642,8 +642,8 @@ func (p *SupplyChainParser) inferFragmentType(nodeType string, canonicalPath str
 		return ah.FragmentClassSite
 	case strings.HasPrefix(canonicalPath, "/product/"):
 		return ah.FragmentClassProduct
-	case strings.HasPrefix(canonicalPath, "/program/"):
-		return ah.FragmentClassOrg
+	case strings.HasPrefix(canonicalPath, "/project/"):
+		return ah.FragmentClassProject
 	case strings.HasPrefix(canonicalPath, "/market/"):
 		return ah.FragmentClassMarket
 	case strings.HasPrefix(canonicalPath, "/loc/"):

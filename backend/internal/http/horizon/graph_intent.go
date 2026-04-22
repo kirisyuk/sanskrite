@@ -391,7 +391,7 @@ Rules:
   "create": {
     "groupings": [],
     "nodes": [
-      {"tempId": "n1", "label": "Entity A", "type": "ORGANIZATION", "canonicalPathHint": "/org/us/entity-a-inc"},
+      {"tempId": "n1", "label": "Entity A", "type": "ORG", "canonicalPathHint": "/org/us/entity-a-inc"},
       {"tempId": "n2", "label": "Entity B", "type": "PERSON", "canonicalPathHint": "/person/entity-b"}
     ],
     "edges": [
@@ -2393,8 +2393,8 @@ func (e *graphIntentApplyExecutor) normalizeCanonicalPathHint(spec horizonmodels
 	// equivalent (their AH home is a (Class, Subtype) tuple). Match the raw
 	// literal so wire payloads keep deterministic canonical_path scaffolding
 	// during the migration window.
-	case "PROGRAM":
-		return taxonomy.ProgramCanonicalPath("", label)
+	case "PROGRAM", string(ah.FragmentClassProject):
+		return taxonomy.ProjectCanonicalPath("", label)
 	case string(ah.FragmentClassMarket):
 		return taxonomy.MarketCanonicalPath("global", label)
 	case string(ah.FragmentClassPerson):
@@ -2406,7 +2406,7 @@ func (e *graphIntentApplyExecutor) normalizeCanonicalPathHint(spec horizonmodels
 	case "SPHERE":
 		return taxonomy.JoinPath("sphere", slug)
 	case string(ah.FragmentClassEvidence):
-		return taxonomy.JoinPath("event", slug)
+		return taxonomy.JoinPath("evidence", slug)
 	case string(ah.FragmentClassDecision):
 		return taxonomy.JoinPath("decision", "general", slug)
 	case string(ah.FragmentClassMechanism):

@@ -273,7 +273,7 @@ func inferFragmentTypeFromPath(path string) FragmentType {
 	switch {
 	case strings.HasPrefix(path, "/product/"):
 		return FragmentTypeProduct
-	case strings.HasPrefix(path, "/program/"):
+	case strings.HasPrefix(path, "/project/"):
 		return FragmentTypeProgram
 	case strings.HasPrefix(path, "/market/"):
 		return FragmentTypeMarket
@@ -281,7 +281,7 @@ func inferFragmentTypeFromPath(path string) FragmentType {
 		return FragmentTypeFacility
 	case strings.HasPrefix(path, "/loc/"), strings.HasPrefix(path, "/region/"):
 		return FragmentTypeGeoRegion
-	case strings.HasPrefix(path, "/event/"):
+	case strings.HasPrefix(path, "/evidence/"):
 		return FragmentTypeEvent
 	case strings.HasPrefix(path, "/person/"):
 		return FragmentTypePerson
@@ -600,7 +600,7 @@ func inferPlannerPriorityTier(canonicalPath string, deferred bool, supplyChainMo
 	switch {
 	case strings.HasPrefix(cp, "/person/"), strings.HasPrefix(cp, "/org/"), strings.HasPrefix(cp, "/gov/"):
 		return "high"
-	case strings.HasPrefix(cp, "/product/"), strings.HasPrefix(cp, "/fac/"), strings.HasPrefix(cp, "/market/"), strings.HasPrefix(cp, "/program/"):
+	case strings.HasPrefix(cp, "/product/"), strings.HasPrefix(cp, "/fac/"), strings.HasPrefix(cp, "/market/"), strings.HasPrefix(cp, "/project/"):
 		return "normal"
 	default:
 		return "low"
@@ -2426,7 +2426,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 					switch {
 					case strings.HasPrefix(p, "/product/"):
 						ft = FragmentTypeProduct
-					case strings.HasPrefix(p, "/program/"):
+					case strings.HasPrefix(p, "/project/"):
 						ft = FragmentTypeProgram
 					case strings.HasPrefix(p, "/market/"):
 						ft = FragmentTypeMarket
@@ -2434,7 +2434,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 						ft = FragmentTypeFacility
 					case strings.HasPrefix(p, "/loc/") || strings.HasPrefix(p, "/region/"):
 						ft = FragmentTypeGeoRegion
-					case strings.HasPrefix(p, "/event/"):
+					case strings.HasPrefix(p, "/evidence/"):
 						ft = FragmentTypeEvent
 					case strings.HasPrefix(p, "/person/"):
 						ft = FragmentTypePerson
@@ -2471,7 +2471,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 				switch {
 				case strings.HasPrefix(inputPath, "/product/"):
 					fragmentType = FragmentTypeProduct
-				case strings.HasPrefix(inputPath, "/program/"):
+				case strings.HasPrefix(inputPath, "/project/"):
 					fragmentType = FragmentTypeProgram
 				case strings.HasPrefix(inputPath, "/market/"):
 					fragmentType = FragmentTypeMarket
@@ -2479,7 +2479,7 @@ func (s *LensService) UpdateLens(ctx context.Context, lens *models.Lens) error {
 					fragmentType = FragmentTypeFacility
 				case strings.HasPrefix(inputPath, "/loc/") || strings.HasPrefix(inputPath, "/region/"):
 					fragmentType = FragmentTypeGeoRegion
-				case strings.HasPrefix(inputPath, "/event/"):
+				case strings.HasPrefix(inputPath, "/evidence/"):
 					fragmentType = FragmentTypeEvent
 				case strings.HasPrefix(inputPath, "/org/"):
 					fragmentType = FragmentTypeOrganization

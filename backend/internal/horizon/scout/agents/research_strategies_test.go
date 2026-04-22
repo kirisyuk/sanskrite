@@ -626,7 +626,7 @@ func TestSanitizeResearchResultForUnmarshal_StructuralDrift(t *testing.T) {
   ],
   "supplyChains": [
     {
-      "nodes": "/fac/kz/aktau-sea-port -> /program/int/titr-middle-corridor -> /market/eu/all/logistics",
+      "nodes": "/fac/kz/aktau-sea-port -> /project/int/titr-middle-corridor -> /market/eu/all/logistics",
       "confidence": "0.9",
       "reason": 777,
       "transportVia": "/fac/kz/aktau-sea-port"
@@ -649,8 +649,8 @@ func TestSanitizeResearchResultForUnmarshal_StructuralDrift(t *testing.T) {
 	if got := len(rr.SupplyChains[0].Nodes); got != 3 {
 		t.Fatalf("supplyChains[0].nodes=%d, want 3", got)
 	}
-	if rr.SupplyChains[0].Nodes[1].Type != "PROGRAM" {
-		t.Fatalf("node[1].type=%q, want PROGRAM", rr.SupplyChains[0].Nodes[1].Type)
+	if rr.SupplyChains[0].Nodes[1].Type != "PROJECT" {
+		t.Fatalf("node[1].type=%q, want PROJECT", rr.SupplyChains[0].Nodes[1].Type)
 	}
 	if rr.SupplyChains[0].Nodes[2].Type != "MARKET" {
 		t.Fatalf("node[2].type=%q, want MARKET", rr.SupplyChains[0].Nodes[2].Type)

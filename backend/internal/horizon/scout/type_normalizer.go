@@ -129,9 +129,9 @@ func (n *TypeNormalizer) checkPathTypeMismatch(fragment *models.HorizonFragment)
 	// MIGRATION NOTE (AH taxonomy): legacy ah.FragmentClassOrg /
 	// ah.FragmentClassOrg / ah.FragmentClassSite / ah.FragmentClassSite
 	// no longer exist as standalone class values — they collapse onto their
-	// parent class with a Subtype discriminator (org/program, org/media_channel,
+	// parent class with a Subtype discriminator (org/media_channel,
 	// site/deposit, site/supply_link). Class-level prefix-vs-type validation
-	// only catches a fragment landing at /program/ with a non-org class; subtype
+	// only catches a fragment landing at a wrong namespace; subtype
 	// alignment is validated separately by precreate_validator.
 	pathTypeMap := map[string]FragmentType{
 		"/loc/":         ah.FragmentClassGeo,
@@ -140,12 +140,12 @@ func (n *TypeNormalizer) checkPathTypeMismatch(fragment *models.HorizonFragment)
 		"/fac/":         ah.FragmentClassSite,
 		"/deposit/":     ah.FragmentClassSite, // Natural resource deposits → site/deposit
 		"/product/":     ah.FragmentClassProduct,
-		"/program/":     ah.FragmentClassOrg, // → org/program
+		"/project/":     ah.FragmentClassProject,
 		"/market/":      ah.FragmentClassMarket,
-		"/event/":       ah.FragmentClassEvidence,
+		"/evidence/":    ah.FragmentClassEvidence,
 		"/person/":      ah.FragmentClassPerson,
-		"/media/":       ah.FragmentClassOrg, // → org/media_channel
-		"/supply-link/": ah.FragmentClassSite,     // → site/supply_link
+		"/media/":       ah.FragmentClassOrg,  // → org/media_channel
+		"/supply-link/": ah.FragmentClassSite, // → site/supply_link
 	}
 
 	for prefix, expectedType := range pathTypeMap {

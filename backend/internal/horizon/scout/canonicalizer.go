@@ -133,11 +133,10 @@ func PreferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 //
 // Repo/Vertex checks decide which one is stable.
 func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
-	// MIGRATION NOTE (AH taxonomy): legacy FragmentType sentinels for
-	// program/media_channel/deposit/affected_zone collapsed onto parent
-	// AH classes. Recover the subtype hint from the raw type token so the
-	// /program/, /media/, /deposit/, /zone/ namespace candidates remain
-	// distinguishable from a bare /org or /fac path.
+	// MIGRATION NOTE (AH taxonomy): legacy subtype sentinels still arrive on
+	// some read-side paths. Recover the subtype hint from the raw type token so
+	// project/media/deposit/zone candidates remain distinguishable from a bare
+	// /org or /fac path.
 	t, subtype, _ := models.NormalizeFragmentClassName(rel.TargetType, "")
 	short := strings.TrimSpace(rel.TargetShortName)
 	if short == "" {
@@ -159,7 +158,7 @@ func preferredCanonicalPaths(rel agents.DiscoveredRelation) []string {
 
 	switch {
 	case t == ah.FragmentClassOrg && subtype == "program":
-		return []string{"/program/global/" + slug}
+		return []string{"/project/global/" + slug}
 	case t == ah.FragmentClassOrg && subtype == "media_channel":
 		return []string{"/media/" + slug}
 	case t == ah.FragmentClassOrg:
@@ -337,7 +336,7 @@ func normalizeFragmentTypeHardcoded(s string) FragmentType {
 	case "MECHANISM":
 		return ah.FragmentClassMechanism
 	case "DOMAIN", "SPHERE":
-		// LEGACY (read-side only): both folded to evidence overlays.
+		// LEGACY (read-side only): historical overlays folded to evidence.
 		return ah.FragmentClassEvidence
 	case strings.ToUpper("supply" + "_link"), "SUPPLYLINK":
 		// LEGACY (read-side only): collapsed onto site parent class
@@ -833,14 +832,16 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		// ah.FragmentClassGeo collapsed onto parent classes
 		// (org/site/geo). The class-only switch can no longer assert a single
 		// dedicated prefix for those subtypes, so the org case now allows
-		// /org, /gov, /program, /media; the site case now allows /fac,
-		// /deposit, /supply-link; and the geo case now allows /loc and /zone.
+		// /org, /gov, /media; project is its own class; the site case now allows
+		// /fac, /deposit, /supply-link; and the geo case now allows /loc and /zone.
 		// Subtype-precise prefix validation still happens in
 		// policy.IsCanonicalPathAllowedForType (called via PreCreateValidator).
 		var allowed []string
 		switch relType {
 		case ah.FragmentClassOrg:
-			allowed = []string{"/org/", "/gov/", "/program/", "/media/"}
+			allowed = []string{"/org/", "/gov/", "/media/"}
+		case ah.FragmentClassProject:
+			allowed = []string{"/project/"}
 		case ah.FragmentClassSite:
 			allowed = []string{"/fac/", "/deposit/", "/supply-link/"}
 		case ah.FragmentClassProduct:
@@ -850,7 +851,7 @@ func (e *ScoutEngine) resolveCanonicalPath(ctx context.Context, rel agents.Disco
 		case ah.FragmentClassGeo:
 			allowed = []string{"/loc/", "/zone/"}
 		case ah.FragmentClassEvidence:
-			allowed = []string{"/event/", "/domain/", "/sphere/"}
+			allowed = []string{"/evidence/"}
 		case ah.FragmentClassPerson:
 			allowed = []string{"/person/"}
 		case ah.FragmentClassCommunity:
@@ -992,8 +993,9 @@ func canonicalPathMatchesType(canonicalPath string, relType FragmentType) bool {
 	case ah.FragmentClassOrg:
 		return strings.HasPrefix(cp, "/org/") ||
 			strings.HasPrefix(cp, "/gov/") ||
-			strings.HasPrefix(cp, "/program/") ||
 			strings.HasPrefix(cp, "/media/")
+	case ah.FragmentClassProject:
+		return strings.HasPrefix(cp, "/project/")
 	case ah.FragmentClassSite:
 		return strings.HasPrefix(cp, "/fac/") ||
 			strings.HasPrefix(cp, "/deposit/") ||
@@ -1005,9 +1007,7 @@ func canonicalPathMatchesType(canonicalPath string, relType FragmentType) bool {
 	case ah.FragmentClassGeo:
 		return strings.HasPrefix(cp, "/loc/") || strings.HasPrefix(cp, "/zone/")
 	case ah.FragmentClassEvidence:
-		return strings.HasPrefix(cp, "/event/") ||
-			strings.HasPrefix(cp, "/domain/") ||
-			strings.HasPrefix(cp, "/sphere/")
+		return strings.HasPrefix(cp, "/evidence/")
 	case ah.FragmentClassPerson:
 		return strings.HasPrefix(cp, "/person/")
 	case ah.FragmentClassCommunity:
@@ -1125,10 +1125,10 @@ RULES:
       - "Battery Cell" -> /product/component/electronic/manufacturing/battery-cell
       - "Electric Vehicle" -> /product/finished/mechanical/assembly/electric-vehicle
     - If category/type/stage cannot be determined, still output /product/{category}/{type}/{stage}/{slug} with your best classification
-  - PROGRAM:
-    - Use /program/{jurisdictionSlug}/{programSlug} (e.g., "Kazakhstan Alem.ai" -> /program/kazakhstan/alem-ai)
+  - PROJECT:
+    - Use /project/{jurisdictionSlug}/{projectSlug} (e.g., "Kazakhstan Alem.ai" -> /project/kazakhstan/alem-ai)
       - jurisdictionSlug can be ISO2, regional token, or "global"/"int"
-      - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /program/gcc/{slug} (NOT /program/na/gcc/{slug})
+      - Regional tokens ALWAYS go in the jurisdiction slot (2nd segment): /project/gcc/{slug} (NOT /project/na/gcc/{slug})
     - If jurisdiction is unknown, use "global" as jurisdiction
   - MARKET:
     - HIERARCHY LEVELS:
@@ -1160,10 +1160,10 @@ RULES:
       - "Iraqi rice production" -> /market/iq/agriculture/crop-production/rice-production (L3)
       - "Global EV batteries" -> /market/global/automotive/ev-batteries
       - "UAE fintech sector" -> /market/ae/finance/fintech
-  - FACILITY:
-    - Use /fac/{geo}/{facilitySlug} (e.g., "TSMC Fab 21 in Taiwan" -> /fac/tw/fab-21)
+  - SITE:
+    - Use /fac/{geo}/{siteSlug} (e.g., "TSMC Fab 21 in Taiwan" -> /fac/tw/fab-21)
     - geo: `+taxonomy.ISO2GeoDescriptionForPrompts()+`
-  - GEO_REGION: MUST be /loc/{country}[/{level1}[/{level2}]]
+  - GEO: MUST be /loc/{country}[/{level1}[/{level2}]]
     - country: `+taxonomy.ISO2GeoDescriptionForPrompts()+`
     - Regional tokens ALWAYS go in the country slot (2nd segment), never at the end:
       - GCC → /loc/gcc (NOT /loc/global/gcc)
@@ -1177,7 +1177,7 @@ RULES:
     - Russia / Moscow Oblast / Moscow: /loc/ru/mos/moscow
     - Brazil / São Paulo / São Paulo: /loc/br/sp/sao-paulo
     - Kazakhstan / Astana: /loc/kz/astana
-  - EVENT: /event/{lowercase-slug}
+  - EVIDENCE: /evidence/{lowercase-slug}
   - COMMUNITY: /community/{geo}/{type}/{slug}
     - geo: `+taxonomy.ISO2GeoDescriptionForPrompts()+`
     - Regional tokens ALWAYS go in the geo slot (2nd segment): /community/gcc/{type}/{slug} (NOT /community/na/{type}/gcc)
@@ -1208,16 +1208,16 @@ RULES:
   - canonicalPath MUST NOT start with "/discovered/" (will be rejected)
   - canonicalPath MUST match expected prefix for targetType:
     - ORGANIZATION -> /org/ OR /gov/
-    - FACILITY -> /fac/ (format: /fac/{geo}/{facilitySlug})
-    - GEO_REGION -> /loc/ (strictly enforced)
+    - SITE -> /fac/ (format: /fac/{geo}/{siteSlug})
+    - GEO -> /loc/ (strictly enforced)
     - PRODUCT -> /product/
-    - PROGRAM -> /program/
+    - PROJECT -> /project/
     - MARKET -> /market/
-    - EVENT -> /event/
+    - EVIDENCE -> /evidence/
     - PERSON -> /person/
     - COMMUNITY -> /community/ (format: /community/{geo}/{type}/{slug})
-  - GEO_REGION paths MUST match /loc/{country}[/{level1}[/{level2}]]
-  - GEO_REGION country token MUST be valid
+  - GEO paths MUST match /loc/{country}[/{level1}[/{level2}]]
+  - GEO country token MUST be valid
 - Output only JSON, no markdown, no extra text.
 `, rel.TargetName, rel.TargetLegalName, rel.TargetShortName, rel.TargetType, canonicalRulesBlock)
 }

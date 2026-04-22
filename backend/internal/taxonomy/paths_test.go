@@ -355,11 +355,11 @@ func TestProgramCanonicalPath_JurisdictionNormalization(t *testing.T) {
 		jurisdiction string
 		wantPrefix   string
 	}{
-		{jurisdiction: "us", wantPrefix: "/program/us/"},
-		{jurisdiction: "int", wantPrefix: "/program/int/"},
-		{jurisdiction: "global", wantPrefix: "/program/global/"},
-		{jurisdiction: "eu", wantPrefix: "/program/eu/"},
-		{jurisdiction: "kazakhstan", wantPrefix: "/program/global/"},
+		{jurisdiction: "us", wantPrefix: "/project/us/"},
+		{jurisdiction: "int", wantPrefix: "/project/int/"},
+		{jurisdiction: "global", wantPrefix: "/project/global/"},
+		{jurisdiction: "eu", wantPrefix: "/project/eu/"},
+		{jurisdiction: "kazakhstan", wantPrefix: "/project/global/"},
 	}
 	for _, c := range cases {
 		got := ProgramCanonicalPath(c.jurisdiction, "Alem AI")

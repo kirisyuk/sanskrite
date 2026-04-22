@@ -79,7 +79,7 @@ func (a *StrategicOverlayAgent) ExtractWithGrounding(ctx context.Context, domain
 	verifier := ai.NewSimpleJSONVerifier()
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeKnowledgeSynthesis,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability:        true,
 			SearchGroundingCapability:       true,

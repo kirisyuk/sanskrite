@@ -326,11 +326,11 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantAdministersAndSubsidi
 		t.Fatal("supply-chain persist gate must allow SUBSIDIARY_OF for relevant ownership overlays")
 	}
 	if !IsAllowedSupplyChainRuntimeRelation(
-		"/program/ae/saber",
+		"/project/ae/saber",
 		"/gov/ae/ministry-of-industry-and-advanced-technology",
 		ah.RelationNameOperates,
 	) {
-		t.Fatal("runtime gate must keep reversible PROGRAM -> GOV ADMINISTERS edges so canonicalization can swap them")
+		t.Fatal("runtime gate must keep reversible PROJECT -> GOV ADMINISTERS edges so canonicalization can swap them")
 	}
 	if IsAllowedSupplyChainRuntimeRelation(
 		"/gov/us/department-of-the-navy",
@@ -344,10 +344,10 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantAdministersAndSubsidi
 func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantManagesAndAffects(t *testing.T) {
 	if !IsAllowedSupplyChainRuntimeRelation(
 		"/org/kz/damu-entrepreneurship-development-fund",
-		"/program/kz/business-roadmap-2025",
+		"/project/kz/business-roadmap-2025",
 		ah.RelationNameManagedBy,
 	) {
-		t.Fatal("supply-chain runtime gate must allow MANAGES for org->program overlays")
+		t.Fatal("supply-chain runtime gate must allow MANAGED_BY for org->project overlays")
 	}
 	if !IsAllowedSupplyChainPersistRelation(
 		"/org/kz/damu-entrepreneurship-development-fund",
@@ -357,7 +357,7 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantManagesAndAffects(t *
 		t.Fatal("supply-chain persist gate must allow AFFECTS for org->market overlays")
 	}
 	if !IsAllowedSupplyChainRuntimeRelation(
-		"/program/ae/saber",
+		"/project/ae/saber",
 		"/community/global/professional/conformity-assessment-bodies",
 		ah.RelationNameDisrupts,
 	) {
@@ -381,7 +381,7 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantPolicyImpactOverlays(
 	}{
 		{
 			name:   "influences program to market pricing",
-			source: "/program/kz/digital-footwear-labeling",
+			source: "/project/kz/digital-footwear-labeling",
 			target: "/market/kz/retail/apparel/footwear/pricing",
 			typ:    ah.RelationNameInfluences,
 		},
@@ -417,7 +417,7 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantPolicyImpactOverlays(
 		},
 		{
 			name:   "in geo scope program to geo",
-			source: "/program/ae/saber",
+			source: "/project/ae/saber",
 			target: "/loc/ae",
 			typ:    DependencyType("in_geo_scope"),
 		},
@@ -436,7 +436,7 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantPolicyImpactOverlays(
 		{
 			name:   "partnership overlay from org to program",
 			source: "/org/be/imec",
-			target: "/program/eu/european-chips-act",
+			target: "/project/eu/european-chips-act",
 			typ:    ah.RelationNameJointVentureWith,
 		},
 		{
@@ -448,7 +448,7 @@ func TestIsAllowedSupplyChainRuntimeRelation_AllowsRelevantPolicyImpactOverlays(
 		{
 			name:   "membership overlay from org to program",
 			source: "/org/eu/chips-joint-undertaking",
-			target: "/program/eu/european-chips-act",
+			target: "/project/eu/european-chips-act",
 			typ:    ah.RelationNameMemberOf,
 		},
 		{
@@ -603,7 +603,7 @@ func TestFilterDiscoveredRelationsByDomainModes_SupplyChainDropsNonContractTypes
 		{RelationType: "PARTNERS_WITH", SourceCanonicalPath: "/org/tw/tsmc", TargetCanonicalPath: "/org/eu/partner"},
 		{RelationType: "COMPETES_WITH", SourceCanonicalPath: "/org/de/infineon-technologies", TargetCanonicalPath: "/org/us/competitor"},
 		{RelationType: "OPERATES_VIA", SourceCanonicalPath: "/org/us/wolfspeed", TargetCanonicalPath: "/fac/de/ops-site"},
-		{RelationType: "MEMBER_OF", SourceCanonicalPath: "/org/eu/chips-joint-undertaking", TargetCanonicalPath: "/program/eu/european-chips-act"},
+		{RelationType: "MEMBER_OF", SourceCanonicalPath: "/org/eu/chips-joint-undertaking", TargetCanonicalPath: "/project/eu/european-chips-act"},
 		{RelationType: "INVESTS_IN", SourceCanonicalPath: "/gov/eu/european-commission", TargetCanonicalPath: "/org/de/infineon"},
 		{RelationType: "SUBSIDIARY_OF", SourceCanonicalPath: "/org/us/sub", TargetCanonicalPath: "/org/us/parent"},
 		{RelationType: "ASSOCIATED_WITH", TargetCanonicalPath: "/org/uk/affiliate"},

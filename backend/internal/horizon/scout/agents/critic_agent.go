@@ -220,7 +220,7 @@ func (a *CriticAgent) ValidateStrategicOverlay(
 	verifier := ai.NewSimpleJSONVerifier()
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeContentGeneration,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
 			MinCapabilityScore:       7,
@@ -349,11 +349,11 @@ For MECHANISM:
    - Every mechanism must be used by someone and apply to something
 
 STRATEGIC EDGE TYPE VALIDATION:
-- CONTROLS_ACCESS: source = DECISION_POINT/ORG/GOV/COMMUNITY/PROGRAM, target = ORG/FACILITY/PRODUCT/MARKET/PROGRAM/COMMUNITY
-- IMPOSES_CONDITION: source = MECHANISM/ORG/GOV/COMMUNITY/PROGRAM/DECISION_POINT, target = ORG/FACILITY/PRODUCT/MARKET/PROGRAM/COMMUNITY
-- GATEKEEPS_DECISION: source = ORG/GOV/COMMUNITY/PROGRAM/PERSON, target = DECISION_POINT
-- USES_MECHANISM: source = DECISION_POINT/ORG/GOV/COMMUNITY/PROGRAM, target = MECHANISM (MUST be /mechanism/...)
-- APPLIES_TO: source = MECHANISM, target = ORG/FACILITY/PRODUCT/MARKET/COMMUNITY/PROGRAM
+- CONTROLS_ACCESS: source = DECISION/ORG/GOV/COMMUNITY/PROJECT, target = ORG/SITE/PRODUCT/MARKET/PROJECT/COMMUNITY
+- IMPOSES_CONDITION: source = MECHANISM/ORG/GOV/COMMUNITY/PROJECT/DECISION, target = ORG/SITE/PRODUCT/MARKET/PROJECT/COMMUNITY
+- GATEKEEPS_DECISION: source = ORG/GOV/COMMUNITY/PROJECT/PERSON, target = DECISION
+- USES_MECHANISM: source = DECISION/ORG/GOV/COMMUNITY/PROJECT, target = MECHANISM (MUST be /mechanism/...)
+- APPLIES_TO: source = MECHANISM, target = ORG/SITE/PRODUCT/MARKET/COMMUNITY/PROJECT
 
 CRITICAL: USES_MECHANISM target MUST be /mechanism/... (never /decision/...)
 
@@ -437,8 +437,8 @@ GRAPH SKELETON CONTEXT (from existing system graph; may be incomplete):
 	        - "Resolve canonical product taxonomy for <product>. REQUIRED FORMAT: %s. category∈{%s}; type∈{%s}; stage∈{%s}. For services, use category=service and map service domain/subdomain into {type}/{stage}. Example: %s."
       - If path is /loc/... ensure it is %s; otherwise add a question:
         - "Resolve canonical GEO path for <location>. REQUIRED FORMAT: %s where cc is %s, admin1 is GeoNames admin code or 'na', city is hyphenated English name. Example: %s."
-      - If path is /program/... ensure it is /program/{jurisdictionSlug}/{programSlug} when jurisdiction is known:
-        - "Confirm program jurisdiction and canonicalPath. REQUIRED FORMAT: /program/{jurisdiction}/{slug} where jurisdiction is %s and always goes in the 2nd segment."
+      - If path is /project/... ensure it is /project/{jurisdictionSlug}/{projectSlug} when jurisdiction is known:
+        - "Confirm project jurisdiction and canonicalPath. REQUIRED FORMAT: /project/{jurisdiction}/{slug} where jurisdiction is %s and always goes in the 2nd segment."
       - If path is missing segments (e.g., /org/<slug> or /product/<slug> with no taxonomy), treat it as non-canonical and add the appropriate question.
 `,
 		canonicalRules.Org.Format,
@@ -710,14 +710,14 @@ TASK: Compare the extracted data with the source content and identify any confli
 	    - Orphan mechanisms (no incoming or outgoing edges) are HIGH SEVERITY conflicts.
 
 	  - For strategic relations (CONTROLS_ACCESS, IMPOSES_CONDITION, USES_MECHANISM, APPLIES_TO, GATEKEEPS_DECISION):
-	    - CONTROLS_ACCESS: source MUST be DECISION_POINT or ORGANIZATION/GOV/COMMUNITY/PROGRAM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/PROGRAM/COMMUNITY.
+	    - CONTROLS_ACCESS: source MUST be DECISION or ORG/GOV/COMMUNITY/PROJECT; target MUST be ORG/SITE/PRODUCT/MARKET/PROJECT/COMMUNITY.
 	      - Qualifiers MUST include 'type' (block|enable|delay|monitor). Missing qualifiers = MEDIUM severity conflict.
 	    - IMPOSES_CONDITION: qualifiers MUST include 'type' (cost|compliance|technical) and 'impact'.
-	    - GATEKEEPS_DECISION: source MUST be ORGANIZATION/GOV/COMMUNITY/PROGRAM/PERSON; target MUST be DECISION_POINT.
+	    - GATEKEEPS_DECISION: source MUST be ORG/GOV/COMMUNITY/PROJECT/PERSON; target MUST be DECISION.
 	      - When asking for gatekeeper, ALWAYS request EXPLICIT SOURCE (sourceCanonicalPath) in missingInfo.
-	    - USES_MECHANISM: source MUST be DECISION_POINT/ORGANIZATION/GOV/COMMUNITY/PROGRAM; target MUST be MECHANISM.
+	    - USES_MECHANISM: source MUST be DECISION/ORG/GOV/COMMUNITY/PROJECT; target MUST be MECHANISM.
 	      - When asking for mechanism user (from MECHANISM fragment), ALWAYS request EXPLICIT SOURCE in missingInfo.
-	    - APPLIES_TO: source MUST be MECHANISM; target MUST be ORGANIZATION/FACILITY/PRODUCT/MARKET/COMMUNITY/PROGRAM.
+	    - APPLIES_TO: source MUST be MECHANISM; target MUST be ORG/SITE/PRODUCT/MARKET/COMMUNITY/PROJECT.
 
 Return ONLY valid JSON. Do not include markdown code fences.`, string(extractedJSON), string(relationsJSON), supplyChainBlock, graphContextBlock, sourceContent, specBlock, businessRulesBlock, profileBlock, objectTypeTaskBlock, canonicalValidationBlock, taxonomy.MechanismSlugExamplesString(), relevanceGateBlock)
 }

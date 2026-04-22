@@ -55,7 +55,7 @@ func (a *CriticAgent) ValidateSupplyChainJoins(ctx context.Context, input Supply
 	verifier := ai.NewSimpleJSONVerifier()
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeContentGeneration,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
 			MinCapabilityScore:       7,

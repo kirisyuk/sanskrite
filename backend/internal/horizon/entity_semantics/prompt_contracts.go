@@ -40,7 +40,7 @@ func PromptRelationTargetTypes() []string {
 }
 
 // PromptRelationTargetTypesPipeList returns a prompt-friendly enum string:
-// "ORGANIZATION" | "FACILITY" | ...
+// "org" | "site" | ...
 func PromptRelationTargetTypesPipeList() string {
 	items := PromptRelationTargetTypes()
 	if len(items) == 0 {

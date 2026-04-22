@@ -277,7 +277,7 @@ func checkPolicyImpactInvariants(relations []DiscoveredRelation) []string {
 		default:
 			continue
 		}
-		if strings.HasPrefix(src, "/gov/") || strings.HasPrefix(src, "/org/") || strings.HasPrefix(src, "/community/") || strings.HasPrefix(src, "/program/") {
+		if strings.HasPrefix(src, "/gov/") || strings.HasPrefix(src, "/org/") || strings.HasPrefix(src, "/community/") || strings.HasPrefix(src, "/project/") {
 			hasSource = true
 			seeds[src] = struct{}{}
 		}
@@ -302,7 +302,7 @@ func checkPolicyImpactInvariants(relations []DiscoveredRelation) []string {
 		if hasPolicyAffectedPath(tgt) {
 			hasAffected = true
 		}
-		if isPolicyTransmissionEdge(rt) || strings.HasPrefix(tgt, "/community/") || strings.HasPrefix(tgt, "/media/") || strings.HasPrefix(tgt, "/program/") {
+		if isPolicyTransmissionEdge(rt) || strings.HasPrefix(tgt, "/community/") || strings.HasPrefix(tgt, "/media/") || strings.HasPrefix(tgt, "/project/") {
 			hasTransmission = true
 		}
 		adj[src] = append(adj[src], tgt)
@@ -382,7 +382,7 @@ func collectPolicyCriticalNodes(relations []DiscoveredRelation) map[string]struc
 			case strings.HasPrefix(p, "/decision/"),
 				strings.HasPrefix(p, "/mechanism/"),
 				strings.HasPrefix(p, "/community/"),
-				strings.HasPrefix(p, "/program/"),
+				strings.HasPrefix(p, "/project/"),
 				strings.HasPrefix(p, "/media/"),
 				strings.HasPrefix(p, "/loc/"):
 				if p != "" {
@@ -401,7 +401,7 @@ func hasPolicyAffectedPath(p string) bool {
 		strings.HasPrefix(p, "/market/") ||
 		strings.HasPrefix(p, "/product/") ||
 		strings.HasPrefix(p, "/community/") ||
-		strings.HasPrefix(p, "/program/") ||
+		strings.HasPrefix(p, "/project/") ||
 		strings.HasPrefix(p, "/media/") ||
 		strings.HasPrefix(p, "/loc/")
 }

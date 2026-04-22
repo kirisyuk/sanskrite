@@ -478,7 +478,7 @@ func (a *ResearchAgent) runStepPrompt(ctx context.Context, prompt string) ([]byt
 	verifier := ai.NewSimpleJSONVerifier()
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeKnowledgeSynthesis,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability:        true,
 			SearchGroundingCapability:       true,

@@ -48,8 +48,8 @@ type DiscoveredRelation struct {
 	TargetLegalName string `json:"targetLegalName,omitempty"`
 	// TargetShortName is the normalized "base name" without ownership suffix (e.g., "Tesla").
 	TargetShortName string `json:"targetShortName,omitempty"`
-	// IMPORTANT: must match Horizon FragmentType enum values (not human words):
-	// ORGANIZATION | FACILITY | GEO_REGION | PRODUCT | EVENT | PERSON
+	// IMPORTANT: must match AH fragment classes:
+	// org | site | geo | product | evidence | person | market | project | community | decision | mechanism
 	TargetType   string  `json:"targetType"`
 	RelationType string  `json:"relationType"` // SUPPLIES_TO, LOCATED_IN, OWNS, COMPETES_WITH
 	Reason       string  `json:"reason"`
@@ -259,7 +259,7 @@ func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, conte
 
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeContentGeneration,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability:        true,
 			SearchGroundingCapability:       true,
@@ -386,9 +386,8 @@ func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, conte
 			scoutResult.Fragment.Class = ah.FragmentClassOrg
 		case strings.Contains(targetCanonicalPath, "/product/"):
 			scoutResult.Fragment.Class = ah.FragmentClassProduct
-		case strings.Contains(targetCanonicalPath, "/program/"):
-			scoutResult.Fragment.Class = ah.FragmentClassOrg
-			scoutResult.Fragment.Subtype = "program"
+		case strings.Contains(targetCanonicalPath, "/project/"):
+			scoutResult.Fragment.Class = ah.FragmentClassProject
 		case strings.Contains(targetCanonicalPath, "/market/"):
 			scoutResult.Fragment.Class = ah.FragmentClassMarket
 		case strings.Contains(targetCanonicalPath, "/fac/"):
@@ -398,7 +397,7 @@ func (a *ScoutAgent) ExtractFragmentDataWithGrounding(ctx context.Context, conte
 			scoutResult.Fragment.Subtype = "deposit"
 		case strings.Contains(targetCanonicalPath, "/loc/") || strings.Contains(targetCanonicalPath, "/region/"):
 			scoutResult.Fragment.Class = ah.FragmentClassGeo
-		case strings.Contains(targetCanonicalPath, "/event/"):
+		case strings.Contains(targetCanonicalPath, "/evidence/"):
 			scoutResult.Fragment.Class = ah.FragmentClassEvidence
 		default:
 			scoutResult.Fragment.Class = ah.FragmentClassOrg

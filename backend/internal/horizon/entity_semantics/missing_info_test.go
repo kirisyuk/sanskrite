@@ -33,7 +33,7 @@ func TestEvaluateMissingInfoRules_TriggerSeed(t *testing.T) {
 
 func TestEvaluateMissingInfoRules_TriggerRelationMissing(t *testing.T) {
 	rules := []MissingInfoRule{
-		{Trigger: TriggerRelationMissing, RelationType: "HAS_MARKET_SEGMENT", QuestionTemplate: "market segments for %s"},
+		{Trigger: TriggerRelationMissing, RelationType: "listed_on", QuestionTemplate: "market segments for %s"},
 	}
 	// No relations: rule fires
 	out := EvaluateMissingInfoRules(nil, nil, rules, []string{taxonomy.DomainModeMarket}, "/market/global/test", EvaluateModeFull)
@@ -42,30 +42,30 @@ func TestEvaluateMissingInfoRules_TriggerRelationMissing(t *testing.T) {
 	}
 
 	// With relation: rule does not fire
-	out2 := EvaluateMissingInfoRules(nil, []string{"HAS_MARKET_SEGMENT"}, rules, []string{taxonomy.DomainModeMarket}, "/market/global/test", EvaluateModeFull)
+	out2 := EvaluateMissingInfoRules(nil, []string{"listed_on"}, rules, []string{taxonomy.DomainModeMarket}, "/market/global/test", EvaluateModeFull)
 	if len(out2) != 0 {
-		t.Errorf("with HAS_MARKET_SEGMENT: expected 0, got %d", len(out2))
+		t.Errorf("with listed_on: expected 0, got %d", len(out2))
 	}
 }
 
 func TestEvaluateMissingInfoRules_TriggerRelationTypes(t *testing.T) {
 	rules := []MissingInfoRule{
-		{Trigger: TriggerRelationMissing, RelationTypes: []string{"PRODUCES", "SUPPLIES_TO"}, DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "products for %s"},
+		{Trigger: TriggerRelationMissing, RelationTypes: []string{"produces", "supplies"}, DomainMode: taxonomy.DomainModeSupplyChain, QuestionTemplate: "products for %s"},
 	}
-	// Neither PRODUCES nor SUPPLIES_TO: fires
+	// Neither produces nor supplies: fires
 	out := EvaluateMissingInfoRules(nil, nil, rules, []string{taxonomy.DomainModeSupplyChain}, "/org/us/acme", EvaluateModeFull)
 	if len(out) != 1 {
 		t.Fatalf("expected 1 (both missing), got %d", len(out))
 	}
 
-	// Only PRODUCES: does not fire (rule requires ALL to be missing; having one satisfies partial coverage)
-	out2 := EvaluateMissingInfoRules(nil, []string{"PRODUCES"}, rules, []string{taxonomy.DomainModeSupplyChain}, "/org/us/acme", EvaluateModeFull)
+	// Only produces: does not fire (rule requires ALL to be missing; having one satisfies partial coverage)
+	out2 := EvaluateMissingInfoRules(nil, []string{"produces"}, rules, []string{taxonomy.DomainModeSupplyChain}, "/org/us/acme", EvaluateModeFull)
 	if len(out2) != 0 {
-		t.Fatalf("PRODUCES only: rule fires when all missing; expected 0, got %d", len(out2))
+		t.Fatalf("produces only: rule fires when all missing; expected 0, got %d", len(out2))
 	}
 
 	// Both present: does not fire
-	out3 := EvaluateMissingInfoRules(nil, []string{"PRODUCES", "SUPPLIES_TO"}, rules, []string{taxonomy.DomainModeSupplyChain}, "/org/us/acme", EvaluateModeFull)
+	out3 := EvaluateMissingInfoRules(nil, []string{"produces", "supplies"}, rules, []string{taxonomy.DomainModeSupplyChain}, "/org/us/acme", EvaluateModeFull)
 	if len(out3) != 0 {
 		t.Errorf("both present: expected 0, got %d", len(out3))
 	}
@@ -113,7 +113,7 @@ func TestEvaluateMissingInfoRules_TriggerRelationCountBelow(t *testing.T) {
 
 func TestEvaluateMissingInfoRules_DomainModeFilter(t *testing.T) {
 	rules := []MissingInfoRule{
-		{Trigger: TriggerRelationMissing, RelationType: "PARTICIPATES_IN", DomainMode: taxonomy.DomainModeMarket, QuestionTemplate: "participants for %s"},
+		{Trigger: TriggerRelationMissing, RelationType: "listed_on", DomainMode: taxonomy.DomainModeMarket, QuestionTemplate: "participants for %s"},
 	}
 	// Market mode active: fires
 	out := EvaluateMissingInfoRules(nil, nil, rules, []string{taxonomy.DomainModeMarket}, "/market/global/test", EvaluateModeFull)

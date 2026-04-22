@@ -88,7 +88,7 @@ func (a *IntentDecomposerAgent) DecomposeWithGrounding(
 
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeKnowledgeSynthesis,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability:        true,
 			SearchGroundingCapability:       true, // ok to use grounded search when available

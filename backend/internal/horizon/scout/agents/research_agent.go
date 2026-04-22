@@ -195,7 +195,7 @@ func (a *ResearchAgent) enrichFragmentWithGroundingMonolith(
 
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeKnowledgeSynthesis,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability:        true,
 			SearchGroundingCapability:       true, // Включаем Search Grounding
@@ -549,7 +549,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 
 	// Add MARKET decomposition block if applicable
 	decompositionBlock := ""
-	if !isDomain && fragment != nil && (fragment.Class == ah.FragmentClassMarket || fragment.IsProgramOrg() || strings.HasPrefix(fragment.CanonicalPath, "/market/") || strings.HasPrefix(fragment.CanonicalPath, "/program/")) {
+	if !isDomain && fragment != nil && (fragment.Class == ah.FragmentClassMarket || fragment.Class == ah.FragmentClassProject || strings.HasPrefix(fragment.CanonicalPath, "/market/") || strings.HasPrefix(fragment.CanonicalPath, "/project/")) {
 		// Find matching decomposition hint
 		var hint *DecompositionHint
 		for i := range decompositionHints {
@@ -559,7 +559,7 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 			}
 		}
 		if hint != nil {
-			decompositionBlock = "MARKET/PROGRAM DECOMPOSITION GUIDANCE:\n"
+			decompositionBlock = "MARKET/PROJECT DECOMPOSITION GUIDANCE:\n"
 			decompositionBlock += "This is an abstract anchor that should be DECOMPOSED into concrete entities.\n"
 			if len(hint.EntityTypes) > 0 {
 				decompositionBlock += fmt.Sprintf("- Target entity types: %s\n", strings.Join(hint.EntityTypes, ", "))
@@ -576,14 +576,14 @@ func (a *ResearchAgent) buildEnrichmentPrompt(fragment *models.HorizonFragment, 
 					decompositionBlock += fmt.Sprintf("  * %s\n", q)
 				}
 			}
-			decompositionBlock += "\nYour PRIMARY goal is to DISCOVER relations to concrete entities (organizations, products, facilities) that constitute this market/program.\n"
+			decompositionBlock += "\nYour PRIMARY goal is to DISCOVER relations to concrete entities (orgs, products, sites) that constitute this market/project.\n"
 			decompositionBlock += "Use the suggested search queries to find real players. Output them as relations with high confidence (0.7+).\n"
 			decompositionBlock += "IMPORTANT: Prefer extracting REAL-WORLD ENTITIES (players) first. If you also find market metrics (TAM/CAGR/HHI/CR4) or market shares, include them in fragment.state / relation.metrics as best-effort.\n\n"
 		} else if originalQuery != "" {
 			// Fallback: generate decomposition guidance from originalQuery
-			decompositionBlock = "MARKET/PROGRAM DECOMPOSITION GUIDANCE:\n"
+			decompositionBlock = "MARKET/PROJECT DECOMPOSITION GUIDANCE:\n"
 			decompositionBlock += fmt.Sprintf("This is an abstract anchor. The user's original query was: \"%s\"\n", originalQuery)
-			decompositionBlock += "Your PRIMARY goal is to DISCOVER relations to concrete entities (organizations, products, facilities) that constitute this market/program.\n"
+			decompositionBlock += "Your PRIMARY goal is to DISCOVER relations to concrete entities (orgs, products, sites) that constitute this market/project.\n"
 			decompositionBlock += "Search for:\n"
 			decompositionBlock += "- Major players (companies, banks, service providers)\n"
 			decompositionBlock += "- Key products or services in this market\n"

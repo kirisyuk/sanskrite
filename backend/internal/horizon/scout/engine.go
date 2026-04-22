@@ -170,7 +170,7 @@ func isHighRiskCanonicalPath(path string) bool {
 		return false
 	}
 	return strings.HasPrefix(path, "/zone/") ||
-		strings.HasPrefix(path, "/event/") ||
+		strings.HasPrefix(path, "/evidence/") ||
 		strings.HasPrefix(path, "/market/") ||
 		strings.HasPrefix(path, "/gov/") ||
 		strings.HasPrefix(path, "/domain/")
@@ -1064,51 +1064,53 @@ func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType D
 	// in the same vocabulary, not via taxonomy.NormalizeRelationType
 	// (which uppercases everything to the wire form).
 	relationType = normalizeToScoutRelation(string(relationType))
-	sourceIsController := strings.HasPrefix(sourcePath, "/org/") || strings.HasPrefix(sourcePath, "/gov/")
+	sourceIsController := strings.HasPrefix(sourcePath, "/org/") ||
+		strings.HasPrefix(sourcePath, "/gov/") ||
+		strings.HasPrefix(sourcePath, "/project/")
 	targetIsOperational := strings.HasPrefix(targetPath, "/org/") || strings.HasPrefix(targetPath, "/fac/") || strings.HasPrefix(targetPath, "/deposit/")
-	targetIsManaged := targetIsOperational || strings.HasPrefix(targetPath, "/program/")
+	targetIsManaged := targetIsOperational || strings.HasPrefix(targetPath, "/project/")
 	sourceOperatesViaChannel := sourceIsController ||
 		strings.HasPrefix(sourcePath, "/community/") ||
 		strings.HasPrefix(sourcePath, "/mechanism/")
 	targetOperatesViaChannel := strings.HasPrefix(targetPath, "/media/") ||
 		strings.HasPrefix(targetPath, "/mechanism/") ||
 		strings.HasPrefix(targetPath, "/fac/") ||
-		strings.HasPrefix(targetPath, "/program/")
+		strings.HasPrefix(targetPath, "/project/")
 	sourceIsCompetitiveActor := strings.HasPrefix(sourcePath, "/org/") ||
 		strings.HasPrefix(sourcePath, "/fac/") ||
 		strings.HasPrefix(sourcePath, "/community/") ||
-		strings.HasPrefix(sourcePath, "/program/") ||
+		strings.HasPrefix(sourcePath, "/project/") ||
 		strings.HasPrefix(sourcePath, "/market/")
 	targetIsCompetitiveActor := strings.HasPrefix(targetPath, "/org/") ||
 		strings.HasPrefix(targetPath, "/fac/") ||
 		strings.HasPrefix(targetPath, "/community/") ||
-		strings.HasPrefix(targetPath, "/program/") ||
+		strings.HasPrefix(targetPath, "/project/") ||
 		strings.HasPrefix(targetPath, "/market/")
 	sourceIsPartnerActor := strings.HasPrefix(sourcePath, "/org/") ||
 		strings.HasPrefix(sourcePath, "/gov/") ||
 		strings.HasPrefix(sourcePath, "/fac/") ||
 		strings.HasPrefix(sourcePath, "/community/") ||
-		strings.HasPrefix(sourcePath, "/program/")
+		strings.HasPrefix(sourcePath, "/project/")
 	targetIsPartnerActor := strings.HasPrefix(targetPath, "/org/") ||
 		strings.HasPrefix(targetPath, "/gov/") ||
 		strings.HasPrefix(targetPath, "/fac/") ||
 		strings.HasPrefix(targetPath, "/community/") ||
-		strings.HasPrefix(targetPath, "/program/")
+		strings.HasPrefix(targetPath, "/project/")
 	sourceIsMemberActor := strings.HasPrefix(sourcePath, "/org/") ||
 		strings.HasPrefix(sourcePath, "/fac/") ||
 		strings.HasPrefix(sourcePath, "/person/") ||
 		strings.HasPrefix(sourcePath, "/community/") ||
-		strings.HasPrefix(sourcePath, "/program/")
+		strings.HasPrefix(sourcePath, "/project/")
 	targetIsMembershipContainer := strings.HasPrefix(targetPath, "/community/") ||
-		strings.HasPrefix(targetPath, "/program/") ||
+		strings.HasPrefix(targetPath, "/project/") ||
 		strings.HasPrefix(targetPath, "/org/")
 	sourceIsInvestor := strings.HasPrefix(sourcePath, "/org/") ||
 		strings.HasPrefix(sourcePath, "/gov/") ||
-		strings.HasPrefix(sourcePath, "/program/") ||
+		strings.HasPrefix(sourcePath, "/project/") ||
 		strings.HasPrefix(sourcePath, "/community/")
 	targetIsInvestable := strings.HasPrefix(targetPath, "/org/") ||
 		strings.HasPrefix(targetPath, "/fac/") ||
-		strings.HasPrefix(targetPath, "/program/")
+		strings.HasPrefix(targetPath, "/project/")
 	sourceIsInfluence := sourceIsController ||
 		strings.HasPrefix(sourcePath, "/person/") ||
 		strings.HasPrefix(sourcePath, "/loc/") ||
@@ -1117,44 +1119,44 @@ func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType D
 		strings.HasPrefix(sourcePath, "/zone/") ||
 		strings.HasPrefix(sourcePath, "/fac/") ||
 		strings.HasPrefix(sourcePath, "/product/") ||
-		strings.HasPrefix(sourcePath, "/program/") ||
+		strings.HasPrefix(sourcePath, "/project/") ||
 		strings.HasPrefix(sourcePath, "/community/")
 	targetIsInfluence := targetIsOperational ||
 		strings.HasPrefix(targetPath, "/loc/") ||
 		strings.HasPrefix(targetPath, "/geo/") ||
 		strings.HasPrefix(targetPath, "/region/") ||
 		strings.HasPrefix(targetPath, "/product/") ||
-		strings.HasPrefix(targetPath, "/program/") ||
+		strings.HasPrefix(targetPath, "/project/") ||
 		strings.HasPrefix(targetPath, "/market/") ||
 		strings.HasPrefix(targetPath, "/sphere/") ||
-		strings.HasPrefix(targetPath, "/event/")
+		strings.HasPrefix(targetPath, "/evidence/")
 	sourceIsDecisionGatekeeper := sourceIsController ||
 		strings.HasPrefix(sourcePath, "/community/") ||
 		strings.HasPrefix(sourcePath, "/person/") ||
-		strings.HasPrefix(sourcePath, "/program/")
+		strings.HasPrefix(sourcePath, "/project/")
 	sourceUsesMechanism := strings.HasPrefix(sourcePath, "/decision/") ||
 		sourceIsController ||
 		strings.HasPrefix(sourcePath, "/community/") ||
-		strings.HasPrefix(sourcePath, "/program/")
+		strings.HasPrefix(sourcePath, "/project/")
 	targetIsMechanism := strings.HasPrefix(targetPath, "/mechanism/")
 	sourceIsConditionImposer := strings.HasPrefix(sourcePath, "/mechanism/") ||
 		sourceUsesMechanism
 	targetIsPolicyEntity := targetIsOperational ||
 		strings.HasPrefix(targetPath, "/product/") ||
 		strings.HasPrefix(targetPath, "/market/") ||
-		strings.HasPrefix(targetPath, "/program/") ||
+		strings.HasPrefix(targetPath, "/project/") ||
 		strings.HasPrefix(targetPath, "/community/")
 	sourceIsGeoScopeOwner := strings.HasPrefix(sourcePath, "/decision/") ||
 		strings.HasPrefix(sourcePath, "/mechanism/") ||
 		sourceIsController ||
-		strings.HasPrefix(sourcePath, "/program/") ||
+		strings.HasPrefix(sourcePath, "/project/") ||
 		strings.HasPrefix(sourcePath, "/market/")
 	targetIsGeoScope := strings.HasPrefix(targetPath, "/loc/") ||
 		strings.HasPrefix(targetPath, "/geo/") ||
 		strings.HasPrefix(targetPath, "/region/") ||
 		strings.HasPrefix(targetPath, "/zone/")
 	sourceIsImpact := sourceIsController ||
-		strings.HasPrefix(sourcePath, "/program/") ||
+		strings.HasPrefix(sourcePath, "/project/") ||
 		strings.HasPrefix(sourcePath, "/decision/") ||
 		strings.HasPrefix(sourcePath, "/mechanism/") ||
 		strings.HasPrefix(sourcePath, "/zone/") ||
@@ -1163,7 +1165,7 @@ func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType D
 		strings.HasPrefix(sourcePath, "/market/")
 	targetIsAffected := targetIsOperational ||
 		strings.HasPrefix(targetPath, "/market/") ||
-		strings.HasPrefix(targetPath, "/program/") ||
+		strings.HasPrefix(targetPath, "/project/") ||
 		strings.HasPrefix(targetPath, "/product/") ||
 		strings.HasPrefix(targetPath, "/community/") ||
 		strings.HasPrefix(targetPath, "/loc/") ||
@@ -1199,7 +1201,7 @@ func allowSupplyChainOverlayByPath(sourcePath, targetPath string, relationType D
 	case DependencyType("in_geo_scope"), ah.RelationNameConstrainedBy:
 		return sourceIsGeoScopeOwner && targetIsGeoScope
 	case ah.RelationNameOperates:
-		targetIsAdministered := targetIsOperational || strings.HasPrefix(targetPath, "/program/") || strings.HasPrefix(targetPath, "/gov/")
+		targetIsAdministered := targetIsOperational || strings.HasPrefix(targetPath, "/project/") || strings.HasPrefix(targetPath, "/gov/")
 		return sourceIsController && targetIsAdministered
 	case ah.RelationNameSubsidiaryOf:
 		sourceIsSubsidiary := strings.HasPrefix(sourcePath, "/org/") || strings.HasPrefix(sourcePath, "/gov/")
@@ -1660,7 +1662,7 @@ func isFacilityQualifierBusinessTargetType(kind facilityQualifierSemantic, targe
 	if targetType == ah.FragmentClassPerson || targetType == ah.FragmentClassCommunity || targetType == ah.FragmentClassEvidence {
 		return false
 	}
-	if targetPathHasAnyPrefix(targetPath, "/person/", "/community/", "/media/", "/event/", "/sphere/", "/domain/", "/decision/", "/mechanism/") {
+	if targetPathHasAnyPrefix(targetPath, "/person/", "/community/", "/media/", "/evidence/", "/sphere/", "/domain/", "/decision/", "/mechanism/") {
 		return false
 	}
 
@@ -1676,7 +1678,7 @@ func isFacilityQualifierBusinessTargetType(kind facilityQualifierSemantic, targe
 		targetType == "" {
 		return true
 	}
-	if targetPathHasAnyPrefix(targetPath, "/org/", "/fac/", "/product/", "/loc/", "/market/", "/deposit/", "/gov/", "/program/") {
+	if targetPathHasAnyPrefix(targetPath, "/org/", "/fac/", "/product/", "/loc/", "/market/", "/deposit/", "/gov/", "/project/") {
 		return true
 	}
 	return false
@@ -4630,8 +4632,8 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 
 		// Choose a sensible default (Class, Subtype) from canonicalPath prefix
 		// (no LLM needed for this deterministic mapping).
-		// Legacy DOMAIN/PROGRAM/MEDIA_CHANNEL fold onto canonical (evidence,
-		// domain_legacy) / (org, program) / (org, media_channel) under AH.
+		// Legacy DOMAIN/MEDIA_CHANNEL fold onto canonical evidence/org under AH;
+		// project is now a first-class class and path family.
 		defaultType := ah.FragmentClassOrg
 		defaultSubtype := ""
 		switch {
@@ -4640,16 +4642,15 @@ func (e *ScoutEngine) ExecuteScoutingJob(ctx context.Context, job *models.Scouti
 			defaultSubtype = "domain_legacy"
 		case strings.HasPrefix(job.TargetCanonicalPath, "/product/"):
 			defaultType = ah.FragmentClassProduct
-		case strings.HasPrefix(job.TargetCanonicalPath, "/program/"):
-			defaultType = ah.FragmentClassOrg
-			defaultSubtype = "program"
+		case strings.HasPrefix(job.TargetCanonicalPath, "/project/"):
+			defaultType = ah.FragmentClassProject
 		case strings.HasPrefix(job.TargetCanonicalPath, "/market/"):
 			defaultType = ah.FragmentClassMarket
 		case strings.HasPrefix(job.TargetCanonicalPath, "/fac/"):
 			defaultType = ah.FragmentClassSite
 		case strings.HasPrefix(job.TargetCanonicalPath, "/loc/") || strings.HasPrefix(job.TargetCanonicalPath, "/region/"):
 			defaultType = ah.FragmentClassGeo
-		case strings.HasPrefix(job.TargetCanonicalPath, "/event/"):
+		case strings.HasPrefix(job.TargetCanonicalPath, "/evidence/"):
 			defaultType = ah.FragmentClassEvidence
 		case strings.HasPrefix(job.TargetCanonicalPath, "/gov/"):
 			// Government bodies are modeled as ORGANIZATION fragments, but use /gov/{iso2}/{slug} paths to avoid collisions.
@@ -6412,13 +6413,13 @@ func (e *ScoutEngine) seedOntologyFromIntent(ctx context.Context, job *models.Sc
 		}
 	}
 
-	// Check if this is an abstract anchor (MARKET/PROGRAM)
+	// Check if this is an abstract anchor (MARKET/PROJECT)
 	isAbstract := strings.HasPrefix(job.TargetCanonicalPath, "/market/") ||
-		strings.HasPrefix(job.TargetCanonicalPath, "/program/")
+		strings.HasPrefix(job.TargetCanonicalPath, "/project/")
 
 	// Guardrail: do NOT run intent decomposition unless we have any intent signal.
 	// This is important to avoid changing behavior for ad-hoc "Scout it" / RefreshFragment calls
-	// that may target MARKET/PROGRAM nodes without any user intent context.
+	// that may target MARKET/PROJECT nodes without any user intent context.
 	hasIntent := focus != "" || len(keywords) > 0 || len(spherePaths) > 0 || originalQuery != "" || len(decompositionHints) > 0
 	if !hasIntent {
 		return nil

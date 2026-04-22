@@ -152,7 +152,7 @@ func regulatoryCascadeDirectAffectedPaths(rels []agents.DiscoveredRelation) []st
 			continue
 		}
 		src := strings.TrimSpace(r.SourceCanonicalPath)
-		if !strings.HasPrefix(src, "/mechanism/") && !strings.HasPrefix(src, "/gov/") && !strings.HasPrefix(src, "/program/") {
+		if !strings.HasPrefix(src, "/mechanism/") && !strings.HasPrefix(src, "/gov/") && !strings.HasPrefix(src, "/project/") {
 			continue
 		}
 		tgt := strings.TrimSpace(r.TargetCanonicalPath)
@@ -164,7 +164,7 @@ func regulatoryCascadeDirectAffectedPaths(rels []agents.DiscoveredRelation) []st
 			strings.HasPrefix(tgt, "/market/") ||
 			strings.HasPrefix(tgt, "/product/") ||
 			strings.HasPrefix(tgt, "/community/") ||
-			strings.HasPrefix(tgt, "/program/") ||
+			strings.HasPrefix(tgt, "/project/") ||
 			strings.HasPrefix(tgt, "/media/") ||
 			strings.HasPrefix(tgt, "/loc/") {
 			seen[tgt] = struct{}{}

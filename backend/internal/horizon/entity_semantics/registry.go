@@ -40,7 +40,7 @@ func ResolveByPath(canonicalPath string, class ah.FragmentClass, subtype string,
 		return EntityTypePerson
 	}
 	if strings.HasPrefix(cp, "/fac/") {
-		return EntityTypeFacility
+		return EntityTypeSite
 	}
 	if strings.HasPrefix(cp, "/deposit/") {
 		return EntityTypeDeposit
@@ -49,7 +49,7 @@ func ResolveByPath(canonicalPath string, class ah.FragmentClass, subtype string,
 		return EntityTypeSupplyLink
 	}
 	if strings.HasPrefix(cp, "/track/") {
-		return EntityTypeTrack
+		return EntityTypeMobileAsset
 	}
 	if strings.HasPrefix(cp, "/community/") {
 		if ct == "dynasty" || subtype == "dynasty" || strings.Contains(cp, "/dynasty/") {
@@ -60,17 +60,14 @@ func ResolveByPath(canonicalPath string, class ah.FragmentClass, subtype string,
 		}
 		return EntityTypeCommunity
 	}
-	if strings.HasPrefix(cp, "/program/") {
-		return EntityTypeProgram
-	}
 	if strings.HasPrefix(cp, "/project/") {
-		return EntityTypeProgram
+		return EntityTypeProject
 	}
 	if strings.HasPrefix(cp, "/loc/") || strings.HasPrefix(cp, "/region/") || strings.HasPrefix(cp, "/geo/") {
-		return EntityTypeGeoRegion
+		return EntityTypeGeo
 	}
 	if strings.HasPrefix(cp, "/decision/") || class == ah.FragmentClassDecision {
-		return EntityTypeDecisionPoint
+		return EntityTypeDecision
 	}
 	if strings.HasPrefix(cp, "/mechanism/") || class == ah.FragmentClassMechanism {
 		return EntityTypeMechanism
@@ -99,9 +96,9 @@ func ResolveByPath(canonicalPath string, class ah.FragmentClass, subtype string,
 		case "supply_link":
 			return EntityTypeSupplyLink
 		}
-		return EntityTypeFacility
+		return EntityTypeSite
 	case ah.FragmentClassMobileAsset:
-		return EntityTypeTrack
+		return EntityTypeMobileAsset
 	case ah.FragmentClassCommunity:
 		if ct == "dynasty" || subtype == "dynasty" || strings.Contains(cp, "/dynasty/") {
 			return EntityTypeCommunityDynasty
@@ -116,19 +113,17 @@ func ResolveByPath(canonicalPath string, class ah.FragmentClass, subtype string,
 		if subtype == "affected_zone" {
 			return EntityTypeAffectedZone
 		}
-		return EntityTypeGeoRegion
+		return EntityTypeGeo
 	case ah.FragmentClassOrg:
 		switch subtype {
 		case "gov":
 			return EntityTypeGov
-		case "program":
-			return EntityTypeProgram
 		}
 		return EntityTypeOrganization
 	case ah.FragmentClassProject:
-		return EntityTypeProgram
+		return EntityTypeProject
 	case ah.FragmentClassDecision:
-		return EntityTypeDecisionPoint
+		return EntityTypeDecision
 	case ah.FragmentClassMechanism:
 		return EntityTypeMechanism
 	}
@@ -157,8 +152,6 @@ func inferFragmentClassFromPath(cp string) (ah.FragmentClass, string) {
 		return ah.FragmentClassOrg, ""
 	case strings.HasPrefix(cp, "/community/"):
 		return ah.FragmentClassCommunity, ""
-	case strings.HasPrefix(cp, "/program/"):
-		return ah.FragmentClassOrg, "program"
 	case strings.HasPrefix(cp, "/project/"):
 		return ah.FragmentClassProject, ""
 	case strings.HasPrefix(cp, "/domain/"):
@@ -173,8 +166,6 @@ func inferFragmentClassFromPath(cp string) (ah.FragmentClass, string) {
 		return ah.FragmentClassPerson, ""
 	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/region/"), strings.HasPrefix(cp, "/geo/"):
 		return ah.FragmentClassGeo, ""
-	case strings.HasPrefix(cp, "/event/"):
-		return ah.FragmentClassEvidence, "event"
 	case strings.HasPrefix(cp, "/media/"):
 		return ah.FragmentClassOrg, "media_channel"
 	case strings.HasPrefix(cp, "/zone/"):
@@ -233,10 +224,10 @@ func ExtractionBlockForPathAndDomainModes(canonicalPath string, class ah.Fragmen
 	}
 	if taxonomy.HasDomainMode(domainModes, taxonomy.DomainModeSupplyChain) {
 		if override := supplyChainExtractionBlockOverrides[def.Key]; override != "" {
-			return override
+			return normalizePromptVocabulary(override)
 		}
 	}
-	return def.ExtractionBlock
+	return normalizePromptVocabulary(def.ExtractionBlock)
 }
 
 // ResearchBlockForPath returns the type-specific research block.
@@ -245,5 +236,5 @@ func ResearchBlockForPath(canonicalPath string, class ah.FragmentClass, subtype 
 	if def == nil {
 		return ""
 	}
-	return def.ResearchBlock
+	return normalizePromptVocabulary(def.ResearchBlock)
 }

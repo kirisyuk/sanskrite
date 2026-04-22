@@ -428,7 +428,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 			return true
 		}
 		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
-		return strings.HasPrefix(cp, "/program/")
+		return strings.HasPrefix(cp, "/project/")
 	}
 	isGovOrOrgNode := func(id string) bool {
 		f := getFragment(id)
@@ -686,7 +686,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 			return true
 		}
 		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
-		return strings.HasPrefix(cp, "/gov/") || strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/program/") || strings.HasPrefix(cp, "/decision/") || strings.HasPrefix(cp, "/mechanism/")
+		return strings.HasPrefix(cp, "/gov/") || strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/project/") || strings.HasPrefix(cp, "/decision/") || strings.HasPrefix(cp, "/mechanism/")
 	}
 
 	controllers := make(map[string]struct{}, len(seedIDs))
@@ -793,7 +793,7 @@ func (h *HorizonHandlers) buildControlCorridor(
 		// Legacy DOMAIN folded to canonical-path /domain/* (no FragmentClass);
 		// Legacy PROGRAM folded into ah.FragmentClassOrg above (subtype=program).
 		cp := strings.ToLower(strings.TrimSpace(f.CanonicalPath))
-		return strings.HasPrefix(cp, "/market/") || strings.HasPrefix(cp, "/domain/") || strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/program/")
+		return strings.HasPrefix(cp, "/market/") || strings.HasPrefix(cp, "/domain/") || strings.HasPrefix(cp, "/org/") || strings.HasPrefix(cp, "/project/")
 	}
 
 	impactedTargets := make(map[string]struct{}, 24)

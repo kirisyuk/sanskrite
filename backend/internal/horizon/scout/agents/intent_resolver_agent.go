@@ -207,7 +207,7 @@ func (a *IntentResolverAgent) ResolveWithContext(ctx context.Context, query stri
 
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeContentAnalysis,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			PreferredModel:            "gemini-3-flash-preview",
 			TextGenerationCapability:  true,

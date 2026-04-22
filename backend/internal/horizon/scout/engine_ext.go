@@ -2131,7 +2131,7 @@ func (e *ScoutEngine) discoverOrgAndFacAnchorsRecursive(
 ) []string {
 	agent := agents.NewIntentDecomposerAgent(e.aiExecutor)
 	opts := agents.DecomposeOptions{
-		IsAbstractAnchor:   strings.HasPrefix(initialAnchor, "/market/") || strings.HasPrefix(initialAnchor, "/program/"),
+		IsAbstractAnchor:   strings.HasPrefix(initialAnchor, "/market/") || strings.HasPrefix(initialAnchor, "/project/"),
 		DecompositionHints: decompositionHints,
 		OriginalQuery:      originalQuery,
 		DomainModes:        []string{taxonomy.DomainModeSupplyChain}, // always supply-chain context

@@ -183,15 +183,15 @@ func inferFragmentTypeFromPath(cp string) ah.FragmentClass {
 	switch {
 	case strings.HasPrefix(cp, "/product/"):
 		return ah.FragmentClassProduct
-	case strings.HasPrefix(cp, "/program/"):
-		return ah.FragmentClassOrg
+	case strings.HasPrefix(cp, "/project/"):
+		return ah.FragmentClassProject
 	case strings.HasPrefix(cp, "/market/"):
 		return ah.FragmentClassMarket
 	case strings.HasPrefix(cp, "/fac/"):
 		return ah.FragmentClassSite
 	case strings.HasPrefix(cp, "/loc/"), strings.HasPrefix(cp, "/region/"):
 		return ah.FragmentClassGeo
-	case strings.HasPrefix(cp, "/event/"):
+	case strings.HasPrefix(cp, "/evidence/"):
 		return ah.FragmentClassEvidence
 	case strings.HasPrefix(cp, "/person/"):
 		return ah.FragmentClassPerson

@@ -49,7 +49,7 @@ func (a *DomainResolverAgent) ResolveWithContext(ctx context.Context, query stri
 
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeContentAnalysis,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability:  true,
 			SearchGroundingCapability: false,

@@ -12,17 +12,17 @@ import (
 // implicitly via the switch in InferClassSubtypeFromCanonicalPath; this var is
 // only used to derive the dual single-class lookup below.
 //
-// Prefixes whose subtype is non-empty correspond to legacy FragmentTypes that
-// collapsed onto a parent AH class (PROGRAM/MEDIA_CHANNEL → org,
-// deposit/supply_link → site, AFFECTED_ZONE → geo, EVENT → evidence).
+// Prefixes whose subtype is non-empty correspond to legacy subtype-carrying
+// families folded under an AH parent class (media_channel → org,
+// deposit/supply_link → site, affected_zone → geo, domain/sphere → evidence).
 // Callers that only need the AH class can use InferFragmentTypeFromCanonicalPath
 // (this discards the subtype hint); callers that need to distinguish, for
 // example, /deposit/ from /fac/ must use InferClassSubtypeFromCanonicalPath.
 
 // InferClassSubtypeFromCanonicalPath returns a best-effort (Class, Subtype)
 // tuple based on canonical path prefix. The subtype hint is non-empty only for
-// the legacy FragmentTypes that fold into a shared parent AH class (program,
-// media_channel, deposit, supply_link, affected_zone, event).
+// historical subtype families that fold into a shared parent AH class
+// (media_channel, deposit, supply_link, affected_zone, domain, sphere).
 //
 // The function is intentionally conservative; unknown / non-canonical paths
 // fall back to (org, ""). Trim and case-fold the input upstream if needed.
@@ -41,8 +41,6 @@ func InferClassSubtypeFromCanonicalPath(path string) horizonmodels.ClassSubtype 
 		return horizonmodels.CS(ah.FragmentClassMechanism, "")
 	case strings.HasPrefix(p, "/product/"):
 		return horizonmodels.CS(ah.FragmentClassProduct, "")
-	case strings.HasPrefix(p, "/program/"):
-		return horizonmodels.CS(ah.FragmentClassOrg, "program")
 	case strings.HasPrefix(p, "/project/"):
 		return horizonmodels.CS(ah.FragmentClassProject, "")
 	case strings.HasPrefix(p, "/market/"):
@@ -51,8 +49,6 @@ func InferClassSubtypeFromCanonicalPath(path string) horizonmodels.ClassSubtype 
 		return horizonmodels.CS(ah.FragmentClassSite, "")
 	case strings.HasPrefix(p, "/loc/"), strings.HasPrefix(p, "/region/"):
 		return horizonmodels.CS(ah.FragmentClassGeo, "")
-	case strings.HasPrefix(p, "/event/"):
-		return horizonmodels.CS(ah.FragmentClassEvidence, "event")
 	case strings.HasPrefix(p, "/person/"):
 		return horizonmodels.CS(ah.FragmentClassPerson, "")
 	case strings.HasPrefix(p, "/media/"):
@@ -83,7 +79,6 @@ func InferClassSubtypeFromCanonicalPath(path string) horizonmodels.ClassSubtype 
 //
 // Behaviour for legacy collapsed types:
 //
-//	/program/     -> org   (subtype=program)
 //	/media/       -> org   (subtype=media_channel)
 //	/deposit/     -> site  (subtype=deposit)
 //	/supply-link/ -> site  (subtype=supply_link)
@@ -92,7 +87,6 @@ func InferClassSubtypeFromCanonicalPath(path string) horizonmodels.ClassSubtype 
 //	/domain/      -> evidence (subtype=domain)
 //	/evidence/    -> evidence
 //	/sphere/      -> evidence (subtype=sphere)
-//	/event/       -> evidence (subtype=event)
 //	/gov/         -> org   (subtype=gov)
 func InferFragmentTypeFromCanonicalPath(path string) FragmentType {
 	return InferClassSubtypeFromCanonicalPath(path).Class

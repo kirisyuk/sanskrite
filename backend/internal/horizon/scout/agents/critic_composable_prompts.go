@@ -37,7 +37,7 @@ func (a *CriticAgent) runValidationPrompt(ctx context.Context, prompt string) (*
 	verifier := ai.NewSimpleJSONVerifier()
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeContentGeneration,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
 			MinCapabilityScore:       7,

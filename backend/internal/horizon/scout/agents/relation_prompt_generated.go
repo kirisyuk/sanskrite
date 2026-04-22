@@ -605,7 +605,7 @@ func generatedDiscoveredRelationSchemaBlock(targetTypeEnum string) string {
   "targetCanonicalPath": "string, REQUIRED",
   "validFrom": "YYYY-MM-DD (optional)",
   "validTo": "YYYY-MM-DD (optional)",
-  "qualifiers": { "edgeModality": "actual|projected|historical|potential", "eventId": "/event/{slug}" },
+  "qualifiers": { "edgeModality": "actual|projected|historical|potential", "eventId": "/evidence/{slug}" },
   "metrics": { "ownership_percent": { "value": 45.0, "unit": "percent", "confidence": 0.9, "observedAt": "YYYY-MM-DD", "provenance": {"sourceIds":["..."], "method":"extracted"} } }
 }`, targetTypeEnum, AllEdgeTypesForPrompt())
 }

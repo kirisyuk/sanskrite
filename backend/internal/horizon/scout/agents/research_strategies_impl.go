@@ -704,7 +704,7 @@ func (a *ResearchAgent) runResearchPromptWithOptions(ctx context.Context, prompt
 	verifier := ai.NewSimpleJSONVerifier()
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeKnowledgeSynthesis,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			PreferredModel:                  strings.TrimSpace(opts.PreferredModel),
 			TextGenerationCapability:        true,
@@ -807,7 +807,7 @@ func (a *ResearchAgent) runSupplyChainScopedObservationPrompt(ctx context.Contex
 	verifier := ai.NewSimpleJSONVerifier()
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeKnowledgeSynthesis,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			PreferredModel:                  strings.TrimSpace(opts.PreferredModel),
 			TextGenerationCapability:        true,
@@ -864,7 +864,7 @@ func (a *ResearchAgent) runSupplyChainPreHotPathPrompt(ctx context.Context, prom
 	verifier := ai.NewSimpleJSONVerifier()
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeKnowledgeSynthesis,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			PreferredModel:                  strings.TrimSpace(opts.PreferredModel),
 			TextGenerationCapability:        true,
@@ -1871,7 +1871,7 @@ func inferCanonicalPathForSupplyChainActor(name, nodeType string) string {
 		return ""
 	}
 	nt := strings.ToUpper(strings.TrimSpace(nodeType))
-	if nt == "ORGANIZATION" || nt == "ORG" {
+	if nt == "ORG" {
 		return "/org/discovered/" + slug
 	}
 	return inferCanonicalPathFromNameAndType(name, nodeType)
@@ -1879,15 +1879,15 @@ func inferCanonicalPathForSupplyChainActor(name, nodeType string) string {
 
 func nodeTypeToPathPrefix(nodeType string) string {
 	switch nodeType {
-	case "FACILITY":
+	case "FACILITY", "SITE":
 		return "/fac/discovered/"
 	case "PRODUCT":
 		return "/product/discovered/"
-	case "PROGRAM":
-		return "/program/discovered/"
+	case "PROGRAM", "PROJECT":
+		return "/project/discovered/"
 	case "MARKET":
 		return "/market/discovered/"
-	case "GEO_REGION":
+	case "GEO_REGION", "GEO":
 		return "/loc/discovered/"
 	case "DEP" + "OSIT":
 		return "/deposit/discovered/"
@@ -1947,7 +1947,7 @@ func repairSupplyChainNodePaths(chains []SupplyChain) {
 			}
 			nodeType := strings.TrimSpace(n.Type)
 			if nodeType == "" {
-				nodeType = "ORGANIZATION"
+				nodeType = "org"
 			}
 			n.CanonicalPath = inferCanonicalPathForSupplyChainActor(name, normalizeSupplyChainNodeType(nodeType))
 		}
@@ -1958,23 +1958,23 @@ func inferSupplyChainNodeTypeFromPath(cp string) string {
 	path := strings.TrimSpace(strings.ToLower(cp))
 	switch {
 	case strings.HasPrefix(path, "/org/"):
-		return "ORGANIZATION"
+		return "ORG"
 	case strings.HasPrefix(path, "/fac/"):
-		return "FACILITY"
+		return "SITE"
 	case strings.HasPrefix(path, "/product/"):
 		return "PRODUCT"
-	case strings.HasPrefix(path, "/program/"):
-		return "PROGRAM"
+	case strings.HasPrefix(path, "/project/"):
+		return "PROJECT"
 	case strings.HasPrefix(path, "/market/"):
 		return "MARKET"
 	case strings.HasPrefix(path, "/loc/"), strings.HasPrefix(path, "/region/"):
-		return "GEO_REGION"
+		return "GEO"
 	case strings.HasPrefix(path, "/deposit/"):
 		return "deposit"
 	case strings.HasPrefix(path, "/community/"):
 		return "COMMUNITY"
 	default:
-		return "ORGANIZATION"
+		return "ORG"
 	}
 }
 
@@ -1984,23 +1984,23 @@ func normalizeSupplyChainNodeType(raw string) string {
 	u := strings.ToUpper(strings.TrimSpace(raw))
 	switch u {
 	case "ORGANIZATION", "ORG":
-		return "ORGANIZATION"
+		return "org"
 	case "FACILITY", "FAC":
-		return "FACILITY"
+		return "site"
 	case "PRODUCT":
-		return "PRODUCT"
+		return "product"
 	case "PROGRAM":
-		return "PROGRAM"
+		return "project"
 	case "MARKET":
-		return "MARKET"
+		return "market"
 	case "GEO_REGION", "GEO", "LOCATION", "LOC", "REGION":
-		return "GEO_REGION"
+		return "geo"
 	case "DEP" + "OSIT":
 		return "deposit"
 	case "COMMUNITY", "NETWORK", "GROUP", "COLLECTIVE":
-		return "COMMUNITY"
+		return "community"
 	default:
-		return "ORGANIZATION"
+		return "org"
 	}
 }
 
@@ -2138,7 +2138,7 @@ func generalResearchCanonicalSupplementBlock() string {
 - For services, use category=service and map service domain/subdomain into {type}/{stage}
 - Markets: prefer /market/{geo}/{domain}/{vertical}; for HAS_MARKET_SEGMENT child path = parent path + one segment
 - Communities: /community/{geo}/{type}/{slug}; use HAS_SUBGROUP for parent->narrower subgroup
-- Programs: prefer /program/{jurisdiction}/{slug} when jurisdiction is known
+- Programs: prefer /project/{jurisdiction}/{slug} when jurisdiction is known
 - AFFECTED_ZONE: /zone/{geo}/{condition_type}/{slug}. geo: ` + taxonomy.ISO2GeoDescriptionForPrompts() + `. condition_type: military_conflict, natural_disaster, political_tension, humanitarian_crisis, earthquake_affected, flood_zone. slug: descriptive place/region name (northern-syria, donbas, gaza-strip, northern-rakhine). NEVER use "na" as slug — use region name or condition-specific name (e.g. myanmar-crisis-area).
 - NEVER use "/discovered/*" (not allowed)
 - canonicalPath MUST match expected prefix for targetType; if unsure, still output your best stable canonicalPath`
@@ -2186,7 +2186,7 @@ func buildResearchDecompositionGuidanceBlock(fragment *models.HorizonFragment, h
 	isAnchor := fragment.Class == ah.FragmentClassMarket ||
 		fragment.IsProgramOrg() ||
 		strings.HasPrefix(cp, "/market/") ||
-		strings.HasPrefix(cp, "/program/")
+		strings.HasPrefix(cp, "/project/")
 	if !isAnchor {
 		return ""
 	}
@@ -3957,7 +3957,7 @@ RELATION TYPES: FOCUSES_ON (domain→zone), LOCATED_IN, AFFECTS, TRIGGERED_BY.
 CANONICAL PATH RULES:
 %s
 
-ZONE PATH: /zone/{geo}/{condition_type}/{slug}. slug MUST be descriptive place/region name (northern-rakhine, gaza-strip, donbas). NEVER "na". When creating zone fragments, include radiusKm (approximate zone radius in km) ONLY when you have reliable, evidence-based data. Be conservative: prefer smaller, verifiable estimates; avoid overly broad interpretations. Do NOT extrapolate or guess—omit radiusKm if uncertain. Other types: /org/, /gov/, /fac/, /loc/, /product/, /program/, /event/ per rules.
+ZONE PATH: /zone/{geo}/{condition_type}/{slug}. slug MUST be descriptive place/region name (northern-rakhine, gaza-strip, donbas). NEVER "na". When creating zone fragments, include radiusKm (approximate zone radius in km) ONLY when you have reliable, evidence-based data. Be conservative: prefer smaller, verifiable estimates; avoid overly broad interpretations. Do NOT extrapolate or guess—omit radiusKm if uncertain. Other types: /org/, /gov/, /fac/, /loc/, /product/, /project/, /evidence/ per rules.
 
 %s
 

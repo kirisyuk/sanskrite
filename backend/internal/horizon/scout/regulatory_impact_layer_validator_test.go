@@ -14,7 +14,7 @@ func TestValidateRegulatoryImpactLayerCoverage_ReachesGeoCommunityAndMedia(t *te
 		{SourceCanonicalPath: "/mechanism/regulatory/corporate-income-tax-rate-increase", TargetCanonicalPath: "/market/ae/capital/foreign-direct-investment", RelationType: "AFFECTS"},
 		{SourceCanonicalPath: "/mechanism/regulatory/corporate-income-tax-rate-increase", TargetCanonicalPath: "/community/ae/industry-association/dubai-family-business-network", RelationType: "APPLIES_TO"},
 		{SourceCanonicalPath: "/community/ae/industry-association/dubai-family-business-network", TargetCanonicalPath: "/media/linkedin/dubai-business-founders", RelationType: "OPERATES_VIA"},
-		{SourceCanonicalPath: "/gov/ae/federal-tax-authority", TargetCanonicalPath: "/program/ae/corporate-tax-compliance-rollout", RelationType: "ADMINISTERS"},
+		{SourceCanonicalPath: "/gov/ae/federal-tax-authority", TargetCanonicalPath: "/project/ae/corporate-tax-compliance-rollout", RelationType: "ADMINISTERS"},
 	}
 
 	cov := ValidateRegulatoryImpactLayerCoverage(rels)
@@ -30,8 +30,8 @@ func TestValidateRegulatoryImpactLayerCoverage_ReachesGeoCommunityAndMedia(t *te
 	if _, ok := cov.MediaReachable["/media/linkedin/dubai-business-founders"]; !ok {
 		t.Fatalf("expected reachable media channel")
 	}
-	if _, ok := cov.ProgramReachable["/program/ae/corporate-tax-compliance-rollout"]; !ok {
-		t.Fatalf("expected reachable program layer")
+	if _, ok := cov.ProgramReachable["/project/ae/corporate-tax-compliance-rollout"]; !ok {
+		t.Fatalf("expected reachable project layer")
 	}
 	if len(cov.OrphanPaths) != 0 {
 		t.Fatalf("expected no orphans, got %v", cov.OrphanPaths)

@@ -22,7 +22,7 @@ const (
 	taxonomyAliasStatusActive    = "active"
 )
 
-var allowedIndustryFragmentTypes = setOf("ORGANIZATION", "FACILITY", "PRODUCT")
+var allowedIndustryFragmentTypes = setOf("ORGANIZATION", "FACILITY", "PRODUCT", "ORG", "SITE")
 
 type IndustryNode struct {
 	Path            string

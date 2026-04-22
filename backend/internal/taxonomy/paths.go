@@ -1208,24 +1208,14 @@ func ProductCanonicalPath(orgSlug string, productLabel string) string {
 	return JoinPath("product", "finished", "mechanical", "assembly", pSlug)
 }
 
-// ProgramCanonicalPath returns a Horizon-canonical program path:
-// /program/{jurisdictionSlug}/{programSlug}
+// ProgramCanonicalPath is a compatibility wrapper that now emits the canonical
+// AH-aligned project namespace:
+// /project/{jurisdictionSlug}/{projectSlug}
 //
 // jurisdictionSlug accepts ISO2 or regional/global tokens ("int", "global", "eu", ...).
 // If jurisdiction is unknown/invalid, "global" is used as a deterministic placeholder.
 func ProgramCanonicalPath(jurisdiction string, programLabel string) string {
-	jSlug := strings.ToLower(strings.TrimSpace(jurisdiction))
-	if jSlug == "" {
-		jSlug = "global"
-	}
-	if jSlug != "global" && jSlug != "int" && !reCountryAlpha2.MatchString(jSlug) && !IsRegionalGeoToken(jSlug) {
-		jSlug = "global"
-	}
-	pSlug := Slugify(programLabel)
-	if pSlug == "" {
-		return ""
-	}
-	return JoinPath("program", jSlug, pSlug)
+	return ProjectCanonicalPath(jurisdiction, programLabel)
 }
 
 // ProjectCanonicalPath returns a Horizon-canonical project path:
@@ -1293,10 +1283,9 @@ func EntityCanonicalPath(entityType string, canonicalName string) string {
 		// Represent supply chain nodes as facilities by default.
 		return FacilityCanonicalPath("na", canonicalName)
 	case "GovernmentProject":
-		// Treat government projects / initiatives as PROGRAM fragments in the Horizon taxonomy.
-		return ProgramCanonicalPath("", canonicalName)
+		return ProjectCanonicalPath("", canonicalName)
 	case "Program":
-		return ProgramCanonicalPath("", canonicalName)
+		return ProjectCanonicalPath("", canonicalName)
 	case "Market":
 		return MarketCanonicalPath("global", canonicalName)
 	case "Location":

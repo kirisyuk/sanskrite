@@ -46,7 +46,7 @@ func (a *ResolverAgent) Resolve(ctx context.Context, req ResolutionRequest) (*Re
 
 	task := &ai.AITask{
 		TaskType:     ai.TaskTypeContentGeneration,
-		InputContent: prompt,
+		InputContent: normalizeLivePromptTaxonomy(prompt),
 		AIRequirements: ai.AIRequirements{
 			TextGenerationCapability: true,
 			MinCapabilityScore:       7,
